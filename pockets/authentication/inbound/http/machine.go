@@ -1,7 +1,10 @@
 package authenticationhttp
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets"
@@ -10,6 +13,19 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
+)
+
+// The API-key listing's filter keys and the machine routes' named codes.
+const (
+	queryKeyStatus       = "status"
+	queryKeyNeverExpires = "never_expires"
+
+	codeFilterInvalid          = "filter_invalid"
+	codeFilterContradiction    = "filter_contradiction"
+	codeFilterUnsupported      = "filter_unsupported"
+	codeAPIKeyTTLExceeded      = "api_key_ttl_exceeded"
+	codeAPIKeyExpiryPast       = "api_key_expiry_past"
+	codeServiceAccountDisabled = "service_account_disabled"
 )
 
 // ---------------------------------------------------------------------------
@@ -32,10 +48,16 @@ type createServiceAccountRequest struct {
 
 type mintKeyRequest struct {
 	Name string `json:"name"`
-	// ExpiresAt is an optional RFC3339 timestamp; empty → the key never expires.
+	// ExpiresAt is an optional RFC3339 timestamp. Empty → the key never
+	// expires, or, under AdministrationConfig.APIKeyMaxTTL (production's
+	// default), expires at now plus it — the 201 echoes the expiry. One at or
+	// before now is 400 api_key_expiry_past; one beyond the bound is 400
+	// api_key_ttl_exceeded, naming max_ttl_seconds and max_expires_at.
 	ExpiresAt string `json:"expires_at"`
 }
 
+// serviceAccountResponse is a machine identity. Status is always present:
+// active, or disabled under AdministrationConfig.ServiceAccountStatus.
 type serviceAccountResponse struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -43,11 +65,15 @@ type serviceAccountResponse struct {
 	CreatedBy   string `json:"created_by"`
 	ActAsUser   bool   `json:"act_as_user"`
 	OwnerUserID string `json:"owner_user_id,omitempty"`
+	Status      string `json:"status"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
 }
 
-func newServiceAccountResponse(sa serviceaccount.ServiceAccount) serviceAccountResponse {
+func newServiceAccountResponse(sa serviceaccount.ServiceAccount, status serviceaccount.Status) serviceAccountResponse {
+	if status == "" {
+		status = serviceaccount.StatusActive
+	}
 	return serviceAccountResponse{
 		ID:          sa.ID,
 		Name:        sa.Name,
@@ -55,18 +81,30 @@ func newServiceAccountResponse(sa serviceaccount.ServiceAccount) serviceAccountR
 		CreatedBy:   sa.CreatedBy,
 		ActAsUser:   sa.ActAsUser,
 		OwnerUserID: sa.OwnerUserID,
+		Status:      string(status),
 		CreatedAt:   sa.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:   sa.UpdatedAt.Format(time.RFC3339),
 	}
 }
 
+// serviceAccountStatusResponse is the body of a disable or enable: the
+// resulting account, whether THIS call changed its status (false on a
+// replay), and how many keys a disable revoked.
+type serviceAccountStatusResponse struct {
+	ServiceAccount serviceAccountResponse `json:"service_account"`
+	Changed        bool                   `json:"changed"`
+	KeysRevoked    int                    `json:"keys_revoked"`
+}
+
 // apiKeyResponse is a key WITHOUT its secret — the listing shape. The plaintext
-// key is only ever in mintedKeyResponse, returned once at mint.
+// key is only ever in mintedKeyResponse, returned once at mint. Status is the
+// key's derived status at the response's instant: revoked, expired or active.
 type apiKeyResponse struct {
 	ID               string `json:"id"`
 	ServiceAccountID string `json:"service_account_id"`
 	Name             string `json:"name"`
 	KeyPrefix        string `json:"key_prefix"`
+	Status           string `json:"status"`
 	ExpiresAt        string `json:"expires_at,omitempty"`
 	RevokedAt        string `json:"revoked_at,omitempty"`
 	LastUsedAt       string `json:"last_used_at,omitempty"`
@@ -74,16 +112,32 @@ type apiKeyResponse struct {
 }
 
 func newAPIKeyResponse(k apikey.APIKey) apiKeyResponse {
+	return newAPIKeyResponseAt(k, time.Now())
+}
+
+// newAPIKeyResponseAt derives the status at now, the instant a filtered
+// listing judged expiry at, so a row never contradicts its filter.
+func newAPIKeyResponseAt(k apikey.APIKey, now time.Time) apiKeyResponse {
 	return apiKeyResponse{
 		ID:               k.ID,
 		ServiceAccountID: k.ServiceAccountID,
 		Name:             k.Name,
 		KeyPrefix:        k.KeyPrefix,
+		Status:           string(k.Status(now)),
 		ExpiresAt:        formatOptionalTime(k.ExpiresAt),
 		RevokedAt:        formatOptionalTime(k.RevokedAt),
 		LastUsedAt:       formatOptionalTime(k.LastUsedAt),
 		CreatedAt:        k.CreatedAt.Format(time.RFC3339),
 	}
+}
+
+// apiKeyTTLExceededResponse is the 400 api_key_ttl_exceeded body: the error
+// envelope plus the bound the request crossed.
+type apiKeyTTLExceededResponse struct {
+	Message       string `json:"message"`
+	Code          string `json:"code"`
+	MaxTTLSeconds int64  `json:"max_ttl_seconds"`
+	MaxExpiresAt  string `json:"max_expires_at"`
 }
 
 // mintedKeyResponse carries the plaintext key exactly once, at mint.
@@ -151,18 +205,25 @@ func mountMachine(r pockets.RouteRegistrar, h *handlers, machineLifecycle, brows
 	r.Handle("POST", "/auth/service-accounts/{id}/keys", h.mintAPIKey, machineLifecycle, browserSafe, gate, mfa)
 	r.Handle("GET", "/auth/service-accounts/{id}/keys", h.listAPIKeys, machineLifecycle, gate, mfa)
 	r.Handle("POST", "/auth/api-keys/{id}/revoke", h.revokeAPIKey, machineLifecycle, browserSafe, gate, mfa)
+	// The disable/enable pair mounts only when the host wired the status
+	// (AdministrationConfig.ServiceAccountStatus), under the same stack.
+	if h.accountStatus != nil {
+		r.Handle("POST", "/auth/service-accounts/{id}/disable", h.disableServiceAccount, machineLifecycle, browserSafe, gate, mfa)
+		r.Handle("POST", "/auth/service-accounts/{id}/enable", h.enableServiceAccount, machineLifecycle, browserSafe, gate, mfa)
+	}
 }
 
 // requireMachineMFA is the machine gate of MFAConfig admins: a caller below AAL2
 // gets the RFC 9470 401 and one mfa_required_denied row (gate machine). An API
-// key a host's MachineLifecycle override admits passes, as at the admin gate.
-// Without the requirement it passes everything.
+// key a host's MachineLifecycle override admits gets the 403
+// mfa_credential_not_eligible, as at the admin gate, unless
+// MFAConfig.APIKeysExempt. Without the requirement it passes everything.
 func (h *handlers) requireMachineMFA(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h.machineMFA {
 			cred, _ := h.svc.CurrentCredential(r.Context())
-			if !h.svc.admitMFA(r.Context(), authlogic.MFAGateMachine, cred) {
-				writeMFARequired(w)
+			if reason := h.svc.admitMFA(r.Context(), authlogic.MFAGateMachine, cred); reason != "" {
+				writeMFARequired(w, reason)
 				return
 			}
 		}
@@ -207,10 +268,11 @@ func (h *handlers) createServiceAccount(w http.ResponseWriter, r *http.Request) 
 		web.RespondJSONDomainError(w, err)
 		return
 	}
-	web.RespondJSONCreated(w, newServiceAccountResponse(sa))
+	web.RespondJSONCreated(w, newServiceAccountResponse(sa, serviceaccount.StatusActive))
 }
 
-// listServiceAccounts returns a cursor-paginated page of service accounts.
+// listServiceAccounts returns a cursor-paginated page of service accounts,
+// each with its status, read for the page in one call.
 func (h *handlers) listServiceAccounts(w http.ResponseWriter, r *http.Request) {
 	req, ok := h.parseListRequest(w, r, serviceaccount.OrderFields, serviceaccount.DefaultOrder)
 	if !ok {
@@ -221,7 +283,61 @@ func (h *handlers) listServiceAccounts(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONDomainError(w, err)
 		return
 	}
-	web.RespondJSONOK(w, newPageResponse(page, newServiceAccountResponse))
+	statuses := map[string]serviceaccount.Status{}
+	if h.accountStatus != nil && len(page.Items) > 0 {
+		ids := make([]string, 0, len(page.Items))
+		for _, sa := range page.Items {
+			ids = append(ids, sa.ID)
+		}
+		if statuses, err = h.accountStatus.ServiceAccountStatuses(r.Context(), ids); err != nil {
+			web.RespondJSONDomainError(w, err)
+			return
+		}
+	}
+	web.RespondJSONOK(w, newPageResponse(page, func(sa serviceaccount.ServiceAccount) serviceAccountResponse {
+		return newServiceAccountResponse(sa, statuses[sa.ID])
+	}))
+}
+
+// disableServiceAccount pauses the account and revokes its keys; a replay is
+// a 200 with changed=false.
+func (h *handlers) disableServiceAccount(w http.ResponseWriter, r *http.Request) {
+	h.setServiceAccountStatus(w, r, serviceaccount.StatusDisabled, h.accountStatus.DisableServiceAccount)
+}
+
+// enableServiceAccount restores minting; the revoked keys stay revoked.
+func (h *handlers) enableServiceAccount(w http.ResponseWriter, r *http.Request) {
+	h.setServiceAccountStatus(w, r, serviceaccount.StatusActive, h.accountStatus.EnableServiceAccount)
+}
+
+// setServiceAccountStatus is the shared body of disable and enable: an empty
+// strict JSON body, the route-chosen transition, and the resulting account,
+// whose status is the transition's — never re-read, so a committed change
+// cannot answer 503.
+func (h *handlers) setServiceAccountStatus(w http.ResponseWriter, r *http.Request, status serviceaccount.Status, change func(context.Context, authlogic.Principal, string) (serviceaccount.ServiceAccount, serviceaccount.StatusChange, error)) {
+	writeNoStore(w)
+	if !requireJSON(w, r) {
+		return
+	}
+	var body struct{}
+	if !strictJSONBody(w, r, &body, maxJSONBodyBytes) {
+		return
+	}
+	actor, ok := h.svc.CurrentPrincipal(r.Context())
+	if !ok {
+		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
+		return
+	}
+	sa, result, err := change(r.Context(), actor, web.Param(r, "id"))
+	if err != nil {
+		web.RespondJSONDomainError(w, err)
+		return
+	}
+	web.RespondJSONOK(w, serviceAccountStatusResponse{
+		ServiceAccount: newServiceAccountResponse(sa, status),
+		Changed:        result.Changed,
+		KeysRevoked:    result.KeysRevoked,
+	})
 }
 
 // mintAPIKey mints a key for the service account and returns the plaintext ONCE.
@@ -242,24 +358,105 @@ func (h *handlers) mintAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 	k, raw, err := h.svc.MintAPIKey(r.Context(), web.Param(r, "id"), req.Name, expiresAt)
 	if err != nil {
-		web.RespondJSONDomainError(w, err)
+		writeMintError(w, err)
 		return
 	}
 	web.RespondJSONCreated(w, mintedKeyResponse{apiKeyResponse: newAPIKeyResponse(k), Key: raw})
 }
 
+// writeMintError answers a mint refusal with its named code; anything else
+// takes the generic domain mapping.
+func writeMintError(w http.ResponseWriter, err error) {
+	var exceeded *authlogic.APIKeyTTLExceededError
+	switch {
+	case errors.As(err, &exceeded):
+		web.RespondJSON(w, http.StatusBadRequest, apiKeyTTLExceededResponse{
+			Message:       "expires_at exceeds the maximum API key lifetime",
+			Code:          codeAPIKeyTTLExceeded,
+			MaxTTLSeconds: int64(exceeded.MaxTTL / time.Second),
+			MaxExpiresAt:  exceeded.MaxExpiresAt.UTC().Format(time.RFC3339),
+		})
+	case errors.Is(err, authlogic.ErrAPIKeyExpiryPast):
+		web.RespondJSONError(w, web.ErrBadRequest("expires_at must be in the future").WithCode(codeAPIKeyExpiryPast))
+	case errors.Is(err, authlogic.ErrServiceAccountDisabled):
+		web.RespondJSONError(w, web.ErrStateConflict("the service account is disabled").WithCode(codeServiceAccountDisabled))
+	default:
+		web.RespondJSONDomainError(w, err)
+	}
+}
+
 // listAPIKeys returns a cursor-paginated page of a service account's keys.
+// ?status=active|expired|revoked and ?never_expires=true|false narrow it in the
+// store: each may appear once, an unknown value is 400 filter_invalid,
+// status=expired beside never_expires=true is 400 filter_contradiction, and a
+// store that cannot filter is 400 filter_unsupported. Every other key is
+// tolerated as before. A key that expires between pages moves status: cursors
+// do not bind the clock.
 func (h *handlers) listAPIKeys(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if !singleValued(w, q, queryKeyStatus, queryKeyNeverExpires) {
+		return
+	}
+	filter, filtered, ok := parseAPIKeyFilter(w, q)
+	if !ok {
+		return
+	}
 	req, ok := h.parseListRequest(w, r, apikey.OrderFields, apikey.DefaultOrder)
 	if !ok {
 		return
 	}
-	page, err := h.svc.ListAPIKeys(r.Context(), web.Param(r, "id"), req)
+	var page list.Page[apikey.APIKey]
+	var err error
+	filter.Now = time.Now()
+	switch {
+	case !filtered:
+		page, err = h.svc.ListAPIKeys(r.Context(), web.Param(r, "id"), req)
+	case h.keyFilter == nil:
+		err = authlogic.ErrAPIKeyFilterUnsupported
+	default:
+		page, err = h.keyFilter.ListAPIKeysFiltered(r.Context(), web.Param(r, "id"), filter, req)
+	}
+	if errors.Is(err, authlogic.ErrAPIKeyFilterUnsupported) {
+		web.RespondJSONError(w, web.ErrBadRequest("this API-key store does not support filtered listings").WithCode(codeFilterUnsupported))
+		return
+	}
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
 	}
-	web.RespondJSONOK(w, newPageResponse(page, newAPIKeyResponse))
+	web.RespondJSONOK(w, newPageResponse(page, func(k apikey.APIKey) apiKeyResponse { return newAPIKeyResponseAt(k, filter.Now) }))
+}
+
+// parseAPIKeyFilter reads the listing's closed filter vocabulary; filtered is
+// false when neither narrows the listing (never_expires=false is no filter).
+func parseAPIKeyFilter(w http.ResponseWriter, q url.Values) (apikey.Filter, bool, bool) {
+	var f apikey.Filter
+	filtered := false
+	if q.Has(queryKeyStatus) {
+		filtered = true
+		switch status := apikey.Status(q.Get(queryKeyStatus)); status {
+		case apikey.StatusActive, apikey.StatusExpired, apikey.StatusRevoked:
+			f.Status = status
+		default:
+			web.RespondJSONError(w, web.ErrBadRequest("status must be active, expired or revoked").WithCode(codeFilterInvalid))
+			return apikey.Filter{}, false, false
+		}
+	}
+	if q.Has(queryKeyNeverExpires) {
+		switch q.Get(queryKeyNeverExpires) {
+		case "true":
+			f.NeverExpires, filtered = true, true
+		case "false":
+		default:
+			web.RespondJSONError(w, web.ErrBadRequest("never_expires must be true or false").WithCode(codeFilterInvalid))
+			return apikey.Filter{}, false, false
+		}
+	}
+	if f.Status == apikey.StatusExpired && f.NeverExpires {
+		web.RespondJSONError(w, web.ErrBadRequest("an expired key cannot be one that never expires").WithCode(codeFilterContradiction))
+		return apikey.Filter{}, false, false
+	}
+	return f, filtered, true
 }
 
 // revokeAPIKey revokes a key; an unknown key → 404.

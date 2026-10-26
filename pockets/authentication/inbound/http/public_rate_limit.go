@@ -114,6 +114,19 @@ func (s *Adapter) RateLimitByIP(keyPrefix string, perMinute int) web.Middleware 
 	return s.rateLimitByIP(keyPrefix, ratelimiter.PerMinute(perMinute))
 }
 
+// rateLimitByKey is rateLimitByIP keyed on "<prefix>:<key>" instead of the
+// client IP — a per-actor budget, applied after the actor is known.
+func (s *Adapter) rateLimitByKey(keyPrefix, key string, limit ratelimiter.Limit) web.Middleware {
+	return ratelimiter.Middleware(s.limiter, ratelimiter.MiddlewareConfig{
+		Limit:    limit,
+		Key:      func(*http.Request) string { return keyPrefix + ":" + key },
+		FailOpen: s.limiterFailOpen,
+		OnError: func(ctx context.Context, err error) {
+			s.logger.WarnContext(ctx, "actor rate limiter failed", "error_kind", authlogic.ErrorKind(err), "fail_open", s.limiterFailOpen)
+		},
+	})
+}
+
 func (s *Adapter) rateLimitByIP(keyPrefix string, limit ratelimiter.Limit) web.Middleware {
 	return ratelimiter.Middleware(s.limiter, ratelimiter.MiddlewareConfig{
 		Limit: limit,

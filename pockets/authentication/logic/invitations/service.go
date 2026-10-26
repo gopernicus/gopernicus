@@ -924,34 +924,70 @@ func (s *Service) resolve(ctx context.Context, kind, value, subjectType, subject
 	}
 	pendingOnly := resolvedBy == resolvedBySync
 	resolved := 0
+	err = s.addressed(ctx, kind, normalized, func(inv Invitation) bool {
+		if !inv.AutoAccept || !s.live(inv, pendingOnly) {
+			return true
+		}
+		if _, err := s.acceptClaim(ctx, inv, subjectType, subjectID, resolvedBy); err != nil {
+			s.logger.Warn("resolve invitation failed", "error_kind", errKind(err))
+			return true
+		}
+		resolved++
+		return true
+	})
+	return resolved, err
+}
+
+// HasPendingInvitation reports whether an invitation a verification could
+// still act on — pending and unexpired, or accepting, AutoAccept or not — is
+// addressed to (kind, value): the lookup IdentityConfig.Registration
+// invitation_only asks before an account is created. A value that does not
+// normalize as kind has none.
+func (s *Service) HasPendingInvitation(ctx context.Context, kind, value string) (bool, error) {
+	normalized, err := s.normalizeIdentifier(value, kind)
+	if err != nil {
+		return false, nil
+	}
+	found := false
+	err = s.addressed(ctx, kind, normalized, func(inv Invitation) bool {
+		found = s.live(inv, false)
+		return !found
+	})
+	return found, err
+}
+
+// addressed pages the invitations addressed to (kind, normalized), calling
+// visit for each of that kind until it returns false.
+func (s *Service) addressed(ctx context.Context, kind, normalized string, visit func(Invitation) bool) error {
 	cursor := ""
 	for i := 0; i < 1000; i++ {
 		page, err := s.invitations.ListBySubject(ctx, kind, normalized, list.Request{Limit: resolvePageLimit, Cursor: cursor})
 		if err != nil {
-			return resolved, err
+			return err
 		}
 		for _, inv := range page.Items {
-			if inv.IdentifierKind != kind || !inv.AutoAccept {
-				continue
+			if inv.IdentifierKind == kind && !visit(inv) {
+				return nil
 			}
-			if inv.Status != StatusPending && (pendingOnly || inv.Status != StatusAccepting) {
-				continue
-			}
-			if inv.Status == StatusPending && inv.Expired(s.now()) {
-				continue
-			}
-			if _, err := s.acceptClaim(ctx, inv, subjectType, subjectID, resolvedBy); err != nil {
-				s.logger.Warn("resolve invitation failed", "error_kind", errKind(err))
-				continue
-			}
-			resolved++
 		}
 		if !page.HasMore || page.NextCursor == "" {
-			break
+			return nil
 		}
 		cursor = page.NextCursor
 	}
-	return resolved, nil
+	return nil
+}
+
+// live reports whether a verification may still act on inv: pending and
+// unexpired, or accepting unless pendingOnly.
+func (s *Service) live(inv Invitation, pendingOnly bool) bool {
+	switch inv.Status {
+	case StatusPending:
+		return !inv.Expired(s.now())
+	case StatusAccepting:
+		return !pendingOnly
+	}
+	return false
 }
 
 // --- audit ---

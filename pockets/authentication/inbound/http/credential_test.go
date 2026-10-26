@@ -113,7 +113,8 @@ func (h *credentialHarness) seedUser(id string) string {
 }
 
 // mintKey creates a service account and one key on it, returning the plaintext
-// key alongside the coordinates a Credential must name.
+// key alongside the coordinates a Credential must name. A past expiresAt —
+// which a mint refuses — is written onto the stored key after minting.
 func (h *credentialHarness) mintKey(t *testing.T, name string, actAsUser bool, ownerUserID string, expiresAt time.Time) (raw, keyID, serviceAccountID string) {
 	t.Helper()
 	ctx := context.Background()
@@ -121,9 +122,21 @@ func (h *credentialHarness) mintKey(t *testing.T, name string, actAsUser bool, o
 	if err != nil {
 		t.Fatalf("CreateServiceAccount(%s): %v", name, err)
 	}
-	key, raw, err := h.svc.MintAPIKey(ctx, sa.ID, name, expiresAt)
+	past := !expiresAt.IsZero() && !expiresAt.After(time.Now())
+	mintAt := expiresAt
+	if past {
+		mintAt = time.Time{}
+	}
+	key, raw, err := h.svc.MintAPIKey(ctx, sa.ID, name, mintAt)
 	if err != nil {
 		t.Fatalf("MintAPIKey(%s): %v", name, err)
+	}
+	if past {
+		h.keys.mu.Lock()
+		k := h.keys.m[key.ID]
+		k.ExpiresAt = expiresAt.UTC()
+		h.keys.m[key.ID] = k
+		h.keys.mu.Unlock()
 	}
 	return raw, key.ID, sa.ID
 }

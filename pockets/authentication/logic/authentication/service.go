@@ -235,6 +235,11 @@ type constructorConfig struct {
 	TOTP                    totp.Repository
 	TOTPConfig              TOTPConfig
 	MFAMethods              []MFAMethod
+	Registration            RegistrationMode
+	GlobalSessions          session.GlobalRevoker
+	ServiceAccountStatuses  serviceaccount.StatusRepository
+	ServiceAccountStatus    bool
+	APIKeyMaxTTL            time.Duration
 }
 
 // Service implements the auth use cases over the repository ports.
@@ -385,6 +390,16 @@ type Service struct {
 	// mfaMethods is MFAConfig.Methods: the AAL2 sources the second-factor gate
 	// admits, empty for any.
 	mfaMethods []MFAMethod
+
+	// registration is IdentityConfig.Registration, normalized.
+	registration RegistrationMode
+	// globalSessions backs RevokeAllSessions; nil leaves it unsupported.
+	globalSessions session.GlobalRevoker
+	// accountStatus is the service-account status repository, nil unless
+	// MachineConfig.ServiceAccountStatus wired it.
+	accountStatus serviceaccount.StatusRepository
+	// apiKeyMaxTTL bounds a minted key's life; zero is unlimited.
+	apiKeyMaxTTL time.Duration
 }
 
 // newService assembles already validated dependencies; isolated package tests
@@ -425,6 +440,11 @@ func newService(d constructorConfig) *Service {
 	securityEvents := d.SecurityEventRecorder
 	if securityEvents == nil {
 		securityEvents = newSecurityEventRecorder(d.SecurityEvents, d.IDs, clock, logger, d.AuditWriteObserver)
+	}
+	registration, _ := normalizeRegistrationMode(d.Registration)
+	var serviceAccountStatus serviceaccount.StatusRepository
+	if d.ServiceAccountStatus {
+		serviceAccountStatus = d.ServiceAccountStatuses
 	}
 	return &Service{
 		authenticationLimits: d.AuthenticationLimits.withDefaults(),
@@ -489,6 +509,10 @@ func newService(d constructorConfig) *Service {
 		totpEncrypter:      d.TOTPConfig.Encrypter,
 		totpIssuer:         d.TOTPConfig.Issuer,
 		mfaMethods:         slices.Clone(d.MFAMethods),
+		registration:       registration,
+		globalSessions:     d.GlobalSessions,
+		accountStatus:      serviceAccountStatus,
+		apiKeyMaxTTL:       d.APIKeyMaxTTL,
 	}
 }
 
@@ -502,12 +526,28 @@ func newService(d constructorConfig) *Service {
 // failure still leaves an account the user can later verify (the error is returned
 // so the caller knows delivery failed). A duplicate email — a lost authentication
 // claim on the identifier value — surfaces as sdk.ErrAlreadyExists from the store.
+// Under IdentityConfig.Registration closed it is ErrRegistrationClosed, and
+// under invitation_only an address with no pending invitation is
+// ErrRegistrationInvitationRequired, decided before any other check.
 func (s *Service) Register(ctx context.Context, emailAddr, password, displayName string) (user.User, error) {
 	if err := s.requirePasswordFlows(); err != nil {
 		return user.User{}, err
 	}
 	if s.queue == nil || s.deliver == nil || s.challenges == nil || s.protector == nil {
 		return user.User{}, ErrDeliveryDisabled
+	}
+	// The registration mode is decided FIRST, so an existing account without an
+	// invitation gets the same 403 an unknown address does, never the 409. A
+	// malformed address is left to the identifier validation below.
+	if normalized, err := s.normalizeEmail(emailAddr); err == nil {
+		reason, err := s.registrationRefusal(ctx, sdk.AddressKindEmail, normalized)
+		if err != nil {
+			return user.User{}, err
+		}
+		if reason != "" {
+			s.recordDenial(ctx, securityevent.TypeRegister, "", securityevent.StatusFailure, reason)
+			return user.User{}, registrationError(reason)
+		}
 	}
 	if err := s.validatePassword(ctx, password); err != nil {
 		return user.User{}, err

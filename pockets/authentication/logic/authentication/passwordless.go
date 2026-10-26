@@ -537,7 +537,25 @@ func (s *Service) initPasswordlessLink(ctx context.Context, kind string, cmd del
 	// The public start is unaffected either way: it never resolved anything on the
 	// request path, so what changes here is whether the WORKER sends, not what the
 	// request learns.
-	provisioning := !ok && s.provisionOnRedeemEnabled() && kind == string(identifier.KindEmail)
+	//
+	// IdentityConfig.Registration decides it here, at issue, and the binding
+	// carries the decision: closed never provisions, invitation_only only for an
+	// address with a pending invitation now.
+	// An address that already resolves to an account needs no lookup: its link
+	// logs in, and outside open it never provisions if the account vanishes.
+	mayProvision := s.provisionOnRedeemEnabled() && kind == string(identifier.KindEmail)
+	switch {
+	case !mayProvision || s.registration == RegistrationOpen:
+	case ok:
+		mayProvision = false
+	default:
+		reason, err := s.registrationRefusal(ctx, kind, cmd.ResolutionInput)
+		if err != nil {
+			return delivery.Envelope{}, false, err
+		}
+		mayProvision = reason == ""
+	}
+	provisioning := !ok && mayProvision
 	if !ok && !provisioning {
 		return delivery.Envelope{}, false, nil
 	}
@@ -559,7 +577,7 @@ func (s *Service) initPasswordlessLink(ctx context.Context, kind string, cmd del
 	// The challenge is keyed under a stable PII-free subject key rather than the
 	// user id, so an unknown address HAS a key and a resend replaces its
 	// predecessor across the unknown→registered race.
-	binding := s.newMagicLinkBinding(kind, destination, ident)
+	binding := s.newMagicLinkBinding(kind, destination, ident, mayProvision)
 	if ident.UserID != "" {
 		u, err := s.users.Get(ctx, ident.UserID)
 		if err != nil {

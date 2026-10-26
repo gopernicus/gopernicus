@@ -91,8 +91,10 @@ func mountHTML(r pockets.RouteRegistrar, h *handlers, browserAccount, browserSaf
 	r.Handle("GET", "/auth/login", h.loginPage)
 	// The password credential's pages, only when the posture is on (deny-by-absence).
 	pw := h.svc.PasswordFlowsEnabled()
-	if pw {
+	if pw && h.registration != authlogic.RegistrationClosed {
 		r.Handle("GET", "/auth/register", h.registerPage)
+	}
+	if pw {
 		r.Handle("GET", "/auth/verify", h.verifyPage)
 		r.Handle("GET", "/auth/password/forgot", h.forgotPage)
 		r.Handle("GET", "/auth/password/reset", h.resetPage)
@@ -207,6 +209,7 @@ func (h *handlers) loginPage(w http.ResponseWriter, r *http.Request) {
 		PageContext:           pc,
 		Email:                 r.URL.Query().Get("email"),
 		PasswordFlowsDisabled: !h.svc.PasswordFlowsEnabled(),
+		RegistrationClosed:    h.registration == authlogic.RegistrationClosed,
 		PasswordlessEnabled:   h.svc.PasswordlessEnabled(),
 		OAuthProviders:        h.svc.OAuthProviderNames(),
 		SessionRecovery:       h.sessionRecovery(r),

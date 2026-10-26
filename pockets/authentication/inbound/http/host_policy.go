@@ -123,12 +123,15 @@ const (
 	// (GET /auth/admin/security-events). The target is the user_id filter, empty
 	// for a read across every user.
 	UserAdminReadAudit UserAdminAction = "read-audit"
+	// UserAdminRevokeAllSessions ends every session in the fleet
+	// (POST /auth/admin/sessions/revoke-all). It carries no target user.
+	UserAdminRevokeAllSessions UserAdminAction = "revoke-all-sessions"
 )
 
 // UserAdminCheckRequest is the parsed, principal-resolved authorization question
 // the pocket poses to a host UserAdminCheck. TargetUserID is empty for
-// UserAdminList and for a UserAdminReadAudit without a user_id filter, and set
-// for every other action.
+// UserAdminList, UserAdminRevokeAllSessions and a UserAdminReadAudit without a
+// user_id filter, and set for every other action.
 //
 // The Principal reaches the policy VERBATIM — including a machine principal from
 // an API key. The pocket does not pre-decide whether a service account may

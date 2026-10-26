@@ -50,19 +50,21 @@ func (s *Service) magicLinkSubjectKey(kind, normalizedValue string) string {
 
 // newMagicLinkBinding builds the versioned binding stored with an email magic
 // link. ident is the CURRENT active claim at issue, or the zero value when the
-// address matches no account.
+// address matches no account; mayProvision is the issue-time decision that the
+// link may create an account — provisioning on, the email rail, and the
+// registration mode admitting the address.
 //
 // ProvisionIfAbsent is captured HERE, at issue, and is never re-derived at
 // consume. That is deliberate: flipping the host's configuration must not change
 // what an already-mailed link does in either direction.
-func (s *Service) newMagicLinkBinding(kind, normalizedValue string, ident identifier.Identifier) passwordless.Binding {
+func (s *Service) newMagicLinkBinding(kind, normalizedValue string, ident identifier.Identifier, mayProvision bool) passwordless.Binding {
 	return passwordless.Binding{
 		Version:           passwordless.BindingVersion,
 		Kind:              kind,
 		NormalizedValue:   normalizedValue,
 		IdentifierID:      ident.ID,
 		UserID:            ident.UserID,
-		ProvisionIfAbsent: s.provisionOnRedeemEnabled() && kind == string(identifier.KindEmail),
+		ProvisionIfAbsent: mayProvision,
 	}
 }
 

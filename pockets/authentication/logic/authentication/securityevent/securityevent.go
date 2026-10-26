@@ -231,6 +231,13 @@ const (
 	// TypeAPIKeyRevoked is an API key marked revoked. Details carries the key id
 	// only (the revoke coordinate is the key itself; the port has no read-by-id).
 	TypeAPIKeyRevoked = "api_key_revoked"
+	// TypeServiceAccountDisabled is a service account disabled, every
+	// unrevoked key revoked with it. Details carry service_account_id and
+	// keys_revoked.
+	TypeServiceAccountDisabled = "service_account_disabled"
+	// TypeServiceAccountEnabled is a disabled service account enabled again;
+	// its revoked keys stay revoked. Details carry service_account_id.
+	TypeServiceAccountEnabled = "service_account_enabled"
 
 	// External identity vocabulary. Details carry the host provider name, the
 	// identifier kind and a reason only — never the token, claims, address or
@@ -340,6 +347,12 @@ const (
 	// TypeAllSessionsRevoked is every session of a user revoked, pending
 	// approvals fenced with them.
 	TypeAllSessionsRevoked = "all_sessions_revoked"
+	// TypeAllSessionsRevokedGlobal is every session in the fleet revoked
+	// (RevokeAllSessions). Actor is the operator. A StatusStarted row precedes
+	// the first batch with batch_size; the StatusSuccess or StatusFailure row
+	// after it carries users, sessions, grants, batches and duration_ms — the
+	// partial counts and error_kind on failure.
+	TypeAllSessionsRevokedGlobal = "all_sessions_revoked_global"
 
 	// TypeUserDirectoryRead is one successful operator-directory read (the page
 	// or one user's summary). Actor is the principal resolved from the request
@@ -416,6 +429,9 @@ const (
 	// StatusBlocked marks an operation refused by a protective control (a
 	// rate-limited login, a revoked API key).
 	StatusBlocked = "blocked"
+	// StatusStarted marks the start of a long operation whose outcome a later
+	// row records, so the evidence that it began survives a failure mid-way.
+	StatusStarted = "started"
 )
 
 // The rail an audit_read row names under the Details key "rail".
@@ -476,6 +492,16 @@ const (
 	// ReasonUnknownProvider is an OAuth callback or link start naming a provider
 	// the host does not wire.
 	ReasonUnknownProvider = "unknown_provider"
+	// ReasonRegistrationClosed is an account creation refused because
+	// IdentityConfig.Registration is closed.
+	ReasonRegistrationClosed = "registration_closed"
+	// ReasonInvitationRequired is an account creation refused because
+	// IdentityConfig.Registration is invitation_only and no invitation is
+	// pending for the address.
+	ReasonInvitationRequired = "invitation_required"
+	// ReasonServiceAccountDisabled is an API key refused because its service
+	// account is disabled.
+	ReasonServiceAccountDisabled = "service_account_disabled"
 	// ReasonInvalidRequest is an OAuth2 token-endpoint parameter value the
 	// server evaluated and refused.
 	ReasonInvalidRequest = "invalid_request"
@@ -559,13 +585,13 @@ var types = []string{
 	TypeUserDeactivated, TypeUserReactivated,
 	TypeVerificationResendRequested, TypeVerificationResendIssued,
 	TypePasswordlessProvisioned, TypePasswordlessAdopted, TypePasswordlessStart, TypePasswordlessLogin,
-	TypeServiceAccountCreated, TypeAPIKeyMinted, TypeAPIKeyRevoked,
+	TypeServiceAccountCreated, TypeAPIKeyMinted, TypeAPIKeyRevoked, TypeServiceAccountDisabled, TypeServiceAccountEnabled,
 	TypeExternalSubjectProvisioned, TypeExternalSubjectUnknown, TypeExternalSubjectCollision,
 	TypeExternalSubjectDenied, TypeExternalRevocationUnavailable, TypeExternalLogin, TypeMFARequiredDenied,
 	TypePasskeyRegistered, TypePasskeyRemoved, TypePasskeysReset, TypePasskeyLogin, TypePasskeyFailed, TypePasskeySignCountRegressed,
 	TypeTOTPEnrolled, TypeTOTPRemoved, TypeTOTPReset, TypeTOTPStepUp, TypeTOTPFailed, TypeTOTPLocked,
 	TypeRecoveryCodesGenerated, TypeRecoveryCodeUsed,
-	TypeSessionRevoked, TypeAllSessionsRevoked, TypeUserDirectoryRead, TypeAuditRead,
+	TypeSessionRevoked, TypeAllSessionsRevoked, TypeAllSessionsRevokedGlobal, TypeUserDirectoryRead, TypeAuditRead,
 	TypeOAuth2ConsentApproved, TypeOAuth2ConsentDenied, TypeOAuth2ConnectionCreated, TypeOAuth2Refresh,
 	TypeOAuth2RefreshReuse, TypeOAuth2TokenExchanged, TypeOAuth2RevocationRequested, TypeOAuth2GrantFailed,
 	TypeUserErased, TypeServiceAccountDeleted, TypeSecurityEventsPurged, TypeSecurityEventsArchived,

@@ -330,8 +330,8 @@ func (h *handlers) stepUpCodeJSON(w http.ResponseWriter, r *http.Request, step f
 }
 
 // adminResetTOTP removes the target user's authenticator app behind the admin
-// gate chain (UserAdminCheck, then the admins MFA gate; an admin API key passes
-// it).
+// gate chain (UserAdminCheck, then the admins MFA gate, which refuses an API
+// key unless MFAConfig.APIKeysExempt).
 func (h *handlers) adminResetTOTP(w http.ResponseWriter, r *http.Request) {
 	if !passkeyEmptyBody(w, r) {
 		return

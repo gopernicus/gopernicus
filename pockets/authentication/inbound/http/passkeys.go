@@ -338,8 +338,8 @@ func (h *handlers) removePasskey(w http.ResponseWriter, r *http.Request) {
 }
 
 // adminResetPasskeys deletes every passkey of the target user behind the admin
-// gate chain (UserAdminCheck, then the admins MFA gate; an admin API key
-// passes it).
+// gate chain (UserAdminCheck, then the admins MFA gate, which refuses an API
+// key unless MFAConfig.APIKeysExempt).
 func (h *handlers) adminResetPasskeys(w http.ResponseWriter, r *http.Request) {
 	if !passkeyEmptyBody(w, r) {
 		return

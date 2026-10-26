@@ -1,6 +1,7 @@
 package authenticationhttp
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -28,6 +30,16 @@ const (
 // security-event listing.
 const codeOffsetNotSupported = "offset_not_supported"
 
+// globalRevokeBudgetPrefix keys the revoke-all route's per-actor budget, one
+// call a minute.
+const globalRevokeBudgetPrefix = "global_revoke"
+
+// globalRevokeTimeout bounds a revoke-all run. The run is detached from the
+// request's cancellation — a client disconnect or a proxy idle timeout must
+// not abort it mid-fleet while the budget blocks the retry — so this is what
+// stops a hung store from holding it.
+const globalRevokeTimeout = 10 * time.Minute
+
 // securityEventQueryKeys are the keys the security-event listing reads. Each
 // may appear once, so the host check and this handler can never read
 // different values of one key.
@@ -37,7 +49,7 @@ var (
 	// being in securityevent.Types()), so the filter admits any snake_case type.
 	eventTypeShape = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)*$`)
 	// securityEventStatuses is the closed status vocabulary.
-	securityEventStatuses = []string{securityevent.StatusSuccess, securityevent.StatusFailure, securityevent.StatusBlocked}
+	securityEventStatuses = []string{securityevent.StatusSuccess, securityevent.StatusFailure, securityevent.StatusBlocked, securityevent.StatusStarted}
 )
 
 var securityEventQueryKeys = []string{
@@ -120,6 +132,24 @@ type eraseCountsResponse struct {
 	APIKeys              int `json:"api_keys"`
 }
 
+// globalRevocationResponse is the body of POST /auth/admin/sessions/revoke-all:
+// what the run revoked, and when it started (UTC RFC 3339 nanoseconds).
+type globalRevocationResponse struct {
+	Users     int    `json:"users"`
+	Sessions  int    `json:"sessions"`
+	Grants    int    `json:"grants"`
+	Batches   int    `json:"batches"`
+	RevokedAt string `json:"revoked_at"`
+}
+
+// globalRevocationFailure is a failed revoke-all: the error envelope plus the
+// partial counts of the batches that committed before the failure.
+type globalRevocationFailure struct {
+	Message string `json:"message"`
+	Code    string `json:"code"`
+	globalRevocationResponse
+}
+
 // securityEventResponse is one security-event row: everything the rail stores,
 // with created_at in UTC RFC 3339 nanoseconds. Details carry identifiers and
 // digests only, never a secret or an address (the rail's content contract).
@@ -191,8 +221,9 @@ func mountUserAdmin(r pockets.RouteRegistrar, h *handlers, userAdministration, b
 // With WithAdministrationMFA the caller the check admits must also hold an AAL2
 // credential from a source MFAConfig.Methods admits, or it gets the RFC 9470 401 and one mfa_required_denied row
 // (gate admin). The check runs first, so a non-admin keeps the host's 403 and
-// the challenge never reveals who is an administrator. An API key skips the
-// MFA requirement: no key can ever satisfy it.
+// the challenge never reveals who is an administrator. An API key — which can
+// never satisfy the requirement — gets the 403 mfa_credential_not_eligible with
+// no challenge, unless MFAConfig.APIKeysExempt passes it.
 func (h *handlers) adminPrincipal(w http.ResponseWriter, r *http.Request, action UserAdminAction, targetUserID string) (authlogic.Principal, bool) {
 	principal, ok := h.svc.CurrentPrincipal(r.Context())
 	if !ok {
@@ -210,8 +241,8 @@ func (h *handlers) adminPrincipal(w http.ResponseWriter, r *http.Request, action
 	}
 	if h.adminMFA {
 		cred, _ := h.svc.CurrentCredential(r.Context())
-		if !h.svc.admitMFA(r.Context(), authlogic.MFAGateAdmin, cred) {
-			writeMFARequired(w)
+		if reason := h.svc.admitMFA(r.Context(), authlogic.MFAGateAdmin, cred); reason != "" {
+			writeMFARequired(w, reason)
 			return authlogic.Principal{}, false
 		}
 	}
@@ -360,7 +391,7 @@ func (h *handlers) adminListSecurityEvents(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if eventStatus != "" && !slices.Contains(securityEventStatuses, eventStatus) {
-		web.RespondJSONError(w, web.ErrBadRequest("event_status must be success, failure or blocked"))
+		web.RespondJSONError(w, web.ErrBadRequest("event_status must be success, failure, blocked or started"))
 		return
 	}
 	since, ok := parseOptionalTime(w, querySecurityEventSince, q.Get(querySecurityEventSince))
@@ -386,6 +417,51 @@ func (h *handlers) adminListSecurityEvents(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	web.RespondJSONOK(w, newPageResponse(page, newSecurityEventResponse))
+}
+
+// adminRevokeAllSessions ends every session in the fleet for an administrator
+// the host check admits for UserAdminRevokeAllSessions, at most once a minute
+// per actor. The caller's own session goes with the rest, so the session
+// cookies are cleared and the next bearer request is a 401. The run is detached
+// from the request (globalRevokeTimeout bounds it), so a dropped connection
+// does not stop it. A failed run answers its error with the partial counts —
+// clearing the cookies once a batch committed, since the caller's session may
+// be gone — and is safe to repeat.
+func (h *handlers) adminRevokeAllSessions(w http.ResponseWriter, r *http.Request) {
+	writeNoStore(w)
+	if !requireJSON(w, r) {
+		return
+	}
+	var body struct{}
+	if !strictJSONBody(w, r, &body, maxJSONBodyBytes) {
+		return
+	}
+	principal, ok := h.adminPrincipal(w, r, UserAdminRevokeAllSessions, "")
+	if !ok {
+		return
+	}
+	revoke := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), globalRevokeTimeout)
+		defer cancel()
+		res, err := h.globalRevoker.RevokeAllSessions(ctx, principal)
+		counts := globalRevocationResponse{
+			Users: res.Users, Sessions: res.Sessions, Grants: res.Grants, Batches: res.Batches,
+			RevokedAt: res.RevokedAt.UTC().Format(time.RFC3339Nano),
+		}
+		if err != nil {
+			if res.Batches == 0 {
+				web.RespondJSONDomainError(w, err)
+				return
+			}
+			h.svc.ClearSessionCookies(w)
+			mapped := web.ErrFromDomain(err)
+			web.RespondJSON(w, mapped.Status, globalRevocationFailure{Message: mapped.Message, Code: mapped.Code, globalRevocationResponse: counts})
+			return
+		}
+		h.svc.ClearSessionCookies(w)
+		web.RespondJSONOK(w, counts)
+	})
+	h.svc.rateLimitByKey(globalRevokeBudgetPrefix, principal.Type+":"+principal.ID, ratelimiter.PerMinute(1))(revoke).ServeHTTP(w, r)
 }
 
 // singleValued answers a named 400 when any of keys is repeated.

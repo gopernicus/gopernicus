@@ -98,6 +98,10 @@ type data struct {
 	// totpCreds and totpCodes are the second-factor aggregate, by user ID.
 	totpCreds map[string]totp.Credential
 	totpCodes map[string][]totp.RecoveryCode
+
+	// accountStatus is the service-account status table, by service-account
+	// ID; an absent row is active.
+	accountStatus map[string]serviceaccount.Status
 }
 
 // Store is an in-memory auth datastore. Its Repositories method yields the port
@@ -128,6 +132,7 @@ func New() *Store {
 		passkeys:         map[string]passkey.Passkey{},
 		totpCreds:        map[string]totp.Credential{},
 		totpCodes:        map[string][]totp.RecoveryCode{},
+		accountStatus:    map[string]serviceaccount.Status{},
 	}}
 }
 
@@ -179,6 +184,11 @@ func (s *Store) Repositories() auth.Repositories {
 		// TOTP and recovery codes (SOC 2 S4c): Confirm and Remove run under the
 		// same mutex, and erasure deletes both when TOTP is wired.
 		TOTP: totpRepo{s.d},
+		// Session and machine governance (SOC 2 S4d): the fleet-wide revoke, and
+		// the service-account status the host reads only when it sets
+		// AdministrationConfig.ServiceAccountStatus.
+		GlobalSessions:       globalSessionsRepo{s.d},
+		ServiceAccountStatus: accountStatusRepo{s.d},
 	}
 }
 

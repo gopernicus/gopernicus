@@ -218,7 +218,7 @@ func TestResolveAPIKeyCredentialRoundTrip(t *testing.T) {
 		t.Fatalf("MintAPIKey: %v", err)
 	}
 
-	p, _, ok := h.svc.verifyAPIKeyCredential(ctx, raw)
+	p, _, ok, _ := h.svc.verifyAPIKeyCredential(ctx, raw)
 	if !ok {
 		t.Fatal("resolveAPIKeyCredential denied a valid key")
 	}
@@ -269,7 +269,7 @@ func TestResolveAPIKeyCredentialActAsUserResolvesToOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MintAPIKey: %v", err)
 	}
-	p, _, ok := h.svc.verifyAPIKeyCredential(ctx, raw)
+	p, _, ok, _ := h.svc.verifyAPIKeyCredential(ctx, raw)
 	if !ok {
 		t.Fatal("resolveAPIKeyCredential denied a valid act-as-user key")
 	}
@@ -286,7 +286,7 @@ func TestResolveAPIKeyCredentialRevokedDenies(t *testing.T) {
 	if err := h.svc.RevokeAPIKey(ctx, key.ID); err != nil {
 		t.Fatalf("RevokeAPIKey: %v", err)
 	}
-	if _, _, ok := h.svc.verifyAPIKeyCredential(ctx, raw); ok {
+	if _, _, ok, _ := h.svc.verifyAPIKeyCredential(ctx, raw); ok {
 		t.Error("revoked key resolved; want denied")
 	}
 }
@@ -295,8 +295,10 @@ func TestResolveAPIKeyCredentialExpiredDenies(t *testing.T) {
 	h := newMachineHarness(t)
 	ctx := context.Background()
 	sa, _ := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
-	_, raw, _ := h.svc.MintAPIKey(ctx, sa.ID, "k", time.Now().Add(-time.Hour))
-	if _, _, ok := h.svc.verifyAPIKeyCredential(ctx, raw); ok {
+	// A past expires_at is refused at mint, so the key expires on the clock.
+	_, raw, _ := h.svc.MintAPIKey(ctx, sa.ID, "k", time.Now().Add(time.Hour))
+	h.svc.now = func() time.Time { return time.Now().Add(2 * time.Hour) }
+	if _, _, ok, _ := h.svc.verifyAPIKeyCredential(ctx, raw); ok {
 		t.Error("expired key resolved; want denied")
 	}
 }
@@ -307,14 +309,14 @@ func TestResolveAPIKeyCredentialValidNeverExpires(t *testing.T) {
 	sa, _ := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
 	// A zero ExpiresAt means never-expires — a far-future clock still authenticates.
 	_, raw, _ := h.svc.MintAPIKey(ctx, sa.ID, "k", time.Time{})
-	if _, _, ok := h.svc.verifyAPIKeyCredential(ctx, raw); !ok {
+	if _, _, ok, _ := h.svc.verifyAPIKeyCredential(ctx, raw); !ok {
 		t.Error("never-expiring key denied; want resolved")
 	}
 }
 
 func TestResolveAPIKeyCredentialUnknownDenies(t *testing.T) {
 	h := newMachineHarness(t)
-	if _, _, ok := h.svc.verifyAPIKeyCredential(context.Background(), "prefix_deadbeef"); ok {
+	if _, _, ok, _ := h.svc.verifyAPIKeyCredential(context.Background(), "prefix_deadbeef"); ok {
 		t.Error("unknown key resolved; want denied")
 	}
 }
@@ -326,7 +328,7 @@ func TestResolveAPIKeyCredentialTouchLastUsedBestEffort(t *testing.T) {
 	sa, _ := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
 	_, raw, _ := h.svc.MintAPIKey(ctx, sa.ID, "k", time.Time{})
 	// A failing TouchLastUsed must NOT fail authentication.
-	if _, _, ok := h.svc.verifyAPIKeyCredential(ctx, raw); !ok {
+	if _, _, ok, _ := h.svc.verifyAPIKeyCredential(ctx, raw); !ok {
 		t.Error("authentication failed on a TouchLastUsed error")
 	}
 }

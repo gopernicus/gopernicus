@@ -26,6 +26,7 @@ type ManagementRepository interface {
 	// RevokeAllForUser locks the user, increments auth_revision and deletes all
 	// their sessions/step-up grants atomically. Code redemption uses that same
 	// lock/revision fence, so outstanding approvals cannot resurrect sessions.
-	// Single-session revocation must never call this operation.
+	// Single-session revocation must never call this operation, and the
+	// fleet-wide revocation is GlobalRevoker, not a loop over this.
 	RevokeAllForUser(ctx context.Context, userID string, now time.Time) error
 }

@@ -37,6 +37,10 @@ const (
 	tooManyErrMsg           = "Too many attempts. Please wait a moment and try again."
 )
 
+// registerInvitationErrMsg is the actionable copy for an address with no
+// pending invitation under IdentityConfig.Registration invitation_only.
+const registerInvitationErrMsg = "Accounts are by invitation only. Ask for an invitation to this email address, then try again."
+
 // ---------------------------------------------------------------------------
 // Shared form helpers
 // ---------------------------------------------------------------------------
@@ -176,6 +180,7 @@ func (h *handlers) loginForm(w http.ResponseWriter, r *http.Request) {
 		h.renderForm(w, r, status, pc.CSPNonce, h.views.Login(LoginPage{
 			PageContext: pc, Email: email, PasswordlessEnabled: h.svc.PasswordlessEnabled(),
 			PasswordFlowsDisabled: !h.svc.PasswordFlowsEnabled(),
+			RegistrationClosed:    h.registration == authlogic.RegistrationClosed,
 			OAuthProviders:        h.svc.OAuthProviderNames(),
 		}))
 		return
@@ -196,6 +201,9 @@ func (h *handlers) registerForm(w http.ResponseWriter, r *http.Request) {
 	displayName := form.Get("display_name")
 	if _, err := h.svc.Register(r.Context(), email, form.Get("password"), displayName); err != nil {
 		status, msg := formFailure(err, registerErrMsg)
+		if errors.Is(err, authlogic.ErrRegistrationInvitationRequired) {
+			status, msg = http.StatusForbidden, registerInvitationErrMsg
+		}
 		pc := h.newPageContext(w)
 		pc.Message = msg
 		h.renderForm(w, r, status, pc.CSPNonce, h.views.Register(RegisterPage{

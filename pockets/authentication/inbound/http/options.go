@@ -130,12 +130,32 @@ func WithUserAdminCheck(check UserAdminCheck) Option {
 // WithAdministrationMFA requires AAL2 on /auth/admin/users* of every caller the
 // UserAdminCheck admits: an admitted caller below AAL2 gets the RFC 9470 401
 // and an mfa_required_denied row, a non-admin keeps the check's 403, and an API
-// key passes. When the service has passkeys wired it also gates the machine
+// key gets the 403 mfa_credential_not_eligible unless WithMFAAPIKeysExempt.
+// When the service has passkeys wired it also gates the machine
 // lifecycle routes after the MachineGate (gate machine), since a passkey can
 // now satisfy it there. It gates no other route. Without WithUserAdminCheck it
 // is sdk.ErrInvalidInput at New.
 func WithAdministrationMFA() Option {
 	return func(c *adapterConfig) { c.AdministrationMFA = true }
+}
+
+// WithGlobalSessionRevocationRoute opts in to POST
+// /auth/admin/sessions/revoke-all: the service's RevokeAllSessions behind its
+// own Live authenticator (a first-party access token or an external token; no
+// API key, no delegated token), the browser-safe
+// gate, the UserAdminCheck with UserAdminRevokeAllSessions (and the admins MFA
+// gate) and one call a minute per actor. It mounts only beside
+// WithUserAdminCheck and a service whose global revocation is wired; enabling
+// it without either is sdk.ErrInvalidInput at New.
+func WithGlobalSessionRevocationRoute(enabled bool) Option {
+	return func(c *adapterConfig) { c.GlobalSessionRevocationRoute = enabled }
+}
+
+// WithMFAAPIKeysExempt lets an API key pass every MFA gate (MFAConfig.
+// APIKeysExempt): RequireMFA(), the admin and the machine gates. False (the
+// default) refuses a key there with a 403 mfa_credential_not_eligible.
+func WithMFAAPIKeysExempt(exempt bool) Option {
+	return func(c *adapterConfig) { c.MFAAPIKeysExempt = exempt }
 }
 
 // WithPasskeyViews mounts the passkey pages — GET /auth/account/passkeys, its

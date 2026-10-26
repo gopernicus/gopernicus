@@ -55,6 +55,9 @@ const (
 	// MFADenialMethod is an AAL2 credential whose sources MFAConfig.Methods does
 	// not admit.
 	MFADenialMethod = "method"
+	// MFADenialAPIKey is an API key at an MFA gate: no key can step up, so the
+	// gate refuses it outright unless MFAConfig.APIKeysExempt.
+	MFADenialAPIKey = "api_key"
 )
 
 var (
@@ -79,8 +82,8 @@ type MFAGate string
 type MFAMethod string
 
 // MFADenial is one refused multi-factor requirement: the gate that refused it,
-// the principal and the credential it refused, and why (Reason: assurance or
-// method; empty reads as assurance). RecordMFADenied records it as an
+// the principal and the credential it refused, and why (Reason: assurance,
+// method or api_key; empty reads as assurance). RecordMFADenied records it as an
 // mfa_required_denied row carrying bounded values only — the gate, the
 // credential kind, the provider name, the presented and required assurance, the
 // reason and the credential's AAL2 source — never a claim, an amr value or the
@@ -163,7 +166,7 @@ func mfaDenialEvent(d MFADenial, provider string) securityEventInput {
 		"credential": boundedEnum(string(d.Credential.Kind), string(CredentialAccessToken), string(CredentialAPIKey), string(CredentialExternalToken)),
 		"assurance":  boundedEnum(string(d.Credential.Assurance), string(session.AssuranceAAL1), string(session.AssuranceAAL2), string(session.AssuranceAAL3)),
 		"required":   string(session.AssuranceAAL2),
-		"reason":     boundedEnum(cmp.Or(d.Reason, MFADenialAssurance), MFADenialAssurance, MFADenialMethod),
+		"reason":     boundedEnum(cmp.Or(d.Reason, MFADenialAssurance), MFADenialAssurance, MFADenialMethod, MFADenialAPIKey),
 		"method":     "none",
 	}
 	if sources := MFASources(d.Credential); len(sources) > 0 {

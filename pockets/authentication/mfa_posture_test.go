@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -50,6 +53,16 @@ type mfaWiring struct {
 	totp     bool
 	totpRepo totp.Repository
 	methods  []MFAMethod
+	// The S4d session and machine governance knobs: the machine repositories
+	// and a gate, the API-key hatch, the lifetime and its waiver, the
+	// registration mode, and the revoke-all route over its port.
+	machine       bool
+	apiKeysExempt bool
+	apiKeyMaxTTL  time.Duration
+	ttlAck        bool
+	registration  RegistrationMode
+	globalRoute   bool
+	global        bool
 }
 
 func idp(name, issuer string, requireMFA bool) authlogic.ExternalProvider {
@@ -62,11 +75,11 @@ func (w mfaWiring) build(mode environment.Mode) (*Components, string, error) {
 	repos := Repositories{SecurityEvents: stubSecurityEvents{}}
 	opts := []Option{
 		WithPassword(PasswordConfig{Hasher: stubHasher{}, PasswordFlowsDisabled: !w.password}),
-		WithIdentity(IdentityConfig{IdentifierKeyer: prodKeyer{}, SingleFactorAcknowledged: w.ack, ChallengeProtector: w.protector}),
+		WithIdentity(IdentityConfig{IdentifierKeyer: prodKeyer{}, SingleFactorAcknowledged: w.ack, ChallengeProtector: w.protector, Registration: w.registration}),
 		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
 		WithDelivery(DeliveryConfig{Mailer: prodMailer{}}),
 		WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}}),
-		WithMFA(MFAConfig{Required: w.required, Methods: w.methods}),
+		WithMFA(MFAConfig{Required: w.required, Methods: w.methods, APIKeysExempt: w.apiKeysExempt}),
 		WithLogger(log),
 	}
 	if w.providers != nil {
@@ -94,10 +107,19 @@ func (w mfaWiring) build(mode environment.Mode) (*Components, string, error) {
 		}
 		opts = append(opts, WithTOTP(TOTPConfig{Encrypter: testTOTPEncrypter(), Issuer: "Example"}))
 	}
+	admin := AdministrationConfig{APIKeyMaxTTL: w.apiKeyMaxTTL, APIKeyUnlimitedTTLAcknowledged: w.ttlAck, GlobalSessionRevocationRoute: w.globalRoute}
 	if w.adminCheck {
 		repos.UserAdmin = stubUserAdmin{}
-		opts = append(opts, WithAdministration(AdministrationConfig{UserAdminCheck: func(context.Context, inbound.UserAdminCheckRequest) error { return nil }}))
+		admin.UserAdminCheck = func(context.Context, inbound.UserAdminCheckRequest) error { return nil }
 	}
+	if w.machine {
+		repos.ServiceAccounts, repos.APIKeys = stubServiceAccounts{}, stubAPIKeys{}
+		admin.MachineRoutesGate = func(next http.Handler) http.Handler { return next }
+	}
+	if w.global {
+		repos.GlobalSessions = stubGlobalSessions{}
+	}
+	opts = append(opts, WithAdministration(admin))
 	c, err := New(testRepositories(repos), stubSigner{}, mode, delivery.ModeOff, opts...)
 	return c, buf.String(), err
 }
@@ -272,5 +294,92 @@ func TestSingleFactorSentinelIsShared(t *testing.T) {
 	}
 	if !errors.Is(ErrMFARequired, sdk.ErrUnauthorized) {
 		t.Fatal("ErrMFARequired does not match sdk.ErrUnauthorized")
+	}
+}
+
+// stubGlobalSessions fills Repositories.GlobalSessions for construction.
+type stubGlobalSessions struct{}
+
+func (stubGlobalSessions) RevokeAllBatch(context.Context, string, int, time.Time) (session.GlobalRevocationBatch, error) {
+	return session.GlobalRevocationBatch{Done: true}, nil
+}
+func (stubGlobalSessions) SweepOrphans(context.Context, time.Time) (int, int, error) {
+	return 0, 0, nil
+}
+
+// TestGovernanceBootLines pins the S4d boot lines: the registration mode with
+// its source, the API-key lifetime with its source, and api_keys on the MFA
+// posture line.
+func TestGovernanceBootLines(t *testing.T) {
+	one := []authlogic.ExternalProvider{idp("idp", "https://idp.example.test", false)}
+	for _, tc := range []struct {
+		mode   environment.Mode
+		wiring mfaWiring
+		want   []string
+	}{
+		{environment.ModeDevelopment, mfaWiring{providers: one, ack: true}, []string{"registration=open source=default", "api_key_max_ttl=unlimited source=default", "api_keys=denied"}},
+		{environment.ModeProduction, mfaWiring{providers: one, ack: true}, []string{"api_key_max_ttl=8760h0m0s source=default"}},
+		{environment.ModeProduction, mfaWiring{providers: one, ack: true, ttlAck: true}, []string{"api_key_max_ttl=unlimited source=acknowledged", "posture_waiver=APIKeyUnlimitedTTLAcknowledged"}},
+		{environment.ModeProduction, mfaWiring{providers: one, ack: true, apiKeyMaxTTL: 2160 * time.Hour, ttlAck: true}, []string{"api_key_max_ttl=2160h0m0s source=config"}},
+		{environment.ModeDevelopment, mfaWiring{providers: one, ack: true, registration: "closed"}, []string{"registration=closed source=config"}},
+		{environment.ModeDevelopment, mfaWiring{providers: one, ack: true, apiKeysExempt: true}, []string{"api_keys=exempt", "MFAConfig.APIKeysExempt lets API keys pass"}},
+		{environment.ModeProduction, mfaWiring{providers: one, ack: true, apiKeysExempt: true}, []string{"api_keys=exempt", "posture_waiver=APIKeysExempt"}},
+	} {
+		_, logs, err := tc.wiring.build(tc.mode)
+		if err != nil {
+			t.Fatalf("%v: %v", tc.want, err)
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(logs, want) {
+				t.Errorf("%s: logs lack %q:\n%s", tc.mode, want, logs)
+			}
+		}
+		if !tc.wiring.ttlAck && strings.Contains(logs, "APIKeyUnlimitedTTLAcknowledged") {
+			t.Errorf("a waiver logged without its acknowledgement:\n%s", logs)
+		}
+	}
+	if _, logs, _ := (mfaWiring{providers: one, ack: true, apiKeyMaxTTL: 2160 * time.Hour, ttlAck: true}).build(environment.ModeProduction); strings.Contains(logs, "posture_waiver=APIKeyUnlimitedTTLAcknowledged") {
+		t.Errorf("an inert acknowledgement logged its waiver:\n%s", logs)
+	}
+}
+
+// TestGovernanceConstructionRefusals pins the S4d construction errors: an
+// unknown registration mode in every mode, a negative lifetime, and the
+// revoke-all route without its port or check.
+func TestGovernanceConstructionRefusals(t *testing.T) {
+	one := []authlogic.ExternalProvider{idp("idp", "https://idp.example.test", false)}
+	for _, mode := range []environment.Mode{environment.ModeDevelopment, environment.ModeProduction} {
+		if _, _, err := (mfaWiring{providers: one, ack: true, registration: "bogus"}).build(mode); !errors.Is(err, sdk.ErrInvalidInput) || !strings.Contains(err.Error(), "AUTH_REGISTRATION") {
+			t.Errorf("%s: an unknown registration = %v, want ErrInvalidInput naming the field", mode, err)
+		}
+	}
+	if _, _, err := (mfaWiring{providers: one, ack: true, apiKeyMaxTTL: -time.Hour}).build(environment.ModeDevelopment); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Errorf("a negative lifetime = %v", err)
+	}
+	if _, _, err := (mfaWiring{providers: one, ack: true, registration: RegistrationInvitationOnly}).build(environment.ModeDevelopment); !errors.Is(err, ErrRegistrationModeRequiresInvitations) {
+		t.Errorf("invitation_only without a Granter = %v", err)
+	}
+	if _, _, err := (mfaWiring{providers: one, ack: true, globalRoute: true, adminCheck: true}).build(environment.ModeDevelopment); !errors.Is(err, ErrGlobalSessionRevocationRouteRequires) {
+		t.Errorf("the route without GlobalSessions = %v", err)
+	}
+	if _, _, err := (mfaWiring{providers: one, ack: true, globalRoute: true, global: true}).build(environment.ModeDevelopment); !errors.Is(err, ErrGlobalSessionRevocationRouteRequires) {
+		t.Errorf("the route without UserAdminCheck = %v", err)
+	}
+	if _, _, err := (mfaWiring{providers: one, ack: true, globalRoute: true, global: true, adminCheck: true}).build(environment.ModeDevelopment); err != nil {
+		t.Errorf("the route fully wired: %v", err)
+	}
+}
+
+// TestMachineMFADeadEndWarns pins the BE9 WARN: admins with no native AAL2
+// source while the machine routes mount.
+func TestMachineMFADeadEndWarns(t *testing.T) {
+	one := []authlogic.ExternalProvider{idp("idp", "https://idp.example.test", true)}
+	_, logs, err := (mfaWiring{providers: one, required: MFARequiredAdmins, adminCheck: true, machine: true}).build(environment.ModeDevelopment)
+	if err != nil || strings.Count(logs, "native sessions mint API keys at AAL1") != 1 {
+		t.Fatalf("err = %v, logs:\n%s", err, logs)
+	}
+	_, logs, _ = (mfaWiring{providers: one, required: MFARequiredAdmins, adminCheck: true}).build(environment.ModeDevelopment)
+	if strings.Contains(logs, "native sessions mint API keys") {
+		t.Fatalf("the WARN without machine routes:\n%s", logs)
 	}
 }

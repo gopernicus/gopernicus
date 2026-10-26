@@ -111,6 +111,11 @@ type LoginPage struct {
 	// PasswordFlowsDisabled hides password sign-in, registration and recovery.
 	// False preserves the default password-enabled presentation.
 	PasswordFlowsDisabled bool
+	// RegistrationClosed hides the "Create an account" link: under
+	// IdentityConfig.Registration closed the registration routes are not
+	// mounted. False (open and invitation_only, where an invitee still needs
+	// the link) keeps it.
+	RegistrationClosed bool
 	// PasswordlessEnabled reports whether the host wired passwordless login, so the
 	// template can offer the alternative; it changes no route security.
 	PasswordlessEnabled bool

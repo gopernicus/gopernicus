@@ -43,3 +43,12 @@ type APIKeyRepository interface {
 	// authentication).
 	TouchLastUsed(ctx context.Context, id string, usedAt time.Time) error
 }
+
+// FilteredLister is the OPTIONAL filtered listing (SOC 2 S4d), asserted on the
+// APIKeyRepository so the port above is unchanged. It is ListByServiceAccount
+// narrowed in the store by filter — never in memory over a page — with
+// Filter.Matches as the predicate: revoked takes precedence, and a key expires
+// at or before filter.Now. Ordering and cursors are ListByServiceAccount's.
+type FilteredLister interface {
+	ListByServiceAccountFiltered(ctx context.Context, serviceAccountID string, filter Filter, req list.Request) (list.Page[APIKey], error)
+}

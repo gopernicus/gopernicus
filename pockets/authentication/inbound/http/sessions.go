@@ -180,6 +180,36 @@ type securityEventReader interface {
 	ListSecurityEvents(ctx context.Context, filter securityevent.ListFilter, req list.Request) (list.Page[securityevent.SecurityEvent], error)
 }
 
+// globalSessionRevoker is the fleet-wide revocation the opt-in revoke-all route
+// drives, resolved from the AuthenticationService at New like userEraser.
+type globalSessionRevoker interface {
+	GlobalSessionRevocationEnabled() bool
+	RevokeAllSessions(ctx context.Context, actor authlogic.Principal) (authlogic.GlobalRevocation, error)
+}
+
+// serviceAccountStatusManager is the service-account disable/enable status,
+// resolved from the AuthenticationService at New; the routes mount only when
+// it reports itself wired.
+type serviceAccountStatusManager interface {
+	ServiceAccountStatusEnabled() bool
+	ServiceAccountStatuses(ctx context.Context, ids []string) (map[string]serviceaccount.Status, error)
+	DisableServiceAccount(ctx context.Context, actor authlogic.Principal, id string) (serviceaccount.ServiceAccount, serviceaccount.StatusChange, error)
+	EnableServiceAccount(ctx context.Context, actor authlogic.Principal, id string) (serviceaccount.ServiceAccount, serviceaccount.StatusChange, error)
+}
+
+// apiKeyFilterLister is the filtered key listing the machine listing drives
+// for ?status= and ?never_expires=; without it a filtered call is 400
+// filter_unsupported.
+type apiKeyFilterLister interface {
+	ListAPIKeysFiltered(ctx context.Context, serviceAccountID string, filter apikey.Filter, req list.Request) (list.Page[apikey.APIKey], error)
+}
+
+// registrationModer reports IdentityConfig.Registration; a service without it
+// is open.
+type registrationModer interface {
+	RegistrationMode() authlogic.RegistrationMode
+}
+
 // invitationSyncer is the on-demand invitation sync POST /auth/invitations/sync
 // drives, resolved from the AuthenticationService at New; a service without it
 // leaves the route unmounted.
@@ -203,7 +233,8 @@ type authService interface {
 	RequirePrincipal(opts ...PrincipalOption) web.Middleware
 	RateLimitByIP(keyPrefix string, perMinute int) web.Middleware
 	rateLimitByIP(keyPrefix string, limit ratelimiter.Limit) web.Middleware
-	admitMFA(ctx context.Context, gate authlogic.MFAGate, cred Credential) bool
+	admitMFA(ctx context.Context, gate authlogic.MFAGate, cred Credential) string
+	rateLimitByKey(keyPrefix, key string, limit ratelimiter.Limit) web.Middleware
 	mfaAllows(m authlogic.MFAMethod) bool
 	pagePath(page string) string
 }
@@ -338,7 +369,7 @@ func (h *handlers) registerJSON(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := h.svc.Register(r.Context(), req.Email, req.Password, req.DisplayName)
 	if err != nil {
-		web.RespondJSONDomainError(w, err)
+		respondRegistrationError(w, err)
 		return
 	}
 	web.RespondJSONCreated(w, h.userResponseFor(r.Context(), u, req.Email))

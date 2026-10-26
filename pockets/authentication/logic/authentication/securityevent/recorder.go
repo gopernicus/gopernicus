@@ -190,16 +190,26 @@ func NewRecorder(repo SecurityEventRepository, ids sdk.IDGenerator, now func() t
 // the failures since the previous line. A failure after a quiet minute starts
 // over with the detailed line.
 func (r *Recorder) Record(ctx context.Context, in Input) {
+	_ = r.RecordReporting(ctx, in)
+}
+
+// RecordReporting is Record for a caller whose row is evidence it must act on:
+// the write runs, and a failure is counted, logged and observed exactly as
+// Record does, then returned. A row Record would not write (no repository, a
+// refused budget) returns nil.
+func (r *Recorder) RecordReporting(ctx context.Context, in Input) error {
 	evt, ok := r.Prepare(ctx, in)
 	if !ok {
-		return
+		return nil
 	}
 	detached := context.WithoutCancel(ctx)
 	writeCtx, cancel := context.WithTimeout(detached, r.timeout)
 	defer cancel()
-	if _, err := r.repo.Create(writeCtx, evt); err != nil {
+	_, err := r.repo.Create(writeCtx, evt)
+	if err != nil {
 		r.failed(detached, WriteFailure{EventType: in.Type, EventStatus: in.Status, ErrorKind: ErrorKind(err)})
 	}
+	return err
 }
 
 // Prepare builds the row Record would write for in — the id, the time, the
