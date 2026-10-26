@@ -72,6 +72,25 @@ func TestLoginOverrideRendersBrandedForm(t *testing.T) {
 	}
 }
 
+// TestLoginOverrideHonorsRegistrationClosed proves the branded Login hides the
+// "Create an account" link only under registration closed, where the register
+// routes are unmounted.
+func TestLoginOverrideHonorsRegistrationClosed(t *testing.T) {
+	v := newViews(t)
+	closed := renderMethod(t, v.Login(inbound.LoginPage{RegistrationClosed: true}))
+	for _, forbid := range []string{`href="/auth/register"`, "Create an account"} {
+		if strings.Contains(closed, forbid) {
+			t.Errorf("closed login carries %q\n---\n%s", forbid, closed)
+		}
+	}
+	if !strings.Contains(closed, `href="/auth/password/forgot"`) {
+		t.Errorf("closed login dropped the recovery link\n---\n%s", closed)
+	}
+	if open := renderMethod(t, v.Login(inbound.LoginPage{})); !strings.Contains(open, `<a href="/auth/register">Create an account</a>`) {
+		t.Errorf("open login missing the register link\n---\n%s", open)
+	}
+}
+
 // TestPromotedDefaultsServeOtherPages proves the embed satisfies the whole port: a
 // page the host does NOT override (Register) is served by the promoted bundled
 // default, so the override changes exactly one page and leaves the rest intact.

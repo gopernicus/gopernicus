@@ -197,6 +197,32 @@ func TestRegister_NewPassword(t *testing.T) {
 	)
 }
 
+// TestLoginRegistrationClosed proves the "Create an account" link is hidden only
+// under registration closed; password sign-in and recovery stay.
+func TestLoginRegistrationClosed(t *testing.T) {
+	closed := render(t, newViews(t).Login(inbound.LoginPage{PageContext: ctx(), RegistrationClosed: true}))
+	mustNotContain(t, "closed", closed, `href="/auth/register"`, "Create an account")
+	mustContain(t, "closed", closed, `action="/auth/login"`, `href="/auth/password/forgot"`)
+
+	open := render(t, newViews(t).Login(inbound.LoginPage{PageContext: ctx()}))
+	mustContain(t, "open", open, `href="/auth/register"`, "Create an account")
+}
+
+// TestRegister_InvitationRequiredRerender proves the invitation-required
+// re-render shows the copy and keeps the entered email, never the password.
+func TestRegister_InvitationRequiredRerender(t *testing.T) {
+	pc := ctx()
+	pc.Message = "Accounts are by invitation only. Ask for an invitation to this email address, then try again."
+	body := render(t, newViews(t).Register(inbound.RegisterPage{PageContext: pc, Email: "new@e.com", DisplayName: "Ada"}))
+	mustContain(t, "Register", body,
+		`data-slot="auth-message"`,
+		"Accounts are by invitation only.",
+		`value="new@e.com"`,
+		`value="Ada"`,
+		`action="/auth/register"`,
+	)
+}
+
 // TestVerify_OneTimeCodeHiddenEmail proves the verify form uses one-time-code and
 // carries the plain email as a hidden field, while displaying the masked address.
 func TestVerify_OneTimeCodeHiddenEmail(t *testing.T) {
