@@ -31,8 +31,10 @@ import (
 )
 
 // magicTokenPattern extracts the token from the fragment of a delivered
-// magic-link URL.
-var magicTokenPattern = regexp.MustCompile(`#token=([A-Za-z0-9._~%-]+)`)
+// magic-link URL. It is anchored to the magic-link landing path: an invitation
+// link to the same address also carries #token=, and its asynchronous delivery
+// may land after a test's mark.
+var magicTokenPattern = regexp.MustCompile(`/auth/magic#token=([A-Za-z0-9._~%-]+)`)
 
 // recordingGranter is a trivial auth.Granter that records what it granted. The
 // invitation flow needs a Granter to exist at all (deny-by-absence); what it does
