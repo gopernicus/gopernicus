@@ -149,6 +149,10 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	if err := refuseDebugRouteOutsideDevelopment(runtimeMode); err != nil {
 		return err
 	}
+	demoAdmin, err := demoAdminEmail(runtimeMode, log)
+	if err != nil {
+		return err
+	}
 	// The HTTP server config, read the same way. It is resolved here rather than at
 	// the web.Run call because TrustProxies (below) and every host-derived URL take
 	// their values from it.
@@ -405,6 +409,9 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 		}
 		authOptions = append(authOptions, auth.WithExternal(external.config))
 	}
+	// AUTH_DEMO_ADMIN_EMAIL (development only) grants platform admin to the
+	// account that verifies that address (demoadmin.go).
+	authRepos = withDemoAdmin(authRepos, tupleWriter, demoAdmin, log)
 	authSvc, err := auth.New(authRepos, authCfg.TokenSigner, authCfg.RuntimeMode, authCfg.DeliveryMode, authOptions...)
 	if err != nil {
 		return err
