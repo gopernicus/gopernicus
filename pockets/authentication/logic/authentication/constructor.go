@@ -12,6 +12,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/redirect"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passkey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -235,7 +236,9 @@ func validatePublicURL(mode environment.Mode, raw string, noFragment, noToken bo
 // validatePasskeys checks WithPasskeys against the wiring: a relying party needs
 // the passkey store, the credential-mutation rail its removals ride, the
 // recent-authentication grants its enrollment gate consumes, and the challenge
-// rail that holds each ceremony's state.
+// rail that holds each ceremony's state; a store that probes its schema must
+// report it present. Without WithPasskeys nothing here runs, so a store without
+// migration 0025 boots.
 func validatePasskeys(d constructorConfig) error {
 	cfg := d.Passkey
 	if cfg.RelyingParty == nil {
@@ -253,6 +256,11 @@ func validatePasskeys(d constructorConfig) error {
 	}
 	if cfg.MaxPerUser < 0 || cfg.MaxPerUser > maxPasskeysPerUser {
 		return fmt.Errorf("authentication: PasskeyConfig.MaxPerUser %d is outside 0 to %d: %w", cfg.MaxPerUser, maxPasskeysPerUser, sdk.ErrInvalidInput)
+	}
+	if prober, ok := d.Passkeys.(passkey.SchemaProber); ok {
+		if err := prober.ProbeSchema(context.Background()); err != nil {
+			return fmt.Errorf("%w: %w", ErrPasskeySchemaMissing, err)
+		}
 	}
 	return nil
 }

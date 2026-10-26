@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// passkeyMigration is the file that creates passkeyCredentialsTable; the boot
-// probe names it.
+// passkeyMigration is the file that creates passkeyCredentialsTable;
+// ProbeSchema names it.
 const passkeyMigration = "0025_passkey_credentials.sql"
 
 const passkeyColumns = "id, user_id, name, credential_id, public_key, aaguid, user_handle, sign_count, transports, user_verified, backup_eligible, backup_state, created_at, last_used_at"
@@ -28,7 +28,15 @@ type PasskeyStore struct {
 	qualified
 }
 
-var _ passkey.Repository = (*PasskeyStore)(nil)
+// passkeyProbeTables are the tables migration 0025 creates. Repositories never
+// probes them: they are required only when the host wires passkeys, and the
+// pocket asks through PasskeyStore.ProbeSchema (passkey.SchemaProber) only then.
+var passkeyProbeTables = []string{passkeyCredentialsTable}
+
+var (
+	_ passkey.Repository   = (*PasskeyStore)(nil)
+	_ passkey.SchemaProber = (*PasskeyStore)(nil)
+)
 
 // NewPasskeyStore returns a PasskeyStore backed by db.
 // It panics if db is nil; the caller owns the database lifecycle.
@@ -37,6 +45,18 @@ func NewPasskeyStore(db *pgxdb.DB, opts ...Option) *PasskeyStore {
 		panic("authentication pgx: NewPasskeyStore received a nil database")
 	}
 	return &PasskeyStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
+}
+
+// ProbeSchema refuses a database without migration 0025's table with
+// sdk.ErrNotFound naming the file. The pocket calls it only when passkeys are
+// wired.
+func (s *PasskeyStore) ProbeSchema(ctx context.Context) error {
+	for _, table := range passkeyProbeTables {
+		if err := s.probeMigrationTable(ctx, s.db, table, passkeyMigration); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // passkeyRow is the store-local, db-tagged projection of a passkey_credentials

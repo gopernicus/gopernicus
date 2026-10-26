@@ -1,6 +1,7 @@
 package authentication
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -84,6 +85,49 @@ func TestPasskeyConfigValidation(t *testing.T) {
 		if !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Errorf("%s: err = %v, want ErrInvalidInput", name, err)
 		}
+	}
+}
+
+// probingPasskeys reports its schema through passkey.SchemaProber.
+type probingPasskeys struct {
+	stubPasskeys
+	err    error
+	probed *int
+}
+
+func (p probingPasskeys) ProbeSchema(context.Context) error {
+	*p.probed++
+	return p.err
+}
+
+// TestPasskeySchemaProbeOnlyWhenWired pins the owner ruling (0025
+// conditional): a store that probes its schema is probed at New only when
+// WithPasskeys is wired; a missing schema then refuses boot naming 0025, and an
+// unwired host boots.
+func TestPasskeySchemaProbeOnlyWhenWired(t *testing.T) {
+	rp := relyingParty(t, "example.com", []string{"https://example.com"})
+	protector := passwordlessProtector(t)
+	probed := 0
+	missing := probingPasskeys{err: errors.New("relation passkey_credentials does not exist"), probed: &probed}
+	newPocket := func(repo passkey.Repository, opts ...Option) error {
+		repos := testRepositories(Repositories{})
+		repos.Passkeys, repos.CredentialMutations, repos.AuthenticationGrants, repos.Challenges = repo, stubCredentialMutations{}, stubGrants{}, stubChallenges{}
+		_, err := New(repos, stubSigner{}, environment.ModeDevelopment, "off", append([]Option{
+			WithPassword(PasswordConfig{Hasher: stubHasher{}, PasswordFlowsDisabled: true}),
+			WithIdentity(IdentityConfig{ChallengeProtector: protector}),
+			WithDelivery(DeliveryConfig{Mailer: stubMailer{}}),
+		}, opts...)...)
+		return err
+	}
+	err := newPocket(missing, WithPasskeys(PasskeyConfig{RelyingParty: rp}))
+	if !errors.Is(err, ErrPasskeySchemaMissing) || !strings.Contains(err.Error(), "0025_passkey_credentials.sql") || probed != 1 {
+		t.Fatalf("wired over a missing schema = %v (probed %d)", err, probed)
+	}
+	if err := newPocket(probingPasskeys{probed: &probed}, WithPasskeys(PasskeyConfig{RelyingParty: rp})); err != nil || probed != 2 {
+		t.Fatalf("wired over a migrated schema = %v (probed %d)", err, probed)
+	}
+	if err := newPocket(missing); err != nil || probed != 2 {
+		t.Fatalf("an unwired host over a missing schema = %v (probed %d)", err, probed)
 	}
 }
 

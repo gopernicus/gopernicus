@@ -144,7 +144,7 @@ func (s *Service) applyPasskeyReset(ctx context.Context, userID string) (int, er
 	var err error
 	for range passkeyResetAttempts {
 		var snap credential.MethodSet
-		if snap, err = s.credentialMutations.Snapshot(ctx, userID); err != nil {
+		if snap, err = s.snapshotCredentials(ctx, userID); err != nil {
 			return 0, err
 		}
 		if err = s.credentialMutations.Apply(ctx, userID, snap.AuthRevision, credential.RemovePasskeys{}); err == nil {

@@ -381,7 +381,7 @@ func (s *Service) applyVerifiedIdentifierChange(ctx context.Context, userID stri
 		MakePrimary:          pending.MakePrimary,
 		ReplacesIdentifierID: pending.ReplacesIdentifierID,
 	}
-	snap, err := s.credentialMutations.Snapshot(ctx, userID)
+	snap, err := s.snapshotCredentials(ctx, userID)
 	if err != nil {
 		return err
 	}

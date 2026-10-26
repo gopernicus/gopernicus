@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passkey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
 	"github.com/gopernicus/gopernicus/pockets/authentication/stores/storetest"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -84,7 +86,7 @@ func TestSchemaProbe_MissingTable(t *testing.T) {
 	db := probeDial(t)
 	t.Cleanup(func() { probeResetSchema(t, db) })
 
-	for _, table := range slices.Concat(probeTables, oauth2ProbeTables, externalProbeTables, passkeyProbeTables) {
+	for _, table := range slices.Concat(probeTables, oauth2ProbeTables, externalProbeTables) {
 		t.Run(table, func(t *testing.T) {
 			probeResetSchema(t, db)
 			if _, err := db.Exec(context.Background(), "DROP TABLE IF EXISTS "+table); err != nil {
@@ -100,9 +102,6 @@ func TestSchemaProbe_MissingTable(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), table) {
 				t.Fatalf("missing %s: error does not name the table: %v", table, err)
-			}
-			if slices.Contains(passkeyProbeTables, table) && !strings.Contains(err.Error(), passkeyMigration) {
-				t.Fatalf("missing %s: error does not name %s: %v", table, passkeyMigration, err)
 			}
 		})
 	}
@@ -173,4 +172,30 @@ func TestSchemaProbe_TOTPConditional(t *testing.T) {
 	if err := repos.TOTP.(totp.SchemaProber).ProbeSchema(context.Background()); err == nil || !strings.Contains(err.Error(), totpMigration) {
 		t.Fatalf("ProbeSchema = %v, want an error naming %s", err, totpMigration)
 	}
+}
+
+// TestSchemaProbe_PasskeyConditional pins the owner ruling on 0025: without
+// its table (and 0026's) Repositories still constructs (passkeys are opt-in,
+// never probed in every mode), the passkey store's ProbeSchema — the pocket's
+// check under WithPasskeys — refuses, naming the file, and the credential rail
+// and erasure work with passkeys off.
+func TestSchemaProbe_PasskeyConditional(t *testing.T) {
+	db := probeDial(t)
+	probeResetSchema(t, db)
+	t.Cleanup(func() { probeResetSchema(t, db) })
+	for _, table := range slices.Concat(passkeyProbeTables, totpProbeTables) {
+		if _, err := db.Exec(context.Background(), "DROP TABLE "+table); err != nil {
+			t.Fatalf("drop %s: %v", table, err)
+		}
+	}
+
+	repos, err := Repositories(context.Background(), db)
+	if err != nil {
+		t.Fatalf("Repositories without 0025 = %v, want it to construct (passkeys are opt-in)", err)
+	}
+	storetest.RunPasskeySchemaProbe(t, func(*testing.T) passkey.Repository { return repos.Passkeys })
+	if err := repos.Passkeys.(passkey.SchemaProber).ProbeSchema(context.Background()); err == nil || !strings.Contains(err.Error(), passkeyMigration) {
+		t.Fatalf("ProbeSchema = %v, want an error naming %s", err, passkeyMigration)
+	}
+	storetest.RunPasskeysUnwired(t, func(*testing.T) auth.Repositories { return repos })
 }

@@ -11,8 +11,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// passkeyMigration is the file that creates the passkey_credentials table; the
-// boot probe names it.
+// passkeyMigration is the file that creates the passkey_credentials table;
+// ProbeSchema names it.
 const passkeyMigration = "0025_passkey_credentials.sql"
 
 const passkeyColumns = "id, user_id, name, credential_id, public_key, aaguid, user_handle, sign_count, transports, user_verified, backup_eligible, backup_state, created_at, last_used_at"
@@ -27,7 +27,15 @@ type PasskeyStore struct {
 	db *tursodb.DB
 }
 
-var _ passkey.Repository = (*PasskeyStore)(nil)
+// passkeyProbeTables are the tables migration 0025 creates. Repositories never
+// probes them: they are required only when the host wires passkeys, and the
+// pocket asks through PasskeyStore.ProbeSchema (passkey.SchemaProber) only then.
+var passkeyProbeTables = []string{"passkey_credentials"}
+
+var (
+	_ passkey.Repository   = (*PasskeyStore)(nil)
+	_ passkey.SchemaProber = (*PasskeyStore)(nil)
+)
 
 // NewPasskeyStore returns a PasskeyStore backed by db.
 // It panics if db is nil; the caller owns the database lifecycle.
@@ -36,6 +44,18 @@ func NewPasskeyStore(db *tursodb.DB) *PasskeyStore {
 		panic("authentication turso: NewPasskeyStore received a nil database")
 	}
 	return &PasskeyStore{db: db}
+}
+
+// ProbeSchema refuses a database without migration 0025's table with
+// sdk.ErrNotFound naming the file. The pocket calls it only when passkeys are
+// wired.
+func (s *PasskeyStore) ProbeSchema(ctx context.Context) error {
+	for _, table := range passkeyProbeTables {
+		if err := probeMigrationTable(ctx, s.db, table, passkeyMigration); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // passkeyRow is the store-local, db-tagged projection of a passkey_credentials

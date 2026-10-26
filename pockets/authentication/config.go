@@ -1015,8 +1015,9 @@ type PasskeyConfig struct {
 	// Production refuses a localhost or IP RP ID and an Origins policy with an
 	// http namespace (ErrPasskeyDevelopmentRelyingParty). Wiring one requires
 	// Repositories.Passkeys, CredentialMutations, AuthenticationGrants and
-	// Challenges (ErrPasskeyReposRequired), and beside UserAdminCheck it moves
-	// the MFAConfig default to admins.
+	// Challenges (ErrPasskeyReposRequired); a store that probes its schema must
+	// report migration 0025 applied (ErrPasskeySchemaMissing); and beside
+	// UserAdminCheck it moves the MFAConfig default to admins.
 	RelyingParty webauthn.RelyingParty
 	// UserVerification is requested of every ceremony. Zero selects preferred:
 	// a passkey without user verification still signs in, at AAL1.

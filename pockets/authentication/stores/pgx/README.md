@@ -43,7 +43,7 @@ option — SQLite has no schemas** (a host switches dialect by one import + one
 
 | member | shape |
 |---|---|
-| `Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repositories, error)` | the full bundle including `OAuth2` and `SessionManagement`, no migration side effects — probes canonical tables and ALTER-added columns in migration order, and errors (`sdk.ErrNotFound`, naming the table or column + the `authentication` migration source) when one is missing; an infrastructure/query failure is never misreported as a missing table; it refuses a database without the `0024` functions or the `0025` `passkey_credentials` table the same way, naming the file; it never probes `0026` (see [TOTP](#totp-0026)). Last it runs `db.ProbeAppendOnly(ctx, AuditTables(opts...)...)` under the `RuntimeMode` `db` was opened with (see [Audit rail](#audit-rail-0021-and-0022) and [Retention](#retention-0023-and-0024)). The bundle fills `Maintenance` (`NewMaintenanceStore`) and `UserErasure` (`NewErasureStore`); `ServiceAccountStore` implements `serviceaccount.CascadeDeleter` |
+| `Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repositories, error)` | the full bundle including `OAuth2` and `SessionManagement`, no migration side effects — probes canonical tables and ALTER-added columns in migration order, and errors (`sdk.ErrNotFound`, naming the table or column + the `authentication` migration source) when one is missing; an infrastructure/query failure is never misreported as a missing table; it refuses a database without the `0024` functions the same way, naming the file; it never probes `0025` or `0026` (see [Passkeys](#passkeys-0025) and [TOTP](#totp-0026)). Last it runs `db.ProbeAppendOnly(ctx, AuditTables(opts...)...)` under the `RuntimeMode` `db` was opened with (see [Audit rail](#audit-rail-0021-and-0022) and [Retention](#retention-0023-and-0024)). The bundle fills `Maintenance` (`NewMaintenanceStore`) and `UserErasure` (`NewErasureStore`); `ServiceAccountStore` implements `serviceaccount.CascadeDeleter` |
 | `AuditTables(opts ...Option) []pgxdb.AppendOnlyTable` | the append-only tables this store owns — `security_events`, schema-qualified under `WithSchema`, verified against the trigger function `0022` ships, with the one `DefinerFunction` `0024` ships (`security_events_purge_before(pg_catalog.timestamptz, pg_catalog.int4)`). A migrator preflights the runtime role with `pgxdb.InspectTablePrivileges(ctx, q, role, pgx.AuditTables(opts...)...)`, deciding exactly as the boot probe will |
 | `Option` | construction option, accepted by `Repositories` and by every `NewXStore(db, opts ...Option)` constructor, so a host composing its own bundle gets the same seam |
 | `WithSchema(s pgxdb.Schema) Option` | places every table these stores touch in `s`; the zero `Schema` is the default and renders today's unqualified SQL byte-for-byte. It never panics — validation happened in `pgxdb.NewSchema` at the host |
@@ -95,20 +95,27 @@ the final migration stream and applies it pre-boot through its own ledger.
 
 ### Passkeys (`0025`)
 
-**`0025_passkey_credentials.sql` is REQUIRED** — without it the boot fails. It creates
+**`0025_passkey_credentials.sql` ships; it is required only when `WithPasskeys`
+is wired** — apply it ahead of time to toggle passkeys on later. It creates
 `passkey_credentials` — one registered WebAuthn credential per row, keyed by
 `id`, with a unique `credential_id` and a `(user_id, created_at, id)` index — and
 touches no existing table, so its indexes build on an empty table (no
-`CONCURRENTLY` step). `Repositories` refuses, in every mode, a database without
-it with `sdk.ErrNotFound` naming `0025_passkey_credentials.sql` — including hosts
-that wire no passkeys: export it (a host ledger gets a byte-identical copy) and
-apply it before deploying this adapter version.
-The bundle fills `Passkeys` (`NewPasskeyStore`). `Create` runs its guard under the
+`CONCURRENTLY` step). `Repositories` never probes it: a host that never wires
+passkeys boots without it. The bundle fills `Passkeys` (`NewPasskeyStore`),
+which implements `passkey.SchemaProber`; the pocket calls `ProbeSchema` only
+under `WithPasskeys`, and a database without the table then refuses the boot
+with `ErrPasskeySchemaMissing` wrapping `sdk.ErrNotFound`, naming
+`0025_passkey_credentials.sql`. Export it (a host ledger gets a byte-identical
+copy) before wiring passkeys. `Create` runs its guard under the
 `users` row lock the credential-mutation rail takes (revision, bootstrap, the
 credential id, the cap, the user handle) and bumps nothing; `RecordUse` is one
 conditional `UPDATE` on the stored sign count. `CredentialMutationStore.Snapshot`
 lists the user's passkeys and `Apply` removes one (`RemovePasskey`) or all
-(`RemovePasskeys`), revoking every session; erasure deletes and counts them.
+(`RemovePasskeys`), revoking every session; `SnapshotScoped`
+(`credential.ScopedSnapshotter`) without passkeys — what the pocket reads while
+passkeys are unwired — never names the table. Erasure deletes and counts them
+only when `EraseInput.Passkeys` says passkeys are wired, and otherwise never
+names the table.
 
 ### TOTP (`0026`)
 

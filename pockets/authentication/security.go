@@ -130,6 +130,11 @@ var (
 	// Repositories.TOTP reports its schema missing (apply migration 0026). A
 	// host that does not wire TOTP is never probed.
 	ErrTOTPSchemaMissing = authlogic.ErrTOTPSchemaMissing
+	// ErrPasskeySchemaMissing is returned when WithPasskeys is wired and
+	// Repositories.Passkeys reports its schema missing (apply migration
+	// 0025_passkey_credentials.sql). A host that does not wire passkeys is never
+	// probed.
+	ErrPasskeySchemaMissing = authlogic.ErrPasskeySchemaMissing
 	// ErrPasskeyDevelopmentRelyingParty is returned in production RuntimeMode for
 	// a WebAuthn relying party whose Config().RPID is localhost or an IP address,
 	// or whose Config().Origins admits an http namespace: a passkey registered

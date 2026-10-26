@@ -22,20 +22,27 @@ with `db.ProbeAuditImmutable` last. The bundle fills `Maintenance`
 
 ### Passkeys (`0025`)
 
-**`0025_passkey_credentials.sql` is REQUIRED** — without it the boot fails. It creates
+**`0025_passkey_credentials.sql` ships; it is required only when `WithPasskeys`
+is wired** — apply it ahead of time to toggle passkeys on later. It creates
 `passkey_credentials` — one registered WebAuthn credential per row, keyed by
 `id`, with a unique `credential_id` and a `(user_id, created_at, id)` index — and
-touches no existing table. `Repositories` refuses, in every mode, a database
-without it with `sdk.ErrNotFound` naming `0025_passkey_credentials.sql` — including hosts
-that wire no passkeys: export it (a host ledger gets a byte-identical copy) and
-apply it before deploying this adapter version.
-The bundle fills `Passkeys` (`NewPasskeyStore`). `Create` runs its guard under the
+touches no existing table. `Repositories` never probes it: a host that never
+wires passkeys boots without it. The bundle fills `Passkeys`
+(`NewPasskeyStore`), which implements `passkey.SchemaProber`; the pocket calls
+`ProbeSchema` only under `WithPasskeys`, and a database without the table then
+refuses the boot with `ErrPasskeySchemaMissing` wrapping `sdk.ErrNotFound`,
+naming `0025_passkey_credentials.sql`. Export it (a host ledger gets a
+byte-identical copy) before wiring passkeys. `Create` runs its guard under the
 `BEGIN IMMEDIATE` write transaction the credential-mutation rail serializes on
 (revision, bootstrap, the credential id, the cap, the user handle) and bumps
 nothing; `RecordUse` is one
 conditional `UPDATE` on the stored sign count. `CredentialMutationStore.Snapshot`
 lists the user's passkeys and `Apply` removes one (`RemovePasskey`) or all
-(`RemovePasskeys`), revoking every session; erasure deletes and counts them.
+(`RemovePasskeys`), revoking every session; `SnapshotScoped`
+(`credential.ScopedSnapshotter`) without passkeys — what the pocket reads while
+passkeys are unwired — never names the table. Erasure deletes and counts them
+only when `EraseInput.Passkeys` says passkeys are wired, and otherwise never
+names the table.
 
 ### TOTP (`0026`)
 

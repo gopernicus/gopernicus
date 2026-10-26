@@ -169,7 +169,11 @@ type Repositories struct {
 	// WithPasskeys wires a relying party and unused otherwise. It must be backed
 	// by the same transaction-capable adapter as Users and CredentialMutations:
 	// Create locks the user row the mutation rail serializes on, Snapshot counts
-	// passkeys as login methods, and Apply performs their removal.
+	// passkeys as login methods, and Apply performs their removal. A host that
+	// never wires passkeys needs no migration 0025: a store that implements
+	// passkey.SchemaProber is probed at boot only when passkeys are wired, and
+	// the pocket then never reads passkey_credentials (EraseInput.Passkeys,
+	// credential.ScopedSnapshotter).
 	Passkeys passkey.Repository
 
 	// TOTP stores the second-factor aggregate (SOC 2 S4c): each user's

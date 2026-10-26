@@ -45,7 +45,7 @@ func probeDropAll(t *testing.T, db *pgxdb.DB) {
 		dropSchema(t, db, schema)
 		return
 	}
-	q := "DROP TABLE IF EXISTS " + strings.Join(append(append([]string{}, probeTables...), totpProbeTables...), ", ") + ", schema_migrations CASCADE"
+	q := "DROP TABLE IF EXISTS " + strings.Join(append(append(append([]string{}, probeTables...), passkeyProbeTables...), totpProbeTables...), ", ") + ", schema_migrations CASCADE"
 	if _, err := db.Exec(context.Background(), q); err != nil {
 		t.Fatalf("drop schema: %v", err)
 	}
@@ -98,9 +98,6 @@ func TestSchemaProbe_MissingTable(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), table) {
 				t.Fatalf("missing %s: error does not name the table: %v", table, err)
-			}
-			if table == passkeyCredentialsTable && !strings.Contains(err.Error(), passkeyMigration) {
-				t.Fatalf("missing %s: error does not name %s: %v", table, passkeyMigration, err)
 			}
 		})
 	}

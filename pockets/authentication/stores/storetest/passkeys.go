@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -57,6 +58,8 @@ func RunPasskeys(t *testing.T, newRepos func(*testing.T) auth.Repositories) {
 			{"ConcurrentFirstCreatesOneHandle", testPasskeyConcurrentFirstHandles},
 			{"ConcurrentRecordUseOneWins", testPasskeyConcurrentRecordUse},
 			{"ConcurrentBootstrapCreatesOneWins", testPasskeyConcurrentBootstrap},
+			{"ScopedSnapshotOmitsPasskeys", testPasskeyScopedSnapshot},
+			{"SchemaProbeReportsMigrated", testPasskeyProbeMigrated},
 		} {
 			t.Run(tc.name, func(t *testing.T) { tc.test(t, newRepos(t)) })
 		}
@@ -67,7 +70,110 @@ func RunPasskeys(t *testing.T, newRepos func(*testing.T) auth.Repositories) {
 			}
 			testPasskeyErase(t, r)
 		})
+		t.Run("EraseLeavesPasskeysWhenUnwired", func(t *testing.T) {
+			r := newRepos(t)
+			if r.UserErasure == nil {
+				t.Skip("UserErasure not wired — passkey erasure NOT verified")
+			}
+			testPasskeyEraseUnwired(t, r)
+		})
 	})
+}
+
+// RunPasskeySchemaProbe proves a store's boot probe: unmigrated returns a
+// passkey repository over a store WITHOUT migration 0025, and its ProbeSchema
+// must refuse, naming the migration. The pocket probes only when passkeys are
+// wired.
+func RunPasskeySchemaProbe(t *testing.T, unmigrated func(*testing.T) passkey.Repository) {
+	t.Helper()
+	t.Run("PasskeySchemaProbe", func(t *testing.T) {
+		prober, ok := unmigrated(t).(passkey.SchemaProber)
+		if !ok {
+			t.Fatal("the passkey repository does not implement passkey.SchemaProber")
+		}
+		err := prober.ProbeSchema(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "0025") {
+			t.Fatalf("ProbeSchema on an unmigrated store = %v, want an error naming 0025", err)
+		}
+	})
+}
+
+// RunPasskeysUnwired proves an unwired host never needs migration 0025:
+// unmigrated returns repositories over a store WITHOUT passkey_credentials,
+// and the credential rail and erasure — with passkeys off, as the pocket asks
+// for them then — must still work: a scoped Snapshot, an Apply of a
+// non-passkey mutation, and an Erase with EraseInput.Passkeys false.
+func RunPasskeysUnwired(t *testing.T, unmigrated func(*testing.T) auth.Repositories) {
+	t.Helper()
+	t.Run("PasskeysUnwired", func(t *testing.T) {
+		r := unmigrated(t)
+		scoped, ok := r.CredentialMutations.(credential.ScopedSnapshotter)
+		if !ok {
+			t.Fatal("the credential-mutation repository does not implement credential.ScopedSnapshotter")
+		}
+		ctx := context.Background()
+		u := seedPasskeyUser(t, r, "passkeys-unwired@example.com")
+		if err := r.Passwords.Set(ctx, u.ID, "hash-unwired"); err != nil {
+			t.Fatal(err)
+		}
+		set, err := scoped.SnapshotScoped(ctx, u.ID, credential.SnapshotScope{Passkeys: false})
+		if err != nil {
+			t.Fatalf("SnapshotScoped without passkeys over a store without 0025 = %v", err)
+		}
+		if !set.HasPassword || len(set.Identifiers) != 1 || len(set.Passkeys) != 0 {
+			t.Fatalf("SnapshotScoped = %+v, want the password, one identifier and no passkeys", set)
+		}
+		if _, err := scoped.SnapshotScoped(ctx, "no-such-user", credential.SnapshotScope{}); !errors.Is(err, sdk.ErrNotFound) {
+			t.Fatalf("SnapshotScoped of an unknown user = %v, want ErrNotFound", err)
+		}
+		if err := r.CredentialMutations.Apply(ctx, u.ID, set.AuthRevision, credential.RemovePassword{}); err != nil {
+			t.Fatalf("Apply RemovePassword over a store without 0025 = %v", err)
+		}
+		if r.UserErasure == nil {
+			t.Skip("UserErasure not wired — unwired-passkey erasure NOT verified")
+		}
+		got := mustErase(t, r, eraseInput(u.ID, retentionNow()))
+		if got.Counts.Passkeys != 0 {
+			t.Errorf("an erase with passkeys off counted %d passkeys", got.Counts.Passkeys)
+		}
+	})
+}
+
+// testPasskeyScopedSnapshot: a Snapshot scoped without passkeys omits them and
+// reports the same revision as the full one.
+func testPasskeyScopedSnapshot(t *testing.T, r auth.Repositories) {
+	scoped, ok := r.CredentialMutations.(credential.ScopedSnapshotter)
+	if !ok {
+		t.Skip("the credential-mutation repository does not scope its Snapshot")
+	}
+	ctx := context.Background()
+	u := seedPasskeyUser(t, r, "scoped-snapshot@example.com")
+	mustCreatePasskey(t, r, newPasskey(u.ID, []byte("handle-scoped"), "scoped", retentionNow()))
+	full, err := r.CredentialMutations.Snapshot(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	with, err := scoped.SnapshotScoped(ctx, u.ID, credential.SnapshotScope{Passkeys: true})
+	if err != nil || len(with.Passkeys) != 1 {
+		t.Fatalf("SnapshotScoped with passkeys = %+v, %v; want one passkey", with, err)
+	}
+	without, err := scoped.SnapshotScoped(ctx, u.ID, credential.SnapshotScope{Passkeys: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(without.Passkeys) != 0 || without.AuthRevision != full.AuthRevision || len(without.Identifiers) != len(full.Identifiers) {
+		t.Fatalf("SnapshotScoped without passkeys = %+v, want %+v minus its passkeys", without, full)
+	}
+}
+
+func testPasskeyProbeMigrated(t *testing.T, r auth.Repositories) {
+	prober, ok := r.Passkeys.(passkey.SchemaProber)
+	if !ok {
+		t.Skip("the passkey repository does not probe its schema")
+	}
+	if err := prober.ProbeSchema(context.Background()); err != nil {
+		t.Fatalf("ProbeSchema on a migrated store = %v", err)
+	}
 }
 
 // seedPasskeyUser creates an active user whose verified email recovers but does
@@ -432,7 +538,9 @@ func testPasskeyErase(t *testing.T, r auth.Repositories) {
 	a := mustCreatePasskey(t, r, newPasskey(u.ID, handle, "a", retentionNow()))
 	b := mustCreatePasskey(t, r, newPasskey(u.ID, handle, "b", retentionNow().Add(time.Second)))
 	bystander := mustCreatePasskey(t, r, newPasskey(other.ID, []byte("handle-erase-other"), "bystander", retentionNow()))
-	got := mustErase(t, r, eraseInput(u.ID, retentionNow()))
+	in := eraseInput(u.ID, retentionNow())
+	in.Passkeys = true
+	got := mustErase(t, r, in)
 	if got.Counts.Passkeys != 2 {
 		t.Errorf("EraseCounts.Passkeys = %d, want 2", got.Counts.Passkeys)
 	}
@@ -598,4 +706,20 @@ func testPasskeyConcurrentBootstrap(t *testing.T, r auth.Repositories) {
 		_, err := r.Passkeys.Create(ctx, passkey.CreateInput{Passkey: newPasskey(u.ID, handle, fmt.Sprintf("bootstrap-%d", i), retentionNow()), MaxPerUser: 10, ExpectedAuthRevision: revision, Bootstrap: true})
 		return err
 	}), passkey.ErrBootstrapClosed)
+}
+
+// testPasskeyEraseUnwired: with passkeys off erasure leaves passkey_credentials
+// untouched and counts none (owner ruling: 0025 is required only when passkeys
+// are wired).
+func testPasskeyEraseUnwired(t *testing.T, r auth.Repositories) {
+	ctx := context.Background()
+	u := seedPasskeyUser(t, r, "erase-passkeys-off@example.com")
+	p := mustCreatePasskey(t, r, newPasskey(u.ID, []byte("handle-erase-off"), "off", retentionNow()))
+	got := mustErase(t, r, eraseInput(u.ID, retentionNow()))
+	if got.Counts.Passkeys != 0 {
+		t.Errorf("an erase with passkeys off counted %d passkeys", got.Counts.Passkeys)
+	}
+	if _, err := r.Passkeys.GetByCredentialID(ctx, p.CredentialID); err != nil {
+		t.Errorf("an erase with passkeys off touched the passkey: %v", err)
+	}
 }
