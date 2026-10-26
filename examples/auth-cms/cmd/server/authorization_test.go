@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	access "github.com/gopernicus/gopernicus/examples/auth-cms/pockets/access/inbound"
 	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
@@ -647,4 +648,26 @@ func testRoleScope(rt, id string) tuples.Scope {
 		return tuples.Global()
 	}
 	return tuples.On(rt, id)
+}
+
+// TestHostUserAdminPolicySwitchesOnAction proves FE3: the host's user
+// administration check admits a platform admin to every action it names,
+// the security-event read included, and refuses an action it does not know —
+// so an action a later release adds is denied until the policy names it.
+func TestHostUserAdminPolicySwitchesOnAction(t *testing.T) {
+	comps := hostAuthz(t)
+	if err := seedAuthorization(context.Background(), comps.Mutations); err != nil {
+		t.Fatalf("seedAuthorization: %v", err)
+	}
+	policy := access.New(comps.Decisions)
+	admin := actor(seedOwnerSubject.ID)
+	if err := policy.UserAdmin(context.Background(), authenticationhttp.UserAdminCheckRequest{Principal: admin, Action: authenticationhttp.UserAdminReadAudit}); err != nil {
+		t.Errorf("platform admin read-audit: %v", err)
+	}
+	if err := policy.UserAdmin(context.Background(), authenticationhttp.UserAdminCheckRequest{Principal: admin, Action: "a-future-action"}); !errors.Is(err, sdk.ErrForbidden) {
+		t.Errorf("unknown action: err = %v, want forbidden", err)
+	}
+	if err := policy.UserAdmin(context.Background(), authenticationhttp.UserAdminCheckRequest{Principal: actor("someone"), Action: authenticationhttp.UserAdminReadAudit}); !errors.Is(err, sdk.ErrForbidden) {
+		t.Errorf("non-admin read-audit: err = %v, want forbidden", err)
+	}
 }

@@ -25,7 +25,11 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	authorizationmemory "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
@@ -202,7 +206,7 @@ func TestProductionBaselineConstructs(t *testing.T) {
 	if !strings.Contains(logs.String(), "decision_observer=true") || strings.Contains(logs.String(), "denials are not durably recorded") {
 		t.Fatalf("registration does not report the decision observer:\n%s", logs.String())
 	}
-	for _, want := range []string{"maintenance_runner=true", "archive_sink=disk:" + os.Getenv("AUDIT_ARCHIVE_DIR"), "security_event_retention=9600h0m0s", "operation_expiry"} {
+	for _, want := range []string{"maintenance_runner=true", "archive_sink=disk:" + os.Getenv("AUDIT_ARCHIVE_DIR"), "security_event_retention=9600h0m0s", "operation_expiry", "audit_read_route=true"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("registration lacks %q:\n%s", want, logs.String())
 		}
@@ -496,4 +500,88 @@ func sendWithHeader(t *testing.T, method, url, body string, header http.Header) 
 		t.Fatal(err)
 	}
 	return resp.StatusCode, resp.Header, string(raw)
+}
+
+// TestAuditRoutesAndSelfAssignment serves run's router in development over a
+// recording audit rail with user-1 seeded as the global admin and proves the
+// S7 wiring: an admin assigning a role to itself is refused by
+// RefuseSelfTarget while assigning another user succeeds; both audit listings
+// answer the admin, each read leaving one audit_read row on its rail; and a
+// non-admin is refused both.
+func TestAuditRoutesAndSelfAssignment(t *testing.T) {
+	for name := range productionKeys {
+		t.Setenv(string(name), "")
+	}
+	t.Setenv("IDP_ISSUER", "")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := "http://" + listener.Addr().String()
+	log := quietLog()
+	keys, err := loadKeys(environment.ModeDevelopment, log)
+	if err != nil {
+		t.Fatalf("loadKeys: %v", err)
+	}
+	router := newRouter(0, log)
+	provider, err := newProvider(context.Background(), router, origin, environment.ModeDevelopment, log)
+	if err != nil {
+		t.Fatalf("newProvider: %v", err)
+	}
+	authorizationRepos := authorizationRepositories(true)
+	seed, err := authorization.New(authorizationRepos, authorization.WithRuntimeMode(environment.ModeDevelopment), authorization.WithModel(accessModel()), authorization.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.Mutations.AssignRole(audit.WithSource(context.Background(), audit.Source{System: "test"}), mutations.AssignRoleCommand{
+		Subject: model.PrincipalRef{Type: "user", ID: memberID}, Role: adminRole, Scope: tuples.Global(),
+	}); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+	events := &recordedEvents{}
+	repos := identityRepositories()
+	repos.SecurityEvents = events
+	if _, err := mount(router, composition{
+		mode: environment.ModeDevelopment, log: log, origin: origin, keys: keys,
+		sessionCookie: authenticationhttp.CookieConfig{Secure: true}, limiter: sharedLimiter{},
+		authenticationRepos: repos, authorizationRepos: authorizationRepos, provider: provider,
+	}); err != nil {
+		t.Fatalf("mount: %v", err)
+	}
+	server := httptest.NewUnstartedServer(router)
+	server.Listener.Close()
+	server.Listener = listener
+	server.Start()
+	t.Cleanup(server.Close)
+
+	status, raw := send(t, http.MethodPost, origin+devissuer.TokenPath, `{"sub":"`+memberSubject+`","email":"a@x.test","email_verified":true,"amr":["pwd","mfa"]}`, nil)
+	var minted struct{ Token string }
+	if status != http.StatusOK || json.Unmarshal([]byte(raw), &minted) != nil || minted.Token == "" {
+		t.Fatalf("mint: %d %s", status, raw)
+	}
+	admin := http.Header{"Authorization": {"Bearer " + minted.Token}, "Content-Type": {"application/json"}}
+
+	if status, raw := send(t, http.MethodPost, origin+"/authorization/roles", `{"subject_type":"user","subject_id":"`+memberID+`","role":"admin","scope":{"kind":"global"}}`, admin); status != http.StatusForbidden {
+		t.Errorf("self-assignment: %d %s, want 403 from RefuseSelfTarget", status, raw)
+	}
+	if status, raw := send(t, http.MethodPost, origin+"/authorization/roles", `{"subject_type":"user","subject_id":"user-2","role":"admin","scope":{"kind":"global"}}`, admin); status != http.StatusOK {
+		t.Errorf("assign another user: %d %s, want 200", status, raw)
+	}
+	status, header, raw := sendWithHeader(t, http.MethodGet, origin+"/authorization/audit?subject_type=user&subject_id=user-2", "", admin)
+	if status != http.StatusOK || header.Get("Cache-Control") != "no-store" || !strings.Contains(raw, `"subject":{"type":"user","id":"user-2"`) {
+		t.Fatalf("authorization audit: %d %q %s", status, header.Get("Cache-Control"), raw)
+	}
+	if status, raw := send(t, http.MethodGet, origin+"/auth/admin/security-events?event_type=audit_read", "", admin); status != http.StatusOK || !strings.Contains(raw, `"rail":"authorization"`) {
+		t.Fatalf("security events: %d %s", status, raw)
+	}
+	reads := events.ofType(securityevent.TypeAuditRead)
+	if len(reads) != 2 || reads[0].Details["rail"] != "authorization" || reads[1].Details["rail"] != "security_events" || reads[0].Actor.ID != memberID {
+		t.Fatalf("audit_read rows = %+v, want one per rail by the admin", reads)
+	}
+	if keys, _ := reads[0].Details["filters"].([]string); len(keys) != 1 || keys[0] != "subject" {
+		t.Errorf("authorization audit_read filters = %v, want [subject]", reads[0].Details["filters"])
+	}
+	if len(events.ofType(decisions.EventRoleWriteRefused)) != 1 {
+		t.Errorf("role_write_refused rows = %d, want 1 (the self-assignment)", len(events.ofType(decisions.EventRoleWriteRefused)))
+	}
 }

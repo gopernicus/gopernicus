@@ -73,7 +73,8 @@ type authenticationFixture struct {
 	RequireVerifiedEmail  bool
 	SecurityEvents        securityevent.SecurityEventRepository
 	Invitations           interface {
-		ResolveInvitations(context.Context, string, string, string) (int, error)
+		ResolveInvitations(context.Context, string, string, string, string) (int, error)
+		ResolvePendingInvitations(context.Context, string, string, string, string) (int, error)
 	}
 	OAuthAccounts           oauthaccount.OAuthAccountRepository
 	OAuthStates             oauthstate.StateRepository

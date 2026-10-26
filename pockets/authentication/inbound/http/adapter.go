@@ -38,11 +38,13 @@ type adapterConfig struct {
 	MachineGate       web.Middleware
 	RouteAuth         BundledRouteAuthentication
 	UserErasureRoute  bool
-	AdministrationMFA bool
-	RouteLimits       PublicRouteLimits
-	PasskeyViews      PasskeyViews
-	TOTPViews         TOTPViews
-	MFAMethods        []authlogic.MFAMethod
+	// SecurityEventsRoute opts in to GET /auth/admin/security-events.
+	SecurityEventsRoute bool
+	AdministrationMFA   bool
+	RouteLimits         PublicRouteLimits
+	PasskeyViews        PasskeyViews
+	TOTPViews           TOTPViews
+	MFAMethods          []authlogic.MFAMethod
 }
 
 type routedService struct {
@@ -123,6 +125,15 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		}
 		eraser = e
 	}
+	var events securityEventReader
+	if cfg.SecurityEventsRoute {
+		e, ok := cfg.Authentication.(securityEventReader)
+		if !ok || !e.SecurityEventsEnabled() || cfg.UserAdminCheck == nil {
+			return nil, fmt.Errorf("authentication HTTP: the security-events route requires a wired security-event repository and UserAdminCheck: %w", sdk.ErrInvalidInput)
+		}
+		events = e
+	}
+	syncer, _ := cfg.Authentication.(invitationSyncer)
 	if err := cfg.RouteLimits.Validate(); err != nil {
 		return nil, err
 	}
@@ -156,8 +167,8 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		Mutation: MutationSecurity{AllowedOrigins: append([]string(nil), cfg.AllowedOrigins...), OriginPolicy: cfg.OriginPolicy, SessionCookieName: auth.SessionCookieName(), csrfCookie: auth.csrfCookie},
 		Views:    views, HTMLPolicy: snapshotHTMLPolicy(cfg.HTMLPolicy), MachineGate: cfg.MachineGate,
 		RouteAuth: resolveBundledRouteAuth(cfg.RouteAuth, auth),
-		Eraser:    eraser,
-		Proxies:   auth.proxies, RouteLimits: cfg.RouteLimits, AdministrationMFA: cfg.AdministrationMFA,
+		Eraser:    eraser, SecurityEvents: events, InvitationSync: syncer,
+		Proxies: auth.proxies, RouteLimits: cfg.RouteLimits, AdministrationMFA: cfg.AdministrationMFA,
 		Passkeys: passkeys, PasskeyViews: passkeyViews,
 		TOTP: totps, TOTPViews: totpViews,
 	}

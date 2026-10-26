@@ -278,20 +278,25 @@ func seedInviteKind(t *testing.T, repo *fakeInvRepo, rt, rid, rel, ident, kind, 
 	return inv
 }
 
+// verifiedAs is an IdentifierLister reporting one verified identifier for every
+// subject.
+func verifiedAs(kind, value string) IdentifierLister {
+	return func(context.Context, string) ([]sdk.IdentityAddress, error) {
+		return []sdk.IdentityAddress{{Kind: kind, Value: value}}, nil
+	}
+}
+
 func newSvc(t *testing.T, repo *fakeInvRepo, granter Granter, d constructorConfig) *Service {
 	t.Helper()
 	d.Invitations = repo
 	d.Granter = granter
-	if d.CallerIdentifiers == nil {
-		d.CallerIdentifiers = func(_ context.Context, id, kind string) (string, error) {
-			if kind != sdk.AddressKindEmail {
-				return "", sdk.ErrNotFound
-			}
+	if d.VerifiedIdentifiers == nil {
+		d.VerifiedIdentifiers = func(_ context.Context, id string) ([]sdk.IdentityAddress, error) {
 			email, ok := map[string]string{"user-9": "invitee@x.com", "user-7": "sub@x.com", "user-1": "legacy@x.com"}[id]
 			if !ok {
-				return "", sdk.ErrNotFound
+				return nil, nil
 			}
-			return email, nil
+			return []sdk.IdentityAddress{{Kind: sdk.AddressKindEmail, Value: email}}, nil
 		}
 	}
 	if d.Mailer == nil {
@@ -338,7 +343,7 @@ func TestAcceptGrantsWithTupleArgs(t *testing.T) {
 func TestAcceptIdentifierMismatch(t *testing.T) {
 	repo := newFakeInvRepo()
 	granter := &fakeGranter{}
-	svc := newSvc(t, repo, granter, constructorConfig{CallerIdentifiers: func(context.Context, string, string) (string, error) { return "someone-else@x.com", nil }})
+	svc := newSvc(t, repo, granter, constructorConfig{VerifiedIdentifiers: verifiedAs(sdk.AddressKindEmail, "someone-else@x.com")})
 	seedInvite(t, repo, "project", "p1", "member", "invitee@x.com", "inviter", "secret-a", false, time.Now().Add(time.Hour))
 
 	_, err := svc.Accept(context.Background(), AcceptInput{Token: "secret-a", SubjectType: "user", SubjectID: "user-9", Identifier: "invitee@x.com"})
@@ -469,7 +474,7 @@ func TestResolveInvitationsBestEffort(t *testing.T) {
 	expired := seedInvite(t, repo, "project", "E", "member", "sub@x.com", "inviter", "s-e", true, time.Now().Add(-time.Hour))
 	other := seedInvite(t, repo, "project", "F", "member", "other@x.com", "inviter", "s-f", true, future) // different email
 
-	n, err := svc.ResolveInvitations(context.Background(), "Sub@x.com", "user", "user-7")
+	n, err := svc.ResolveInvitations(context.Background(), sdk.AddressKindEmail, "Sub@x.com", "user", "user-7")
 	if err != nil {
 		t.Fatalf("ResolveInvitations: %v", err)
 	}
@@ -511,7 +516,7 @@ func TestResolveInvitationsRetryAndIdempotence(t *testing.T) {
 	invA := seedInvite(t, repo, "project", "A", "member", "sub@x.com", "inviter", "s-a", true, future)
 	invB := seedInvite(t, repo, "project", "B", "member", "sub@x.com", "inviter", "s-b", true, future)
 
-	n, err := svc.ResolveInvitations(context.Background(), "sub@x.com", "user", "user-7")
+	n, err := svc.ResolveInvitations(context.Background(), sdk.AddressKindEmail, "sub@x.com", "user", "user-7")
 	if err != nil {
 		t.Fatalf("first ResolveInvitations: %v", err)
 	}
@@ -532,7 +537,7 @@ func TestResolveInvitationsRetryAndIdempotence(t *testing.T) {
 	granter.failOn = ""
 	granter.calls = nil
 	granter.ops = nil
-	n, err = svc.ResolveInvitations(context.Background(), "sub@x.com", "user", "user-7")
+	n, err = svc.ResolveInvitations(context.Background(), sdk.AddressKindEmail, "sub@x.com", "user", "user-7")
 	if err != nil {
 		t.Fatalf("retry ResolveInvitations: %v", err)
 	}
@@ -552,7 +557,7 @@ func TestResolveInvitationsRetryAndIdempotence(t *testing.T) {
 	// A third pass has nothing left to do — resolve is idempotent.
 	granter.calls = nil
 	granter.ops = nil
-	n, err = svc.ResolveInvitations(context.Background(), "sub@x.com", "user", "user-7")
+	n, err = svc.ResolveInvitations(context.Background(), sdk.AddressKindEmail, "sub@x.com", "user", "user-7")
 	if err != nil {
 		t.Fatalf("third ResolveInvitations: %v", err)
 	}
@@ -679,7 +684,7 @@ func TestCreateKindDeliveredViaNotifier(t *testing.T) {
 	if d.to != "+15550100" {
 		t.Errorf("delivered to = %+v, want {phone, +15550100}", d.to)
 	}
-	if !strings.Contains(d.body, "token=") {
+	if !strings.Contains(d.body, "#token=") {
 		t.Errorf("notifier body missing the delivered token link: %q", d.body)
 	}
 	if len(mailer.sent) != 0 {
@@ -726,11 +731,11 @@ func TestAcceptPhoneKindMatchesVerifiedPhone(t *testing.T) {
 	notifier := &fakeNotifier{}
 	svc := newSvc(t, repo, granter, constructorConfig{
 		BodySenders: map[string]delivery.BodySender{sdk.AddressKindPhone: notifier},
-		CallerIdentifiers: func(_ context.Context, userID, kind string) (string, error) {
-			if userID == "user-9" && kind == sdk.AddressKindPhone {
-				return "+15550100", nil
+		VerifiedIdentifiers: func(_ context.Context, userID string) ([]sdk.IdentityAddress, error) {
+			if userID == "user-9" {
+				return []sdk.IdentityAddress{{Kind: sdk.AddressKindPhone, Value: "+15550100"}}, nil
 			}
-			return "", sdk.ErrNotFound
+			return nil, nil
 		},
 	})
 	inv := seedInviteKind(t, repo, "project", "p1", "member", "+15550100", sdk.AddressKindPhone, "inviter", "secret-p", false, time.Now().Add(time.Hour))
@@ -764,10 +769,8 @@ func TestAcceptPhoneKindMismatch(t *testing.T) {
 	repo := newFakeInvRepo()
 	granter := &fakeGranter{}
 	svc := newSvc(t, repo, granter, constructorConfig{
-		BodySenders: map[string]delivery.BodySender{sdk.AddressKindPhone: &fakeNotifier{}},
-		CallerIdentifiers: func(_ context.Context, _ string, _ string) (string, error) {
-			return "+15559999", nil // the caller owns a different verified phone
-		},
+		BodySenders:         map[string]delivery.BodySender{sdk.AddressKindPhone: &fakeNotifier{}},
+		VerifiedIdentifiers: verifiedAs(sdk.AddressKindPhone, "+15559999"), // the caller owns a different verified phone
 	})
 	seedInviteKind(t, repo, "project", "p1", "member", "+15550100", sdk.AddressKindPhone, "inviter", "secret-p", false, time.Now().Add(time.Hour))
 
@@ -789,8 +792,8 @@ func TestAcceptPhoneKindNoVerifiedPhone(t *testing.T) {
 	granter := &fakeGranter{}
 	svc := newSvc(t, repo, granter, constructorConfig{
 		BodySenders: map[string]delivery.BodySender{sdk.AddressKindPhone: &fakeNotifier{}},
-		CallerIdentifiers: func(_ context.Context, _ string, _ string) (string, error) {
-			return "", sdk.ErrNotFound
+		VerifiedIdentifiers: func(context.Context, string) ([]sdk.IdentityAddress, error) {
+			return nil, sdk.ErrNotFound
 		},
 	})
 	seedInviteKind(t, repo, "project", "p1", "member", "+15550100", sdk.AddressKindPhone, "inviter", "secret-p", false, time.Now().Add(time.Hour))

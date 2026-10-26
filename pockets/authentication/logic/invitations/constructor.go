@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strings"
 	"time"
 
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
@@ -40,6 +41,9 @@ func New(repo InvitationRepository, granter Granter, opts ...Option) (*Service, 
 	}
 	if d.Queue != nil && d.Deliver == nil {
 		return nil, fmt.Errorf("invitations: delivery queue requires a renderer: %w", sdk.ErrInvalidInput)
+	}
+	if strings.Contains(d.InvitationURL, "#") {
+		return nil, fmt.Errorf("invitations: InvitationURL must not carry a fragment: %w", sdk.ErrInvalidInput)
 	}
 	if d.TTL < 0 {
 		return nil, fmt.Errorf("invitations: TTL must not be negative: %w", sdk.ErrInvalidInput)

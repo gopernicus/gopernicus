@@ -18,6 +18,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
@@ -33,6 +34,18 @@ func (r *recordedEvents) Create(_ context.Context, evt securityevent.SecurityEve
 	defer r.mu.Unlock()
 	r.rows = append(r.rows, evt)
 	return evt, nil
+}
+
+func (r *recordedEvents) List(_ context.Context, filter securityevent.ListFilter, _ list.Request) (list.Page[securityevent.SecurityEvent], error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := []securityevent.SecurityEvent{}
+	for i := len(r.rows) - 1; i >= 0; i-- {
+		if filter.Match(r.rows[i]) {
+			items = append(items, r.rows[i])
+		}
+	}
+	return list.Page[securityevent.SecurityEvent]{Items: items}, nil
 }
 
 func (r *recordedEvents) ofType(eventType string) []securityevent.SecurityEvent {

@@ -303,6 +303,11 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if err := checkPosture(repos, cfg, startTLS, opportunistic, transportLog); err != nil {
 		return nil, err
 	}
+	// Checked after the posture so a production host without the audit rail is
+	// told about the rail, not about the route that reads it.
+	if cfg.SecurityEventsRoute && (nilDependency(repos.SecurityEvents) || cfg.UserAdminCheck == nil) {
+		return nil, ErrSecurityEventsRouteRequires
+	}
 
 	// The shared delivery renderer/router (design §6.1): one kind-aware policy
 	// consumed by BOTH authentication service and invitation service so the outbound email/SMS content
@@ -447,6 +452,31 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		}
 	}
 
+	// The invitation landing URL (R-7). Relevant only when invitations are wired
+	// (a Granter). A non-empty value is validated in every mode; an EMPTY value is
+	// a production error and a development WARN (the PasswordResetURL posture):
+	// the link would fall back to the relative "/". The one-release query hatch
+	// is honored in every mode: a production posture waiver, a development WARN.
+	if cfg.Granter != nil {
+		switch {
+		case cfg.InvitationURL != "":
+			if err := validateInvitationURL(cfg.RuntimeMode, cfg.InvitationURL); err != nil {
+				return nil, err
+			}
+		case cfg.RuntimeMode == environment.ModeProduction:
+			return nil, ErrInvitationURLRequired
+		default:
+			transportLog.Warn("auth: LinksConfig.InvitationURL is unset; invitation links without an allowlisted redirect fall back to the relative \"/\", which mail clients cannot open. Production requires AUTH_INVITATION_URL")
+		}
+		switch {
+		case !cfg.InvitationTokenInQuery:
+		case cfg.RuntimeMode.IsProduction():
+			transportLog.Warn("auth: production posture requirement waived", "posture_waiver", "InvitationTokenInQuery", "runtime_mode", cfg.RuntimeMode.String())
+		default:
+			transportLog.Warn("auth: LinksConfig.InvitationTokenInQuery puts the invitation token in the link's query, where server logs and Referer headers see it; it is a one-release hatch the next minor removes — move the landing page to location.hash")
+		}
+	}
+
 	// The machine subsystem wired without an authorization gate is a SILENT posture
 	// change (D1): key authentication keeps working, but the bundled lifecycle
 	// routes are not mounted and answer 404. An upgrading host learns that at boot
@@ -477,8 +507,8 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	// authService is declared here and assigned below (authlogic.New), so the
 	// invitation service's accept-time identifier accessor can bind to it: the two
 	// services reference each other (authentication service holds invitation service for resolve-on-
-	// verified-address resolution; invitation service holds authentication service's ActiveVerifiedIdentifier for the
-	// V11 phone accept-time match), a construction cycle broken by this late-bound
+	// verified-address resolution; invitation service holds authentication service's VerifiedIdentifiers for the
+	// V11 accept-time match and resolution), a construction cycle broken by this late-bound
 	// closure — it is only invoked at request time, long after both are wired.
 	var authService *authlogic.Service
 
@@ -519,14 +549,16 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 			invitations.WithAccess(invitations.AccessConfig{
 				MemberCheck: cfg.MemberCheck,
 				UserLookup:  userLookup(repos.Identifiers, idNormalizer),
-				CallerIdentifiers: func(ctx context.Context, userID, kind string) (string, error) {
-					return authService.ActiveVerifiedIdentifier(ctx, userID, kind)
+				VerifiedIdentifiers: func(ctx context.Context, userID string) ([]sdk.IdentityAddress, error) {
+					return authService.VerifiedIdentifiers(ctx, userID)
 				},
 			}),
 			invitations.WithDelivery(invDelivery),
 			invitations.WithNormalizer(cfg.IdentifierNormalizer),
 			invitations.WithIdentifierKeyer(cfg.IdentifierKeyer),
 			invitations.WithRedirectAllowlist(cfg.RedirectAllowlist),
+			invitations.WithInvitationURL(cfg.InvitationURL),
+			invitations.WithLinkTokenInQuery(cfg.InvitationTokenInQuery),
 			invitations.WithSecurityEventRecorder(securityEvents),
 			invitations.WithLogger(cfg.Logger),
 			invitations.WithIDs(cfg.IDs),
@@ -660,6 +692,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		inbound.WithMachineGate(cfg.MachineRoutesGate),
 		inbound.WithRouteAuthentication(cfg.BundledRouteAuth),
 		inbound.WithUserErasureRoute(cfg.UserErasureRoute),
+		inbound.WithSecurityEventsRoute(cfg.SecurityEventsRoute),
 	}
 	if cfg.MFARequired == MFARequiredAdmins {
 		httpOptions = append(httpOptions, inbound.WithAdministrationMFA())

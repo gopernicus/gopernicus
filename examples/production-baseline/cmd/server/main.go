@@ -324,12 +324,13 @@ type mounted struct {
 
 // mount builds both pockets from c and registers their routes on router.
 // Authentication admits only the provider's tokens: password flows and
-// delivery are off; user administration, erase included, is the global admin
-// role's and needs an MFA token (MFARequiredAdmins); retention runs through
-// the host's runner. Authorization records every change and serves role
-// administration behind authenticate (an MFA token) ∘ browser-safe mutation ∘
-// the global admin role; its denials and refused role writes reach the
-// security-event rail through the host's decision bridge. It
+// delivery are off; user administration, erase and the security-event listing
+// included, is the global admin role's and needs an MFA token
+// (MFARequiredAdmins); retention runs through the host's runner. Authorization
+// records every change and serves role administration and the change history
+// behind authenticate (an MFA token) ∘ browser-safe mutation ∘ the global admin
+// role, refusing a self-assignment; its denials, refused role writes and audit
+// reads reach the security-event rail through the host's decision bridge. It
 // returns the audit-loss counters and the retention runner. Authentication's
 // client-info stamp covers every route on router, inside the TrustProxies Use
 // newRouter installed.
@@ -357,7 +358,7 @@ func mount(router *web.WebHandler, c composition) (mounted, error) {
 			ProvisionOnFirstVerification: true,
 			RequireVerifiedEmail:         true,
 		}}}),
-		authentication.WithAdministration(authentication.AdministrationConfig{UserAdminCheck: admins.check, UserErasureRoute: true}),
+		authentication.WithAdministration(authentication.AdministrationConfig{UserAdminCheck: admins.check, UserErasureRoute: true, SecurityEventsRoute: true}),
 		authentication.WithMFA(authentication.MFAConfig{Required: authentication.MFARequiredAdmins}),
 		authentication.WithMaintenance(authentication.MaintenanceConfig{
 			Config:                        maintenance.Config{ArchiveSink: c.archive.sink, ArchiveLocation: c.archive.location},
@@ -395,13 +396,16 @@ func mount(router *web.WebHandler, c composition) (mounted, error) {
 		authenticationhttp.Accept(authenticationhttp.CredentialExternalToken), authenticationhttp.Live(), authenticationhttp.RequireMFA())
 	browserSafe := authenticationComponents.HTTP.RequireBrowserSafeMutation()
 	authorize := authorizationComponents.HTTP.Require(authorizationhttp.HasRole(adminRole, authorizationhttp.Global()))
+	gate := func(next http.Handler) http.Handler { return authenticate(browserSafe(authorize(next))) }
 	authorizationComponents.HTTP, err = authorizationhttp.New(
-		authorizationhttp.Services{Decisions: authorizationComponents.Decisions, Roles: authorizationComponents.Roles, Mutations: authorizationComponents.Mutations},
+		authorizationhttp.Services{Decisions: authorizationComponents.Decisions, Roles: authorizationComponents.Roles, Mutations: authorizationComponents.Mutations, Audit: authorizationComponents.Audit},
 		authorizationhttp.WithRoleRoutes(authorizationhttp.RoleRoutes{
-			Gate:        func(next http.Handler) http.Handler { return authenticate(browserSafe(authorize(next))) },
-			WritePolicy: adminWritesAnyRole,
+			Gate:        gate,
+			WritePolicy: authorizationhttp.AllOf(authorizationhttp.RefuseSelfTarget, adminWritesAnyRole),
+			AuditGate:   gate,
 		}),
 		authorizationhttp.WithDecisionObserver(bridge.Observer()),
+		authorizationhttp.WithAuditReadObserver(bridge.AuditReads()),
 		authorizationhttp.WithLogger(c.log),
 	)
 	if err != nil {
@@ -438,8 +442,9 @@ func accessModel() decisions.Model {
 
 // adminWritesAnyRole admits every validated role write: the role routes' gate
 // has already required the global admin role, and a global admin administers
-// every role in every scope. The store's integrity policy still keeps one owner
-// on every project.
+// every role in every scope. RefuseSelfTarget runs first, so no admin grants a
+// role to itself; the store's integrity policy still keeps one owner on every
+// project.
 func adminWritesAnyRole(context.Context, authorizationhttp.RoleWriteRequest) error { return nil }
 
 // userAdmins admits the global admin role to every user-administration

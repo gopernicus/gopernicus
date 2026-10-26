@@ -151,9 +151,10 @@ func TestNormalizePhone(t *testing.T) {
 }
 
 // Normalization is idempotent: re-normalizing an already-normalized value yields
-// the same value across both kinds (property-style over a table of valid inputs).
+// the same value across both kinds and both local-part configurations
+// (property-style over a table of valid inputs). Invitation resolution relies
+// on it: it re-normalizes the stored, already-normalized identifier value.
 func TestNormalize_Idempotent(t *testing.T) {
-	norm := DefaultNormalizer{}
 	cases := []struct {
 		kind Kind
 		in   string
@@ -164,17 +165,19 @@ func TestNormalize_Idempotent(t *testing.T) {
 		{KindPhone, "+1 (415) 555-0123"},
 		{KindPhone, "+442071838750"},
 	}
-	for _, c := range cases {
-		once, err := norm.Normalize(string(c.kind), c.in)
-		if err != nil {
-			t.Fatalf("Normalize(%s, %q) err = %v", c.kind, c.in, err)
-		}
-		twice, err := norm.Normalize(string(c.kind), once)
-		if err != nil {
-			t.Fatalf("Normalize(%s, %q) [2nd] err = %v", c.kind, once, err)
-		}
-		if once != twice {
-			t.Errorf("Normalize not idempotent for (%s, %q): once=%q twice=%q", c.kind, c.in, once, twice)
+	for _, norm := range []DefaultNormalizer{{}, {PreserveLocalPartCase: true}} {
+		for _, c := range cases {
+			once, err := norm.Normalize(string(c.kind), c.in)
+			if err != nil {
+				t.Fatalf("Normalize(%s, %q) err = %v", c.kind, c.in, err)
+			}
+			twice, err := norm.Normalize(string(c.kind), once)
+			if err != nil {
+				t.Fatalf("Normalize(%s, %q) [2nd] err = %v", c.kind, once, err)
+			}
+			if once != twice {
+				t.Errorf("Normalize not idempotent for (%s, %q): once=%q twice=%q", c.kind, c.in, once, twice)
+			}
 		}
 	}
 }

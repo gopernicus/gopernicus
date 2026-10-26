@@ -199,8 +199,9 @@ func (s *Service) StartIdentifierChange(ctx context.Context, in IdentifierChange
 // and applies once at the proof's revision. A concurrent credential change rejects
 // the old proof. A lost authentication-claim race on the new
 // value surfaces the generic sdk.ErrAlreadyExists. Records email_changed /
-// phone_changed and enqueues an independent notice to the previously verified
-// channels.
+// phone_changed, enqueues an independent notice to the previously verified
+// channels, then resolves the invitations addressed to the newly verified value
+// (best-effort, never failing the change).
 func (s *Service) ConfirmIdentifierChange(ctx context.Context, in IdentifierChangeConfirm) error {
 	if s.contactChanges == nil {
 		return ErrIdentifierChangeUnavailable
@@ -260,6 +261,9 @@ func (s *Service) ConfirmIdentifierChange(ctx context.Context, in IdentifierChan
 	// Independent notice to previously verified channels (never only the newly proved
 	// address, design §5.5).
 	s.enqueueIdentifierChangeNotices(ctx, in.Kind, recipients)
+	// The newly verified value resolves the invitations addressed to it, last and
+	// best-effort: a resolution failure never fails the confirmed change.
+	s.resolvePendingInvitations(ctx, string(pending.Kind), pending.NewValue, in.UserID)
 	return nil
 }
 

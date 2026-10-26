@@ -19,9 +19,9 @@ import (
 // empty-override router must reproduce it byte-for-byte: subject and text body
 // exactly, the HTML body by digest.
 const (
-	goldenInvitationHTMLSHA  = "63f425be0089d12653215f58049951c5345ec42bd9e3d0cbbff7919b0d0547af"
-	goldenMemberAddedHTMLSHA = "0a4c85dc8693c7e47bf91e78f5305322fab79a02cdb70c66c6e892a4913c0476"
-	goldenLink               = "https://app.example.test/accept?token=TOK"
+	goldenInvitationHTMLSHA  = "76c89f27184960f1cb6baeba7822a151176a7e82e2a79be7904ca594fb4ea845"
+	goldenMemberAddedHTMLSHA = "152c1a2d2bbc323efc49f2de9acce78a0f9f4e10044f07191dbfde2d3e5bb627"
+	goldenLink               = "https://app.example.test/accept#token=TOK"
 )
 
 var (

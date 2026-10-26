@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
+
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 )
 
@@ -35,7 +37,7 @@ func TestOAuthRegisterResolvesInvitations(t *testing.T) {
 		t.Fatalf("resolver call count = %d, want 1", len(resolver.calls))
 	}
 	got := resolver.calls[0]
-	if got.email != "invited@example.com" || got.subjectType != PrincipalUser || got.subjectID != res.User.ID {
+	if got.kind != sdk.AddressKindEmail || got.email != "invited@example.com" || got.subjectType != PrincipalUser || got.subjectID != res.User.ID {
 		t.Errorf("resolve call = %+v, want {invited@example.com, user, %s}", got, res.User.ID)
 	}
 }

@@ -346,6 +346,12 @@ const (
 	// context; Details carries page (true for the page read) and, for a summary,
 	// target_user_id — never a display name or address.
 	TypeUserDirectoryRead = "user_directory_read"
+	// TypeAuditRead is one completed read of an audit listing over HTTP — the
+	// security-event rail, or the authorization change history a host bridges
+	// in. Actor is the reader; Details carries rail (AuditReadRail*), filters
+	// (the filter keys present, never their values), limit, returned and
+	// strategy. A denied read records nothing new.
+	TypeAuditRead = "audit_read"
 
 	// OAuth2 authorization-server vocabulary (logic/authentication/oauth2 keeps
 	// its Type* names as aliases). Details carries client_id and, when known,
@@ -410,6 +416,14 @@ const (
 	// StatusBlocked marks an operation refused by a protective control (a
 	// rate-limited login, a revoked API key).
 	StatusBlocked = "blocked"
+)
+
+// The rail an audit_read row names under the Details key "rail".
+const (
+	// AuditReadRailSecurityEvents is a read of this security-event rail.
+	AuditReadRailSecurityEvents = "security_events"
+	// AuditReadRailAuthorization is a read of the authorization change history.
+	AuditReadRailAuthorization = "authorization"
 )
 
 // Reason vocabulary: the bounded value a denial row carries under the Details key
@@ -551,7 +565,7 @@ var types = []string{
 	TypePasskeyRegistered, TypePasskeyRemoved, TypePasskeysReset, TypePasskeyLogin, TypePasskeyFailed, TypePasskeySignCountRegressed,
 	TypeTOTPEnrolled, TypeTOTPRemoved, TypeTOTPReset, TypeTOTPStepUp, TypeTOTPFailed, TypeTOTPLocked,
 	TypeRecoveryCodesGenerated, TypeRecoveryCodeUsed,
-	TypeSessionRevoked, TypeAllSessionsRevoked, TypeUserDirectoryRead,
+	TypeSessionRevoked, TypeAllSessionsRevoked, TypeUserDirectoryRead, TypeAuditRead,
 	TypeOAuth2ConsentApproved, TypeOAuth2ConsentDenied, TypeOAuth2ConnectionCreated, TypeOAuth2Refresh,
 	TypeOAuth2RefreshReuse, TypeOAuth2TokenExchanged, TypeOAuth2RevocationRequested, TypeOAuth2GrantFailed,
 	TypeUserErased, TypeServiceAccountDeleted, TypeSecurityEventsPurged, TypeSecurityEventsArchived,

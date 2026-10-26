@@ -7,6 +7,10 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 )
 
+// invitationSyncBudget bounds the on-demand invitation sync: ten a minute per
+// user, sixty per client IP.
+var invitationSyncBudget = RequestBudget{PerSubject: ratelimiter.PerMinute(10), PerIP: ratelimiter.PerMinute(60)}
+
 // RequestBudget independently bounds a subject and the caller's trusted IP.
 // A zero limit selects the operation's default; partial/negative limits are invalid.
 type RequestBudget struct {
@@ -99,4 +103,8 @@ func (s *Service) sensitivePasswordBudget(ctx context.Context, userID string) er
 
 func (s *Service) secondFactorBudget(ctx context.Context, userID string) error {
 	return s.allowAuthenticationRequest(ctx, "second_factor", userID, s.authenticationLimits.SecondFactor)
+}
+
+func (s *Service) invitationSyncRequest(ctx context.Context, userID string) error {
+	return s.allowAuthenticationRequest(ctx, "invitation_sync", userID, invitationSyncBudget)
 }

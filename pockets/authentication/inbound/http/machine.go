@@ -236,7 +236,7 @@ func (h *handlers) mintAPIKey(w http.ResponseWriter, r *http.Request) {
 	if !strictJSONBody(w, r, &req, maxJSONBodyBytes) {
 		return
 	}
-	expiresAt, ok := parseOptionalTime(w, req.ExpiresAt)
+	expiresAt, ok := parseOptionalTime(w, "expires_at", req.ExpiresAt)
 	if !ok {
 		return
 	}
@@ -295,16 +295,16 @@ func (h *handlers) parseListRequest(w http.ResponseWriter, r *http.Request, orde
 	return req, true
 }
 
-// parseOptionalTime parses an optional RFC3339 timestamp. An empty value yields
-// the zero time (never-expires); a malformed value writes a 400 and returns
-// ok=false.
-func parseOptionalTime(w http.ResponseWriter, value string) (time.Time, bool) {
+// parseOptionalTime parses the optional RFC3339 timestamp of field. An empty
+// value yields the zero time; a malformed value writes a 400 naming field and
+// returns ok=false.
+func parseOptionalTime(w http.ResponseWriter, field, value string) (time.Time, bool) {
 	if value == "" {
 		return time.Time{}, true
 	}
 	t, err := time.Parse(time.RFC3339, value)
 	if err != nil {
-		web.RespondJSONError(w, web.ErrBadRequest("invalid expires_at (want RFC3339)"))
+		web.RespondJSONError(w, web.ErrBadRequest("invalid "+field+" (want RFC3339)"))
 		return time.Time{}, false
 	}
 	return t, true

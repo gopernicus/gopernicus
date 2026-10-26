@@ -35,6 +35,7 @@ var strictCSRFRoutes = []gatedRoute{
 	{"POST", "/auth/api-keys/key-x/revoke"},
 	{"POST", "/auth/invitations/project/p1"},
 	{"POST", "/auth/invitations/accept"},
+	{"POST", "/auth/invitations/sync"},
 	{"POST", "/auth/invitations/inv-1/cancel"},
 	{"POST", "/auth/invitations/inv-1/resend"},
 }

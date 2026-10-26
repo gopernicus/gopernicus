@@ -235,11 +235,15 @@ type extInvitations struct {
 	calls []string
 }
 
-func (i *extInvitations) ResolveInvitations(_ context.Context, email, _, subjectID string) (int, error) {
+func (i *extInvitations) ResolveInvitations(_ context.Context, _, email, _, subjectID string) (int, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.calls = append(i.calls, email+"|"+subjectID)
 	return 1, nil
+}
+
+func (i *extInvitations) ResolvePendingInvitations(context.Context, string, string, string, string) (int, error) {
+	return 0, nil
 }
 
 type failingCache struct{ cacher.Storer }

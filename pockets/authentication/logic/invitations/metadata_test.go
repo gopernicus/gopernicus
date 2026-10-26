@@ -68,7 +68,7 @@ func TestResolveDeliversMetadata(t *testing.T) {
 	want := map[string]string{"routing_key": "org-7"}
 	seedInviteMeta(t, repo, "project", "A", "member", "sub@x.com", "s-a", true, time.Now().Add(time.Hour), want)
 
-	n, err := svc.ResolveInvitations(context.Background(), "sub@x.com", "user", "user-7")
+	n, err := svc.ResolveInvitations(context.Background(), sdk.AddressKindEmail, "sub@x.com", "user", "user-7")
 	if err != nil || n != 1 {
 		t.Fatalf("ResolveInvitations n=%d err=%v", n, err)
 	}

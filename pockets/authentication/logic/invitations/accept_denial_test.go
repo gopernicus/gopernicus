@@ -60,7 +60,7 @@ func TestAcceptRecordsIdentifierMismatch(t *testing.T) {
 	events := &fakeSecurityEvents{}
 	granter := &fakeGranter{}
 	svc := newSvc(t, repo, granter, constructorConfig{SecurityEvents: events,
-		CallerIdentifiers: func(context.Context, string, string) (string, error) { return "someone-else@x.com", nil }})
+		VerifiedIdentifiers: verifiedAs(sdk.AddressKindEmail, "someone-else@x.com")})
 	seedInvite(t, repo, "project", "p1", "member", "invitee@x.com", "inviter", "mismatch-token-0451", false, time.Now().Add(time.Hour))
 
 	_, err := svc.Accept(context.Background(), AcceptInput{Token: "mismatch-token-0451", SubjectType: "user", SubjectID: "user-9"})

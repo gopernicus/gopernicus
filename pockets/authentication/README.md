@@ -519,6 +519,7 @@ answers `Cache-Control: no-store`. See
 | `POST /auth/admin/users/{id}/deactivate` | `UserAdminDeactivate` | `{user, changed}` — `changed:false` on an idempotent replay |
 | `POST /auth/admin/users/{id}/reactivate` | `UserAdminReactivate` | `{user, changed}` |
 | `POST /auth/admin/users/{id}/verification/resend` | `UserAdminResendVerification` | 202 + secret-free receipt, or a typed 409/404 |
+| `GET /auth/admin/security-events` (only with `SecurityEventsRoute`) | `UserAdminReadAudit` (target = the `user_id` filter, empty when unfiltered) | the cursor-paged security-event rail, newest first; one `audit_read` row per page. See [Reading the rail over HTTP](#reading-the-rail-over-http) |
 
 **Machine identity — registered only when `ServiceAccounts` AND `APIKeys` are
 both wired AND the host names a `AdministrationConfig.MachineRoutesGate`. Every route carries
@@ -637,8 +638,18 @@ wired kind — by default, immediate revocation), only decline is public:**
   the resource rule, or without it poses `InviteCheck` with `InviteList`, before
   calling the policy-free listing service; `GET /auth/invitations/mine` remains
   identity-bound.
+- `GET /auth/invitations/mine?identifier_kind=email|phone` — the invitations
+  addressed to ONE of the caller's verified identifiers of that kind (primary
+  first). `identifier_kind` defaults to `email` (unchanged); any other value is
+  400. A merged listing across identifiers is not offered yet.
 - `POST /auth/invitations/accept` — `{token}` → grant through the Granter.
   Acceptance does NOT re-run inviter authority (issuance-time authority, below).
+  A caller holding no verified identifier the invitation is addressed to gets
+  403 `invitation_identity_mismatch`.
+- `POST /auth/invitations/sync` — `{}` → `{"resolved": n}`: resolves, on demand,
+  the pending auto-accept invitations addressed to any of the caller's verified
+  identifiers (below). Budgeted per user (`invitation_sync`, 10 a minute; 429
+  past it).
 - `POST /auth/invitations/{id}/{cancel,resend}` — the HTTP adapter admits the
   caller against one prepared target before executing it: with the resource rule,
   a holder of the permission on the LOADED row's resource (denial → 404); without
@@ -646,7 +657,7 @@ wired kind — by default, immediate revocation), only decline is public:**
 - `POST /auth/invitations/{id}/decline` — public, token-authorized, IP-limited
   (the one invitation route with no session gate), behind the Origin-only gate.
 
-**Cookie clients must double-submit the CSRF token on create, accept, cancel and
+**Cookie clients must double-submit the CSRF token on create, accept, sync, cancel and
 resend**: `GET /auth/csrf`, then echo its `csrf_token`
 in `X-CSRF-Token` from an allowlisted `Origin`. Bearer and API-key callers
 are not gated.
@@ -675,14 +686,91 @@ DTO:
 An invitation that never carried metadata omits the key everywhere, so hosts that
 do not use the channel see byte-identical responses.
 
-**Verified ownership and automatic acceptance.** Email and phone invitations
-require the caller's active verified identifier, independently of
-`RequireVerifiedEmail`. A submitted email string is never ownership proof.
-Password registration alone cannot grant invitations. `Verify` and provisioning
-from a provider-verified OAuth email may resolve auto-accept invitations. The
-verified-email lookup also limits immediate direct-add to an active verified owner.
-Resolver errors do not fail the authentication operation; non-auto-accept
-invitations await explicit acceptance.
+**Verified ownership and identifier resolution.** An invitation is addressed to a
+`(kind, identifier)`. Email and phone invitations are accepted only by a caller
+holding that identifier VERIFIED — any of its active verified identifiers,
+primary or not (a second verified email matches), independently of
+`RequireVerifiedEmail`. A submitted email string is never ownership proof, and
+password registration alone grants nothing.
+
+Every verification of an identifier on a subject resolves the invitations
+addressed to it: registration verify, passwordless provisioning, OAuth and
+external provisioning, and a confirmed identifier add or change
+(`ConfirmIdentifierChange`, last, after the change notices, and only once the
+change applied). Resolution accepts every unexpired `AutoAccept` invitation
+addressed to that identifier for the subject (`invitation_granted` with
+`resolved_by: verification`); the others stay pending until their token is
+accepted. `AutoAccept` is the inviter's choice and is unchanged. Resolver errors
+never fail the authentication operation. The verified-email lookup also limits
+immediate direct-add to an active verified owner.
+
+`POST /auth/invitations/sync` (or `Service.SyncInvitations(ctx, userID)`) runs
+the same resolution on demand over the caller's verified identifiers (at most
+eight), pending rows only: an `accepting` claim is re-driven by a verification,
+never by a client-triggered sync. It is idempotent — a second call answers
+`{"resolved":0}`. A token accept racing a sync for the same subject may reach the
+Granter twice under one `OperationID`; the Granter's dedupe and the
+`member_added:<id>` notice key make that safe, and only the caller whose
+completion moved the row records and counts it.
+
+- **The cross-identifier case.** Invited at `a@x`, a user signs up with another
+  identifier, then adds and verifies `a@x` through the identifier-change flow:
+  the `AutoAccept` invitations grant on the confirm, and the others appear under
+  `GET /auth/invitations/mine?identifier_kind=email` for the token accept. An
+  invitee who ends up with two accounts needs account merge, which the pocket
+  does not offer yet.
+- **The current verified holder resolves.** A verified value is unique per
+  `(user, kind)` at a time, not across time: if one account gives up `x` and
+  another later verifies it, the later holder resolves every invitation still
+  pending for `x`. That is the model — the invitation is addressed to the
+  identifier — bounded by the 7-day TTL, the inviter's `AutoAccept` choice and
+  the inviter's cancel.
+- **Other kinds.** Identifiers are verified for email and phone only, so an
+  invitation of any other host-declared kind never resolves and is accepted by
+  token alone, by any authenticated holder of the link. The fragment link below
+  keeps that token out of logs and `Referer`s.
+- **Upgrading.** `invitations.Service.ResolveInvitations` takes a `kind`
+  (`ResolveInvitations(ctx, kind, value, subjectType, subjectID)`) beside the new
+  `ResolvePendingInvitations`, and `invitations.AccessConfig.VerifiedIdentifiers`
+  (a lister of every verified identifier) replaces `CallerIdentifiers`. Both are
+  wired by the root `New`; only a host that calls or fakes them directly changes
+  code.
+
+**Provenance.** Every `invitation_granted` row carries `operation_id` and
+`resolved_by` — the path that completed the claim: `accept`, `verification`,
+`sync` or `direct_add`. Accept paths add `invitation_id`; a direct add adds
+`direct_add: true` and `invited_by`. Identifiers only — never an address or the
+token.
+
+### The invitation link and the landing page
+
+The mailed link carries the token in its URL **fragment**:
+`<destination>#token=<token>`. A fragment never reaches a server log, a proxy or
+a `Referer`. The destination is the requested `redirect` when it is on
+`RedirectAllowlist` (exact match), else `LinksConfig.InvitationURL`
+(`AUTH_INVITATION_URL`), else the relative `/`. `InvitationURL` is an absolute
+http(s) URL with no fragment, HTTPS in production, and **required in production
+beside a Granter** (`ErrInvitationURLRequired`); development WARNs once and keeps
+`/`. A requested `redirect` containing `#` is refused at create and resend with
+400 `invitation_redirect_fragment` before anything persists. A host template that
+builds its own link from `{{.Secret}}` is unaffected.
+
+**One-release hatch.** `LinksConfig.InvitationTokenInQuery`
+(`AUTH_INVITATION_TOKEN_IN_QUERY`) restores `?token=` while a landing page moves
+to the fragment; production logs one `posture_waiver=InvitationTokenInQuery`
+WARN, development one WARN. The next authentication minor removes the field.
+
+The landing page's responsibilities:
+
+- read `location.hash` and `history.replaceState` it away **before any network
+  call or third-party script**;
+- accept is session-gated: when the invitee must sign in first, hold the token in
+  `sessionStorage` across the login detour — never in `return_to` or a query
+  string — and scrub the fragment before any redirect;
+- then `POST /auth/invitations/accept` with `{token}` (or
+  `/auth/invitations/{id}/decline`), and clear the stored token;
+- serve the page with `Referrer-Policy: no-referrer` and
+  `Cache-Control: no-store`.
 
 **Durable acceptance.** The store atomically claims the current, unexpired token
 and binds it to the accepting subject before calling the Granter:
@@ -2093,7 +2181,8 @@ code, 2026-10-24):
 - **Accept** works for a provider user whose JIT email is verified (the
   verified-identifier match — applied to email and phone invitation kinds only;
   an invitation of any other, host-declared kind is accepted by any authenticated
-  holder of the token today, see SOC 2 slice S7) and, like every bundled mutation, needs
+  holder of the token, see "Verified ownership and identifier resolution" under
+  [Route surface](#route-surface-json)) and, like every bundled mutation, needs
   `X-CSRF-Token` on the cookie transport; `GET /auth/csrf` admits provider
   cookies.
 - **Pending invitations** for a verified email are accepted automatically right
@@ -2667,6 +2756,9 @@ store upgrade is needed.
 | `OAuthNativeRedirectURIs` | Exact allowlist enabling native JSON authorization-code routes. Register each URI with the provider; loopback ports match exactly. |
 | `PasswordResetURL` | **REQUIRED in production** whenever the forgot/reset rail is wired (`ErrPasswordResetURLRequired`); development permits empty with one startup WARN and keeps the legacy raw-token mail. The absolute public reset landing route BEFORE `?token=` is appended — a **separate** field from `PublicAuthBaseURL` (which is the full passwordless landing URL, not an origin). HTTPS in production; no fragment; no pre-existing `token` parameter; other query parameters preserved. Built in the worker from this value only — request `Host`/forwarded headers never participate. See [Password reset](#password-reset--the-link-rail). |
 | `OAuthLinkBaseURL` (`AUTH_OAUTH_LINK_URL`) | the absolute SPA landing URL the anti-takeover OAuth **pending-link** email links to, BEFORE `#token=<token>` is appended — a **separate** field from `PublicAuthBaseURL` (that route POSTs magic-link redeem; this one POSTs `verify-link`). The token rides the URL **fragment** (mirroring the magic link), so it never reaches the server on the landing GET and the page can scrub it from history. **Never a production boot requirement** — this changes presentation, not the anti-takeover guarantee (the emailed secret stays proof of inbox control): **empty degrades** the mail to its historical bare-token line, and when OAuth providers are wired one startup WARN names `AUTH_OAUTH_LINK_URL`. A non-empty value is validated in every mode — absolute http(s), a host, **no fragment** (`ErrOAuthLinkURLInvalid`), HTTPS in production (`ErrOAuthLinkURLInsecure`); existing non-secret query parameters are preserved. Built from this value only — request `Host`/forwarded headers never participate. On the pending-link branch the callback redirect also carries `?auth=link_sent&provider=<name>` so the SPA can render a "check your email" state. See [OAuth account linking](#oauth-account-linking--two-distinct-flows). |
+| `InvitationURL` (`AUTH_INVITATION_URL`) | the absolute landing URL an invitation links to when no allowlisted `redirect` was requested, BEFORE `#token=<token>` is appended. **REQUIRED in production beside a Granter** (`ErrInvitationURLRequired`); development permits empty with one startup WARN and keeps the relative `/`. Absolute http(s), a host, no fragment (`ErrInvitationURLInvalid`), HTTPS in production (`ErrInvitationURLInsecure`). See [The invitation link and the landing page](#the-invitation-link-and-the-landing-page). |
+| `InvitationTokenInQuery` (`AUTH_INVITATION_TOKEN_IN_QUERY`) | false → the invitation token rides the fragment. True restores `?token=` for ONE release (production: one `posture_waiver=InvitationTokenInQuery` WARN; development: one WARN); the next minor removes the field. |
+| `SecurityEventsRoute` | false → `GET /auth/admin/security-events` is not mounted. True mounts it under the admin gates with the action `read-audit`; requires `Repositories.SecurityEvents` and `UserAdminCheck` (`ErrSecurityEventsRouteRequires`). See [Reading the rail over HTTP](#reading-the-rail-over-http). |
 | `UserAdminCheck` | **nil → the bundled admin routes are NOT registered**, even when the store supplies `Repositories.UserAdmin` — turning a store capability into an HTTP surface is the host's decision, not the store's. Non-nil → `GET /auth/admin/users`, `GET /auth/admin/users/{id}`, and the deactivate/reactivate POSTs mount, and BOTH `Repositories.UserAdmin` and `Repositories.ActiveSessions` become required (`ErrUserAdminReposRequired`). Authentication never invents a role named `admin` and never imports authorization — see [Account lifecycle](#account-lifecycle--the-operator-directory-and-deactivation). |
 | `TokenEncrypter` (cryptids.Encrypter) | provider tokens NOT persisted (login/linking still work). Wire `cryptids.NewAESGCM` to store them. |
 | `OAuthCallbackBase`, `RedirectAllowlist` | callback HTTP(S) origin with optional clean mount prefix (no trailing slash, query, credentials or fragment; HTTPS in production) / exact-match allowlist for ABSOLUTE redirect targets (open-redirect guard). Safe same-origin relative paths are honored without allowlisting in the browser lanes; any other target falls back to `/`. The invitation lane's mailed-link destination stays exact-match only. |
@@ -3513,8 +3605,10 @@ administration := authentication.AdministrationConfig{
         if !result.Allowed {
             return sdk.ErrForbidden
         }
-        // req.Action distinguishes list/read/deactivate/reactivate/resend-verification.
-        // req.TargetUserID is empty only for list.
+        // req.Action distinguishes list/read/deactivate/reactivate/resend-verification/
+        // erase/reset-passkeys/reset-totp/read-audit; switch on it and refuse the rest,
+        // so an action a later release adds is denied until you name it.
+        // req.TargetUserID is empty for list and an unfiltered read-audit.
         return nil
     },
 }
@@ -4044,7 +4138,12 @@ credential rail is unwired.
 Two families. **Explicit stable codes** (set via `WithCode`): `password_already_set`
 (409), `password_not_set` (404), `cannot_remove_last_method` (409),
 `kind_not_supported` (400), `rate_limited` (429), `verification_required` (409),
-`identifier_exists` (409), `unsupported_media_type` (415), `origin_rejected`
+`identifier_exists` (409), `unsupported_media_type` (415),
+`invitation_identity_mismatch` (403 — an accept by a caller holding no verified
+identifier the invitation is addressed to; it was the generic
+`permission_denied` before), `invitation_redirect_fragment` (400 — a requested
+invitation `redirect` containing `#`), `offset_not_supported` (400 — the
+cursor-only security-event listing), `origin_rejected`
 (403 — the ORIGIN gate refused the request's `Origin`/`Sec-Fetch-Site`; distinct
 from the `permission_denied` a failed double-submit or an authorization denial
 carries, so a host can tell a misconfigured allowlist from a stale token without
@@ -4112,10 +4211,42 @@ call, written by the store with `Actor` system/maintenance; Details `cutoff`,
 `count`, `floor_days`, `max_rows` and, on PostgreSQL, `session_user`) and
 `security_events_archived` (one row per verified archive object; Details
 `object`, `sha256`, `rows`, `first_created_at`, `first_id`, `last_created_at`,
-`last_id`, `archive_location`). The forgot-password
-*request* records nothing (it must not reveal whether an address exists). There is
-no HTTP read surface — query the table, or see the proof host's dev-only debug
-route.
+`last_id`, `archive_location`); every read of an audit listing records
+`audit_read` (below). The forgot-password
+*request* records nothing (it must not reveal whether an address exists).
+
+### Reading the rail over HTTP
+
+`AdministrationConfig.SecurityEventsRoute` opts in to
+`GET /auth/admin/security-events`, mounted with the admin surface under the
+`UserAdministration` authenticator, the host `UserAdminCheck` with the action
+`read-audit` (the `user_id` filter is the `TargetUserID`) and, under
+`MFARequired: admins`, the AAL2 gate. It needs `Repositories.SecurityEvents` and a
+`UserAdminCheck` (`ErrSecurityEventsRouteRequires`). **A `UserAdminCheck` that
+does not switch on `Action` admits the new action** — that is why it is a
+separate opt-in.
+
+- Query: `user_id`, `event_type`, `event_status`, `since` (inclusive), `until`
+  (exclusive), RFC 3339; `since >= until` is 400. Each key at most once.
+- Paging is cursor only: `limit` (default 25, max 100), `cursor`, `count`.
+  `offset` is 400 `offset_not_supported`; `q` and `order` are 400 (newest first,
+  always). Drop the cursor when a filter changes.
+- Items: `{id, user_id, actor_type, actor_id, event_type, event_status,
+  ip_address, user_agent, request_id, trace_id, details, created_at}`, empty
+  strings omitted, `created_at` UTC RFC 3339 with nanoseconds. `no-store`.
+- Every page read records one `audit_read` row: `Actor` the reader, Details
+  `rail: security_events`, `filters` (the filter keys present, never their
+  values), `limit`, `returned`, `strategy`. A denied call records nothing new
+  (the gate's 401/403 and `mfa_required_denied` cover it). Reads are never
+  deduplicated.
+- **Export** is paging: follow `next_cursor` until `has_more` is false, 100 a
+  page. `count=true` scans the filtered set.
+
+`Service.ListSecurityEvents(ctx, filter, req)` is the trusted method behind it
+(it records the same row; the caller owns authorization). The authorization
+pocket's `GET /authorization/audit` reads its own rail; a host bridges its
+`WithAuditReadObserver` into this rail as `audit_read` with
+`rail: authorization` (`securityevent.AuditReadRailAuthorization`).
 
 Every type has a `securityevent.Type*` constant, and `securityevent.Types()`
 returns the registry; `oauth2.Type*` are aliases of the `TypeOAuth2*` constants.

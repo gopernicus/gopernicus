@@ -368,13 +368,13 @@ func (s *Service) RedeemPasswordless(ctx context.Context, token string) (TokenPa
 			s.recordPasswordlessLogin(ctx, "", "", purpose, securityevent.StatusFailure)
 			return TokenPair{}, genericRedemptionError(err)
 		}
-		s.recordPasswordlessOutcome(ctx, res, string(identifier.KindEmail))
+		s.recordPasswordlessOutcome(ctx, res, string(res.Identifier.Kind))
 		// A newly provisioned account resolves its pending invitations exactly as a
 		// password registration or an OAuth provisioning does — best-effort, after
 		// the domain commit, and ONLY for a provision: an adoption or a login must
 		// not re-grant invitations that were already resolved (CHAU-6.6).
 		if res.Provisioned {
-			s.resolvePendingInvitations(ctx, res.Identifier.NormalizedValue, res.User.ID)
+			s.resolvePendingInvitations(ctx, string(res.Identifier.Kind), res.Identifier.NormalizedValue, res.User.ID)
 		}
 		return pair, nil
 	}

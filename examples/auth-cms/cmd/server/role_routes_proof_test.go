@@ -131,6 +131,7 @@ var roleAdminRoutes = []struct{ method, path, body string }{
 	{"POST", "/authorization/roles/unassign", `{"subject_type":"user","subject_id":"` + roleGrantee + `","role":"` + demoRole + `","scope":{"kind":"resource","resource_type":"` + demoResourceType + `","resource_id":"` + demoResourceID + `"}}`},
 	{"GET", "/authorization/roles/by-subject?subject_type=user&subject_id=" + roleGrantee, ""},
 	{"GET", "/authorization/roles/by-resource?resource_type=" + demoResourceType + "&resource_id=" + demoResourceID, ""},
+	{"GET", "/authorization/audit?subject_type=user&subject_id=" + roleGrantee, ""},
 }
 
 // mutationEnvelope is the assign/unassign response as a client reads it.
@@ -209,6 +210,54 @@ func TestRoleRoutesPlatformAdminDrivesTheLifecycle(t *testing.T) {
 	}
 	if len(listing.Items) != 0 {
 		t.Errorf("by-subject after unassign = %+v, want empty", listing.Items)
+	}
+}
+
+// TestRoleRoutesRefuseSelfAssignmentAndServeTheAudit proves the S7 wiring: a
+// platform admin naming itself is refused by RefuseSelfTarget before host
+// policy, and GET /authorization/audit pages the change history to the admin,
+// newest first, never cached.
+func TestRoleRoutesRefuseSelfAssignmentAndServeTheAudit(t *testing.T) {
+	host := newRoleRoutesHost(t, true)
+	admin := host.signUp(roleAdminEmail)
+	adminID := admin.userIDFor()
+	host.makePlatformAdmin(adminID)
+	scope := `"scope":{"kind":"resource","resource_type":"` + demoResourceType + `","resource_id":"` + demoResourceID + `"}`
+
+	resp, payload := admin.mutate("/authorization/roles", `{"subject_type":"user","subject_id":"`+adminID+`","role":"`+demoRole+`",`+scope+`}`)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("self-assign = %d, want 403; body=%s", resp.StatusCode, payload)
+	}
+	if !strings.Contains(host.logs.String(), "error_kind=forbidden") {
+		t.Errorf("the refused self-assignment logged no role-write refusal:\n%s", host.logs.String())
+	}
+	if resp, payload := admin.mutate("/authorization/roles", `{"subject_type":"user","subject_id":"`+roleGrantee+`","role":"`+demoRole+`",`+scope+`}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("assign = %d, want 200; body=%s", resp.StatusCode, payload)
+	}
+
+	resp, payload = admin.do("GET", "/authorization/audit?subject_type=user&subject_id="+roleGrantee, "", nil)
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("audit = %d %q, want 200 no-store; body=%s", resp.StatusCode, resp.Header.Get("Cache-Control"), payload)
+	}
+	var page struct {
+		Items []struct {
+			Source struct {
+				ActorID string `json:"actor_id"`
+			} `json:"source"`
+			Change struct {
+				Action string `json:"action"`
+			} `json:"change"`
+		} `json:"items"`
+		HasMore bool `json:"has_more"`
+	}
+	if err := json.Unmarshal(payload, &page); err != nil {
+		t.Fatalf("decode audit page: %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Source.ActorID != adminID || page.Items[0].Change.Action == "" || page.HasMore {
+		t.Fatalf("audit page = %+v, want the one assignment by the admin", page)
+	}
+	if resp, _ := admin.do("GET", "/authorization/audit?offset=5", "", nil); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("audit ?offset = %d, want 400", resp.StatusCode)
 	}
 }
 

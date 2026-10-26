@@ -83,7 +83,7 @@ func TestInvitationCommittedGrantRecoveryThroughHTTP(t *testing.T) {
 	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
 		t.Fatalf("decode invitation %s: %v", body, err)
 	}
-	tokenPattern := regexp.MustCompile(`[?&]token=([A-Za-z0-9._~-]+)`)
+	tokenPattern := regexp.MustCompile(`#token=([A-Za-z0-9._~-]+)`)
 	var token string
 	deadline := time.Now().Add(5 * time.Second)
 	for token == "" && time.Now().Before(deadline) {
@@ -230,7 +230,7 @@ func (h *settlementHost) invite(t *testing.T) (string, string) {
 	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
 		t.Fatalf("decode invitation %s: %v", body, err)
 	}
-	tokenPattern := regexp.MustCompile(`[?&]token=([A-Za-z0-9._~-]+)`)
+	tokenPattern := regexp.MustCompile(`#token=([A-Za-z0-9._~-]+)`)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		for _, msg := range h.host.sender.all()[before:] {

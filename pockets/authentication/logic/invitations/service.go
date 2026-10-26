@@ -47,8 +47,17 @@ const (
 	// subjectTypeUser is the ReBAC subject-type convention for a human user —
 	// the only subject class this service grants to (accept, direct-add, resolve).
 	subjectTypeUser = "user"
-	// resolvePageLimit bounds one page of the resolve-on-registration scan.
+	// resolvePageLimit bounds one page of the resolve-on-verification scan.
 	resolvePageLimit = 100
+)
+
+// The resolved_by values an invitation_granted row carries: the path that
+// completed the claim.
+const (
+	resolvedByAccept       = "accept"
+	resolvedByVerification = "verification"
+	resolvedBySync         = "sync"
+	resolvedByDirectAdd    = "direct_add"
 )
 
 // Fence outcomes a Fencer reports.
@@ -83,11 +92,14 @@ var (
 	// ErrNotPending is returned when a transition (accept/decline/cancel/resend)
 	// targets an invitation that is not in an eligible status.
 	ErrNotPending = fmt.Errorf("invitation is not pending: %w", sdk.ErrConflict)
-	// ErrIdentifierMismatch is returned by Accept when the accepting user's
-	// identifier of the invitation's kind (their email for an email invitation,
-	// their active verified phone for a phone invitation) does not match the
-	// invitation identifier.
+	// ErrIdentifierMismatch is returned by Accept when none of the accepting
+	// user's active verified identifiers of the invitation's kind (email or phone)
+	// equals the invitation identifier.
 	ErrIdentifierMismatch = fmt.Errorf("invitation identifier does not match: %w", sdk.ErrForbidden)
+	// ErrRedirectFragment is returned by Create and Resend when the requested
+	// redirect carries a "#": the token rides the link's fragment, so a
+	// destination with one of its own would swallow it. Nothing is persisted.
+	ErrRedirectFragment = fmt.Errorf("invitation redirect must not carry a fragment: %w", sdk.ErrInvalidInput)
 	// ErrKindNotSupported is returned by Create for an identifier kind the host
 	// is not set up to deliver to (deny-by-absence, ruling 6): a kind is supported
 	// iff it is sdk.AddressKindEmail with the Mailer wired, OR a notifier of that
@@ -197,15 +209,14 @@ type MemberCheck func(ctx context.Context, resourceType, resourceID, subjectType
 // the Users repository — not a host configuration seam.
 type UserLookup func(ctx context.Context, email string) (subjectID string, found bool, err error)
 
-// IdentifierLookup resolves a caller's active VERIFIED identifier value of kind
-// for the accept-time account match (design §7/V11): a phone-kind invitation is
-// accepted only by the subject whose verified phone identifier equals the invited
-// address. It is an INTERNAL collaborator wired by package auth from
-// authlogic.ActiveVerifiedIdentifier, so invitation service stays decoupled from the
-// identifier store. No active verified identifier of that kind → sdk.ErrNotFound
-// (the accept match then fails ErrIdentifierMismatch). Nil → no email/phone
-// accept-time match is possible (fail closed).
-type IdentifierLookup func(ctx context.Context, userID, kind string) (string, error)
+// IdentifierLister lists a subject's active VERIFIED identifiers as (kind,
+// normalized value) pairs, every kind and every value, primary or not. The
+// accept-time match and identifier resolution both ask it whether the subject
+// holds the invitation's (kind, identifier). It is an INTERNAL collaborator
+// wired by package auth from authlogic.VerifiedIdentifiers, so invitation
+// service stays decoupled from the identifier store. Nil → no email/phone
+// match is possible (fail closed).
+type IdentifierLister func(ctx context.Context, userID string) ([]sdk.IdentityAddress, error)
 
 // CreateInput is the input to Create. Identifier is the invitee address (the
 // service normalizes it kind-aware). IdentifierKind is the address kind; empty
@@ -278,26 +289,28 @@ type AcceptResult struct {
 // enforces both at construction); MemberCheck, UserLookup, and SecurityEvents
 // are optional.
 type constructorConfig struct {
-	Invitations       InvitationRepository
-	Granter           Granter
-	MemberCheck       MemberCheck
-	UserLookup        UserLookup
-	CallerIdentifiers IdentifierLookup
-	Normalizer        identifier.Normalizer
-	Mailer            email.Sender
-	MailFrom          string
-	Deliver           *delivery.Router
-	Queue             deliveryQueue
-	RedirectAllowlist []string
-	SecurityEvents    securityevent.SecurityEventRepository
-	SecurityRecorder  *securityevent.Recorder
-	IdentifierKeyer   protection.IdentifierKeyer
-	Clock             func() time.Time
-	Logger            *slog.Logger
-	TTL               time.Duration
-	BodySenders       map[string]delivery.BodySender
-	IDs               sdk.IDGenerator
-	Fencer            Fencer
+	Invitations         InvitationRepository
+	Granter             Granter
+	MemberCheck         MemberCheck
+	UserLookup          UserLookup
+	VerifiedIdentifiers IdentifierLister
+	Normalizer          identifier.Normalizer
+	Mailer              email.Sender
+	MailFrom            string
+	Deliver             *delivery.Router
+	Queue               deliveryQueue
+	RedirectAllowlist   []string
+	InvitationURL       string
+	LinkTokenInQuery    bool
+	SecurityEvents      securityevent.SecurityEventRepository
+	SecurityRecorder    *securityevent.Recorder
+	IdentifierKeyer     protection.IdentifierKeyer
+	Clock               func() time.Time
+	Logger              *slog.Logger
+	TTL                 time.Duration
+	BodySenders         map[string]delivery.BodySender
+	IDs                 sdk.IDGenerator
+	Fencer              Fencer
 }
 
 // Service implements the invitation use cases over its ports.
@@ -306,9 +319,9 @@ type Service struct {
 	granter     Granter
 	memberCheck MemberCheck
 	userLookup  UserLookup
-	// callerIdentifiers resolves the accepting caller's active verified identifier
-	// value of a kind for the accept-time account match (AccessConfig.CallerIdentifiers).
-	callerIdentifiers IdentifierLookup
+	// verifiedIdentifiers lists a subject's active verified identifiers for the
+	// accept-time match and resolution (AccessConfig.VerifiedIdentifiers).
+	verifiedIdentifiers IdentifierLister
 	// normalizer canonicalizes invitation identifier values at creation
 	// (WithNormalizer); email/phone route through it, open kinds keep trim-only.
 	normalizer identifier.Normalizer
@@ -318,12 +331,18 @@ type Service struct {
 	// sites render an envelope through it and enqueue it on queue. Nil until wired.
 	deliverer *delivery.Router
 	// queue is the durable delivery outbox (DeliveryConfig.Queue) send sites enqueue through.
-	queue          deliveryQueue
-	redirects      redirect.Allowlist
-	securityEvents *securityevent.Recorder
-	now            func() time.Time
-	logger         *slog.Logger
-	ttl            time.Duration
+	queue     deliveryQueue
+	redirects redirect.Allowlist
+	// invitationURL is the absolute landing URL a link falls back to when no
+	// allowlisted redirect was requested (WithInvitationURL); empty keeps "/".
+	invitationURL string
+	// linkTokenInQuery restores the pre-fragment "?token=" link for one release
+	// (WithLinkTokenInQuery).
+	linkTokenInQuery bool
+	securityEvents   *securityevent.Recorder
+	now              func() time.Time
+	logger           *slog.Logger
+	ttl              time.Duration
 	// bodySenders is the host's wired delivery set keyed by kind (DeliveryConfig.BodySenders).
 	// A wired kind is a supported kind (deny-by-absence); the delivery fork routes
 	// through it, falling back to the Mailer only for the email kind.
@@ -358,21 +377,23 @@ func newService(d constructorConfig) *Service {
 		norm = identifier.DefaultNormalizer{}
 	}
 	return &Service{
-		invitations:       d.Invitations,
-		granter:           d.Granter,
-		memberCheck:       d.MemberCheck,
-		userLookup:        d.UserLookup,
-		callerIdentifiers: d.CallerIdentifiers,
-		normalizer:        norm,
-		mailer:            d.Mailer,
-		mailFrom:          d.MailFrom,
-		deliverer:         d.Deliver,
-		queue:             d.Queue,
-		redirects:         redirect.New(d.RedirectAllowlist),
-		securityEvents:    d.securityEventRecorder(clock, logger),
-		now:               clock,
-		logger:            logger,
-		ttl:               ttl,
+		invitations:         d.Invitations,
+		granter:             d.Granter,
+		memberCheck:         d.MemberCheck,
+		userLookup:          d.UserLookup,
+		verifiedIdentifiers: d.VerifiedIdentifiers,
+		normalizer:          norm,
+		mailer:              d.Mailer,
+		mailFrom:            d.MailFrom,
+		deliverer:           d.Deliver,
+		queue:               d.Queue,
+		redirects:           redirect.New(d.RedirectAllowlist),
+		invitationURL:       d.InvitationURL,
+		linkTokenInQuery:    d.LinkTokenInQuery,
+		securityEvents:      d.securityEventRecorder(clock, logger),
+		now:                 clock,
+		logger:              logger,
+		ttl:                 ttl,
 
 		bodySenders:     d.BodySenders,
 		ids:             d.IDs,
@@ -408,6 +429,9 @@ func (s *Service) PrepareCreate(ctx context.Context, in CreateInput) (PreparedCr
 		return PreparedCreate{}, err
 	}
 	in.Metadata = metadata
+	if strings.Contains(in.Redirect, "#") {
+		return PreparedCreate{}, ErrRedirectFragment
+	}
 	in.ResourceType = strings.TrimSpace(in.ResourceType)
 	in.ResourceID = strings.TrimSpace(in.ResourceID)
 	in.Relation = strings.TrimSpace(in.Relation)
@@ -505,11 +529,12 @@ func (s *Service) directAdd(ctx context.Context, in CreateInput, subjectID strin
 	// from the unconditional secret generator — NOT the entity WithIDs strategy,
 	// whose sdk.DatabaseID mode yields an empty ID until an entity is inserted.
 	operationID := mintOperationID()
+	prov := grantProvenance{operationID: operationID, invitedBy: in.InvitedBy, resolvedBy: resolvedByDirectAdd, directAdd: true}
 	if err := s.grant(ctx, operationID, in.ResourceType, in.ResourceID, in.Relation, subjectTypeUser, subjectID, in.Metadata); err != nil {
-		s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.IdentifierKind, in.Identifier, securityevent.StatusFailure, "")
+		s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.IdentifierKind, in.Identifier, securityevent.StatusFailure, "", prov)
 		return CreateResult{}, fmt.Errorf("grant: %w", err)
 	}
-	s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.IdentifierKind, in.Identifier, securityevent.StatusSuccess, "")
+	s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.IdentifierKind, in.Identifier, securityevent.StatusSuccess, "", prov)
 	s.sendMemberAdded(ctx, memberAdded{
 		kind: in.IdentifierKind, identifier: in.Identifier,
 		resourceType: in.ResourceType, resourceID: in.ResourceID, relation: in.Relation,
@@ -584,14 +609,17 @@ func (s *Service) Accept(ctx context.Context, in AcceptInput) (AcceptResult, err
 			}
 		}
 	}
-	accepted, err := s.acceptClaim(ctx, inv, subjectType, in.SubjectID)
+	accepted, err := s.acceptClaim(ctx, inv, subjectType, in.SubjectID, resolvedByAccept)
 	if err != nil {
 		return AcceptResult{}, err
 	}
 	return AcceptResult{ResourceType: accepted.ResourceType, ResourceID: accepted.ResourceID, Relation: accepted.Relation}, nil
 }
 
-func (s *Service) acceptClaim(ctx context.Context, inv Invitation, subjectType, subjectID string) (Invitation, error) {
+// acceptClaim claims, grants and completes one invitation for the subject.
+// resolvedBy names the path completing it (accept, verification or sync) on
+// the invitation_granted row.
+func (s *Service) acceptClaim(ctx context.Context, inv Invitation, subjectType, subjectID, resolvedBy string) (Invitation, error) {
 	claim := Acceptance{TokenHash: inv.TokenHash, SubjectType: subjectType, SubjectID: subjectID, Now: s.now()}
 	claimed, err := s.invitations.ClaimAcceptance(ctx, inv.ID, claim)
 	if err != nil {
@@ -600,6 +628,7 @@ func (s *Service) acceptClaim(ctx context.Context, inv Invitation, subjectType, 
 	if claimed.Status == StatusAccepted {
 		return claimed, nil
 	}
+	prov := grantProvenance{invitationID: claimed.ID, operationID: claimed.ID, resolvedBy: resolvedBy}
 	// The host must deduplicate concurrent as well as sequential repeats. An error
 	// cannot prove that an external side effect did not commit, so never unclaim.
 	grantErr := s.grant(ctx, claimed.ID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, subjectType, subjectID, claimed.Metadata)
@@ -611,11 +640,11 @@ func (s *Service) acceptClaim(ctx context.Context, inv Invitation, subjectType, 
 		if err != nil {
 			return Invitation{}, err
 		}
-		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.IdentifierKind, claimed.Identifier, securityevent.StatusBlocked, "fenced")
+		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.IdentifierKind, claimed.Identifier, securityevent.StatusBlocked, "fenced", prov)
 		return cancelled, fmt.Errorf("grant: %w", grantErr)
 	}
 	if grantErr != nil && !errors.Is(grantErr, ErrGrantSuperseded) {
-		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.IdentifierKind, claimed.Identifier, securityevent.StatusFailure, "")
+		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.IdentifierKind, claimed.Identifier, securityevent.StatusFailure, "", prov)
 		return Invitation{}, fmt.Errorf("grant: %w", grantErr)
 	}
 	claim.Now = s.now()
@@ -624,10 +653,10 @@ func (s *Service) acceptClaim(ctx context.Context, inv Invitation, subjectType, 
 		return Invitation{}, err
 	}
 	if errors.Is(grantErr, ErrGrantSuperseded) {
-		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.IdentifierKind, claimed.Identifier, securityevent.StatusBlocked, "superseded")
+		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.IdentifierKind, claimed.Identifier, securityevent.StatusBlocked, "superseded", prov)
 		return accepted, fmt.Errorf("grant: %w", grantErr)
 	}
-	s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.IdentifierKind, claimed.Identifier, securityevent.StatusSuccess, "")
+	s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.IdentifierKind, claimed.Identifier, securityevent.StatusSuccess, "", prov)
 	s.sendMemberAdded(ctx, memberAdded{
 		kind: claimed.IdentifierKind, identifier: claimed.Identifier,
 		resourceType: claimed.ResourceType, resourceID: claimed.ResourceID, relation: claimed.Relation,
@@ -775,6 +804,9 @@ func cancelDetails(inv Invitation, extra map[string]any) map[string]any {
 // Resend rotates the prepared invitation's secret and expiry, then queues delivery.
 // The caller owns admission; a stale prepared token conflicts before delivery.
 func (s *Service) Resend(ctx context.Context, prepared PreparedManagement, redirectTo string) (Invitation, error) {
+	if strings.Contains(redirectTo, "#") {
+		return Invitation{}, ErrRedirectFragment
+	}
 	inv, err := prepared.checked(ctx, s)
 	if err != nil {
 		return Invitation{}, err
@@ -836,57 +868,71 @@ func (s *Service) ListActiveByResource(ctx context.Context, in ActiveListInput, 
 	return s.invitations.ListActiveByResource(ctx, in, req)
 }
 
-// Mine returns a cursor-paginated page of the invitations addressed to an
-// invitee identifier (email) — the caller's own invitations (design §6: rides
-// the Identifier table column, never a tuple). It is email-keyed (fold 3): the
-// identifier is normalized as an email (the caller's own address, resolved from
-// their account), so the lookup structurally hits email-kind rows only — a
-// non-email identifier lives in a different string space (a phone number, a Slack
-// id), never the lowercased-email keyspace this pages over.
-func (s *Service) Mine(ctx context.Context, address string, req list.Request) (list.Page[Invitation], error) {
-	normalized, err := s.normalizeIdentifier(address, sdk.AddressKindEmail)
+// Mine returns a cursor-paginated page of the invitations addressed to one
+// invitee identifier of kind — the caller's own invitations (design §6: rides
+// the Identifier table column, never a tuple). The value is normalized as kind
+// and the lookup is (kind, value) keyed, so it hits that kind's rows only.
+func (s *Service) Mine(ctx context.Context, kind, address string, req list.Request) (list.Page[Invitation], error) {
+	normalized, err := s.normalizeIdentifier(address, kind)
 	if err != nil {
 		return list.Page[Invitation]{}, err
 	}
-	return s.invitations.ListBySubject(ctx, sdk.AddressKindEmail, normalized, req)
+	return s.invitations.ListBySubject(ctx, kind, normalized, req)
 }
 
-// ResolveInvitations resumes auto-accept invitations only for a verified email
-// owner. Individual grant/finalization failures remain resumable and do not
-// prevent other invitations from resolving. Superseded grants complete acceptance
+// ResolveInvitations resolves the invitations addressed to (kind, value) once
+// the subject holds that identifier VERIFIED: every unexpired pending or
+// accepting AutoAccept invitation is accepted for it; the others stay pending
+// for their token. A value the subject does not hold verified resolves nothing.
+// Individual grant/finalization failures remain resumable and do not prevent
+// other invitations from resolving. Superseded grants complete acceptance
 // without a member-added notice and are warned about rather than counted.
-func (s *Service) ResolveInvitations(ctx context.Context, email, subjectType, subjectID string) (int, error) {
-	normalized, err := s.normalizeIdentifier(email, sdk.AddressKindEmail)
+func (s *Service) ResolveInvitations(ctx context.Context, kind, value, subjectType, subjectID string) (int, error) {
+	return s.resolve(ctx, kind, value, subjectType, subjectID, resolvedByVerification)
+}
+
+// ResolvePendingInvitations is ResolveInvitations over pending rows only, for
+// the on-demand sync: an accepting claim is re-driven by a verification, never
+// by a caller-triggered sync.
+func (s *Service) ResolvePendingInvitations(ctx context.Context, kind, value, subjectType, subjectID string) (int, error) {
+	return s.resolve(ctx, kind, value, subjectType, subjectID, resolvedBySync)
+}
+
+// resolve pages the invitations addressed to (kind, value) and accepts the
+// eligible AutoAccept ones; resolvedBySync admits pending rows only.
+func (s *Service) resolve(ctx context.Context, kind, value, subjectType, subjectID, resolvedBy string) (int, error) {
+	normalized, err := s.normalizeIdentifier(value, kind)
 	if err != nil {
 		return 0, nil
 	}
 	if subjectType == "" {
 		subjectType = subjectTypeUser
 	}
-	if err := s.requireVerifiedIdentifier(ctx, subjectID, sdk.AddressKindEmail, normalized); err != nil {
+	if err := s.requireVerifiedIdentifier(ctx, subjectID, kind, normalized); err != nil {
 		if errors.Is(err, ErrIdentifierMismatch) {
 			return 0, nil
 		}
 		return 0, err
 	}
+	pendingOnly := resolvedBy == resolvedBySync
 	resolved := 0
 	cursor := ""
 	for i := 0; i < 1000; i++ {
-		page, err := s.invitations.ListBySubject(ctx, sdk.AddressKindEmail, normalized, list.Request{Limit: resolvePageLimit, Cursor: cursor})
+		page, err := s.invitations.ListBySubject(ctx, kind, normalized, list.Request{Limit: resolvePageLimit, Cursor: cursor})
 		if err != nil {
 			return resolved, err
 		}
 		for _, inv := range page.Items {
-			if inv.IdentifierKind != sdk.AddressKindEmail || !inv.AutoAccept {
+			if inv.IdentifierKind != kind || !inv.AutoAccept {
 				continue
 			}
-			if inv.Status != StatusPending && inv.Status != StatusAccepting {
+			if inv.Status != StatusPending && (pendingOnly || inv.Status != StatusAccepting) {
 				continue
 			}
 			if inv.Status == StatusPending && inv.Expired(s.now()) {
 				continue
 			}
-			if _, err := s.acceptClaim(ctx, inv, subjectType, subjectID); err != nil {
+			if _, err := s.acceptClaim(ctx, inv, subjectType, subjectID, resolvedBy); err != nil {
 				s.logger.Warn("resolve invitation failed", "error_kind", errKind(err))
 				continue
 			}
@@ -902,17 +948,34 @@ func (s *Service) ResolveInvitations(ctx context.Context, email, subjectType, su
 
 // --- audit ---
 
+// grantProvenance is where an invitation grant came from: the invitation row
+// (empty on a direct add), the grant's operation ID, the path that completed
+// it, and, on a direct add, the inviter.
+type grantProvenance struct {
+	invitationID, operationID, invitedBy, resolvedBy string
+	directAdd                                        bool
+}
+
 // recordGrant appends an invitation_granted audit row for a grant attempt
 // (success, failure, or blocked with reason superseded or fenced). Details carries
 // identifiers only — never the token (design §5.1 WI3) — and the invitee as its
-// kind and digest, never the address (AUDIT-054).
-func (s *Service) recordGrant(ctx context.Context, subjectID, resourceType, resourceID, relation, kind, identifier, status, reason string) {
+// kind and digest, never the address (AUDIT-054), plus the grant's provenance.
+func (s *Service) recordGrant(ctx context.Context, subjectID, resourceType, resourceID, relation, kind, identifier, status, reason string, prov grantProvenance) {
 	details := map[string]any{
 		"resource_type":     resourceType,
 		"resource_id":       resourceID,
 		"relation":          relation,
 		"identifier_kind":   kind,
 		"identifier_digest": s.auditDigest(kind, identifier),
+		"operation_id":      prov.operationID,
+		"resolved_by":       prov.resolvedBy,
+	}
+	if prov.invitationID != "" {
+		details["invitation_id"] = prov.invitationID
+	}
+	if prov.directAdd {
+		details["direct_add"] = true
+		details["invited_by"] = prov.invitedBy
 	}
 	if reason != "" {
 		details["reason"] = reason
@@ -1005,13 +1068,13 @@ func (s *Service) sendInviteSent(ctx context.Context, inv Invitation, secret, re
 	if s.deliverer == nil || s.queue == nil {
 		return ErrDeliveryDisabled
 	}
-	dest := s.redirects.Resolve(redirectTo)
+	dest := s.destination(redirectTo)
 	env, err := s.deliverer.Render(ctx, delivery.Request{
 		Kind:        inv.IdentifierKind,
 		Purpose:     delivery.PurposeInvitation,
 		Destination: inv.Identifier,
 		Secret:      secret,
-		Data:        deliveryData(inv.ID, inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, inv.InvitedBy, inv.Metadata, inviteLink(dest, secret)),
+		Data:        deliveryData(inv.ID, inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, inv.InvitedBy, inv.Metadata, s.inviteLink(dest, secret)),
 	})
 	if err != nil {
 		return fmt.Errorf("render invitation notification: %w", err)
@@ -1056,7 +1119,7 @@ func (s *Service) sendMemberAdded(ctx context.Context, m memberAdded) {
 		s.logger.Warn("member-added notification skipped: delivery outbox not wired")
 		return
 	}
-	dest := s.redirects.Resolve(m.redirectTo)
+	dest := s.destination(m.redirectTo)
 	env, err := s.deliverer.Render(ctx, delivery.Request{
 		Kind:        m.kind,
 		Purpose:     delivery.PurposeMemberAdded,
@@ -1100,11 +1163,26 @@ func deliveryData(invitationID, operationID, resourceType, resourceID, relation,
 	}
 }
 
+// destination is the link target of an invitation message: the requested
+// redirect when allowlisted, else the configured InvitationURL, else the
+// same-origin default "/".
+func (s *Service) destination(requested string) string {
+	dest := s.redirects.Resolve(requested)
+	if dest == "/" && s.invitationURL != "" {
+		return s.invitationURL
+	}
+	return dest
+}
+
 // inviteLink builds the accept link the rendered invitation message points the
-// invitee at: the allowlisted destination with the single-use token attached as a
-// query parameter (the token is what Accept redeems). It is deliberately a simple
-// join — the host's landing page reads the token and POSTs it to accept.
-func inviteLink(dest, secret string) string {
+// invitee at: the destination with the single-use token in the URL fragment, so
+// it never reaches a server log or a Referer (the landing page reads
+// location.hash and POSTs it to accept). WithLinkTokenInQuery restores the
+// "?token=" query parameter for one release.
+func (s *Service) inviteLink(dest, secret string) string {
+	if !s.linkTokenInQuery {
+		return dest + "#token=" + secret
+	}
 	sep := "?"
 	if strings.Contains(dest, "?") {
 		sep = "&"
@@ -1142,22 +1220,26 @@ func (s *Service) grant(ctx context.Context, operationID, resourceType, resource
 }
 
 // requireVerifiedIdentifier resolves ownership from the verified identifier
-// rail; an email supplied in AcceptInput is never proof of account ownership.
+// rail: the subject must hold (kind, want) among ALL its active verified
+// identifiers, primary or not. An email supplied in AcceptInput is never proof
+// of account ownership.
 func (s *Service) requireVerifiedIdentifier(ctx context.Context, userID, kind, want string) error {
-	if s.callerIdentifiers == nil || want == "" || userID == "" {
+	if s.verifiedIdentifiers == nil || want == "" || userID == "" {
 		return ErrIdentifierMismatch
 	}
-	got, err := s.callerIdentifiers(ctx, userID, kind)
+	addresses, err := s.verifiedIdentifiers(ctx, userID)
 	if errors.Is(err, sdk.ErrNotFound) {
 		return ErrIdentifierMismatch
 	}
 	if err != nil {
-		return fmt.Errorf("lookup verified invitation identifier: %w", err)
+		return fmt.Errorf("list verified invitation identifiers: %w", err)
 	}
-	if got != want {
-		return ErrIdentifierMismatch
+	for _, a := range addresses {
+		if a.Kind == kind && a.Value == want {
+			return nil
+		}
 	}
-	return nil
+	return ErrIdentifierMismatch
 }
 
 // hashSecret returns the stored form of an invitation secret — its SHA-256 hex

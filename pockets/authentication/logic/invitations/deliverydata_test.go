@@ -108,7 +108,7 @@ func TestCreatePendingDeliveryData(t *testing.T) {
 	}
 	c := hook.only(t, delivery.PurposeInvitation)
 	assertDeliveryData(t, c, res.Invitation.ID, res.Invitation.ID, "inviter", md)
-	if !strings.Contains(c.data["Link"].(string), "token=") {
+	if !strings.Contains(c.data["Link"].(string), "#token=") {
 		t.Errorf("invitation Link carries no token: %v", c.data["Link"])
 	}
 	// The hook's Metadata is a copy: mutating it never reaches the persisted row.
@@ -200,7 +200,7 @@ func TestHookEnrichmentReachesDeliveredMail(t *testing.T) {
 	if !strings.Contains(msg.Text, "You were invited to project Apollo as member.") || !strings.Contains(msg.HTML, "project Apollo as member") {
 		t.Errorf("delivered mail not enriched: text=%q", msg.Text)
 	}
-	if !strings.Contains(msg.Text, "token=") {
+	if !strings.Contains(msg.Text, "#token=") {
 		t.Errorf("delivered mail lost the accept link: %q", msg.Text)
 	}
 }

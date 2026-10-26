@@ -62,14 +62,15 @@ func projectAddresses(ctx context.Context, identifiers identifier.IdentifierRepo
 	return addresses, nil
 }
 
-// resolvePendingInvitations processes invitations after verified email ownership.
-// Resolver errors are logged without failing authentication; durable acceptance
-// claims let the invitation service resume an interrupted grant.
-func resolvePendingInvitations(ctx context.Context, invitations invitationResolver, logger *slog.Logger, email, userID string) {
+// resolvePendingInvitations processes invitations after verified ownership of
+// (kind, value). Resolver errors are logged without failing authentication;
+// durable acceptance claims let the invitation service resume an interrupted
+// grant.
+func resolvePendingInvitations(ctx context.Context, invitations invitationResolver, logger *slog.Logger, kind, value, userID string) {
 	if invitations == nil {
 		return
 	}
-	if _, err := invitations.ResolveInvitations(ctx, email, PrincipalUser, userID); err != nil {
+	if _, err := invitations.ResolveInvitations(ctx, kind, value, PrincipalUser, userID); err != nil {
 		logger.Warn("resolve invitations failed", "error_kind", ErrorKind(err))
 	}
 }
