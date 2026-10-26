@@ -198,6 +198,10 @@ func TestAuditRouteRejectsUnsupportedQueries(t *testing.T) {
 		{"?limit=0", "bad_request"},
 		{"?order=id", "bad_request"},
 		{"?count=maybe", "bad_request"},
+		{"?resource_type=project&resource_id=p1&resource_id=p2", "bad_request"},
+		{"?actor_type=user&actor_type=user&actor_id=a1", "bad_request"},
+		{"?limit=2&limit=3", "bad_request"},
+		{"?cursor=a&cursor=b", "bad_request"},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
 			reader, events := &stubAuditReader{}, &auditEvents{}
@@ -305,5 +309,47 @@ func TestAuditRoutePagesRealHistory(t *testing.T) {
 	}
 	if len(seen) != 3 || len(events.got) != 2 || events.got[0].Returned != 2 || events.got[1].Returned != 1 {
 		t.Fatalf("records=%d events=%+v", len(seen), events.got)
+	}
+}
+
+func TestAuditGateDenialsCarryNoStore(t *testing.T) {
+	deny := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			web.RespondJSONError(w, web.ErrForbidden("not an auditor"))
+		})
+	}
+	reader, events := &stubAuditReader{}, &auditEvents{}
+	a, err := New(Services{Audit: reader}, WithRoleRoutes(RoleRoutes{AuditGate: deny}), WithAuditReadObserver(events.observe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := web.NewWebHandler()
+	if err := a.Register(h); err != nil {
+		t.Fatal(err)
+	}
+	for name, handler := range map[string]http.Handler{"Register": h, "Audit()": a.Audit()} {
+		rec := doJSON(t, handler, "GET", pathAudit, "")
+		if rec.Code != http.StatusForbidden || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("%s: status=%d Cache-Control=%q", name, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+	if reader.calls != 0 || len(events.got) != 0 {
+		t.Fatal("denied read reached the reader or the observer")
+	}
+}
+
+func TestAuditHeadRecordsNoRead(t *testing.T) {
+	reader, events := &stubAuditReader{}, &auditEvents{}
+	h := auditRouter(t, reader, adminGate(), events)
+	rec := doJSON(t, h, "HEAD", pathAudit, "")
+	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("HEAD status=%d Cache-Control=%q", rec.Code, rec.Header().Get("Cache-Control"))
+	}
+	if len(events.got) != 0 {
+		t.Fatalf("HEAD recorded a read: %+v", events.got)
+	}
+	doJSON(t, h, "GET", pathAudit, "")
+	if len(events.got) != 1 {
+		t.Fatalf("GET after HEAD: %d events", len(events.got))
 	}
 }

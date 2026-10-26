@@ -1005,7 +1005,9 @@ actor is a member of `X` passes; a host that must refuse it checks membership in
 own policy. A "distinct approver" (two people for one grant) is a host workflow,
 not a helper: an invitation, or an approval record whose `operation_id` the
 Granter fences, consulted by the host policy inside `AllOf(RefuseSelfTarget,
-hostPolicy)`.
+hostPolicy)`. The comparison is byte-exact between the principal's `Type`/`ID`
+and the subject's: a host that maps principals into a different subject type
+namespace (principal `account:1` granted as subject `user:1`) writes its own check.
 
 ### Audit listing
 
@@ -1016,6 +1018,12 @@ authorization; compose a stricter check (step-up MFA) into it when the role gate
 is not enough. It requires `Services.Audit`, which `authorization.New` fills from
 `Repositories.Audit`; a gate without a reader fails `New` with
 `authorizationhttp.ErrAuditGateWithoutReader`.
+
+**`AuditGate` must admit global-history readers only.** Every filter pair is
+optional, so a caller who omits them lists all history across every resource and
+tenant. A gate that authorizes per resource (for example "may manage the
+`resource_id` in the query") is not a tenant boundary here; use the platform-admin
+or auditor gate.
 
 ```go
 authorization.WithRoleRoutes(authorizationhttp.RoleRoutes{
@@ -1037,7 +1045,9 @@ authorization.WithAuditReadObserver(func(ctx context.Context, ev authorizationht
 | `count` | `true` adds `total`, a full scan when unfiltered |
 | `order` | `occurred_at` only (`occurred_at:asc` or the default `:desc`) |
 
-Each pair is both-or-neither: one half alone is 400. The listing pages by cursor
+Each pair is both-or-neither: one half alone is 400. Every listing key may appear
+at most once (`resource_id=a&resource_id=b` is 400), so the gate and the handler
+can never read different values of one key. The listing pages by cursor
 only: `offset` is 400 with code `offset_not_supported`, and `q` is 400 (the audit
 listing declares no search fields). Items, newest first:
 
@@ -1048,7 +1058,8 @@ listing declares no search fields). Items, newest first:
 ```
 
 `occurred_at` is UTC RFC 3339 with nanoseconds; empty source fields are omitted.
-Every response carries `Cache-Control: no-store`. Reader errors map through
+Every response carries `Cache-Control: no-store`, set ahead of the gate so its
+401/403/step-up answers carry it too. Reader errors map through
 `web.RespondJSONDomainError` (`sdk.ErrUnavailable` is 503 `unavailable`).
 
 **Recording reads.** The pocket has no event rail. Each completed read emits one
@@ -1056,7 +1067,7 @@ Every response carries `Cache-Control: no-store`. Reader errors map through
 `WithAuditReadObserver` callback (also an `authorizationhttp` option for a
 hand-built adapter): identifiers and counts only, never records, never
 deduplicated. A refused or failed read emits nothing (the gate's 401/403 covers a
-denial). With an `AuditGate` and no observer, `New` logs one WARN in every mode,
+denial), and neither does a `HEAD`, whose body is discarded. With an `AuditGate` and no observer, `New` logs one WARN in every mode,
 `authorization: audit reads are not recorded; wire WithAuditReadObserver`, and
 does not refuse.
 
@@ -1123,8 +1134,19 @@ values, and values below the defaulted `PollInterval`, are `sdk.ErrInvalidInput`
 It is not part of the binding. Reading the period from the mirror means replicas
 sharing a mirror rebuild once per period between them, not once each. A backend
 that leaves `FullAt` zero falls back to each process's own last full publication
-(or its construction, so a restart does not rebuild at boot): every replica then
-rebuilds on its own clock, which is weaker. The memory backend reports `FullAt`.
+(or its construction, so a restart does not rebuild at boot but restarts the
+period): every replica then rebuilds on its own clock, which is weaker. The memory
+backend reports `FullAt`. Replicas that promote in the same poll window race:
+one publishes, and each other one gets one `ErrConflict` (`PollConflicts`) for that
+period and resumes deltas. That is expected; do not page on it.
+
+**A failed scheduled rebuild backs off.** When a promoted rebuild fails (it
+outlasts `MaxStaleness`, exceeds capacity, or the source or backend errors), the
+runtime counts it in `ScheduledRebuildFailures` and does not promote again for
+`min(FullRebuildEvery, tuplecache.ScheduledRebuildBackoff × PollInterval)`
+(8 intervals): the polls in between stay deltas, so revocations keep publishing.
+While scheduled rebuilds keep failing the replay bound is not met; a rising
+`ScheduledRebuildFailures` is the signal to alert on.
 A full rebuild discards anything the mirror holds that SQL does not, so the
 cadence bounds how long a fact written into Redis behind the relay's back can
 live. Pair it with the goredis store's integrity keys (see the
@@ -1135,7 +1157,14 @@ cannot publish.
 At shutdown cancel/join workers, close the runtime and drain requests before
 closing borrowed clients. `Stats`, `LastPoll` and `LastSuccessfulPoll` expose
 fallbacks, capacity failures, publication conflicts, timings and captured counts;
-`ScheduledRebuilds` and `LastFullRebuild` show the cadence.
+`ScheduledRebuilds`, `ScheduledRebuildFailures` and `LastFullRebuild` show the
+cadence.
+
+**Upgrade note.** `tuplecache.State` gained `FullAt`: an unkeyed literal
+(`State{binding, receipt}`) no longer compiles, and a custom `Backend` or test
+that compares a `State()` result with `==` against a constructed value now
+differs once the backend reports `FullAt`. Compare `Binding` and `Receipt`, as the
+bundled backends do.
 Measure SQL fallback and rebuild capacity alongside Redis latency.
 
 ## Access review

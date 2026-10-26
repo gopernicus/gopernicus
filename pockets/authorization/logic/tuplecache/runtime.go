@@ -18,6 +18,10 @@ import (
 // DefaultMaxStaleness is the revocation window when Policy.MaxStaleness is zero.
 const DefaultMaxStaleness = 5 * time.Second
 
+// ScheduledRebuildBackoff is how many PollIntervals a failed scheduled rebuild
+// waits, bounded by FullRebuildEvery, before the next promotion.
+const ScheduledRebuildBackoff = 8
+
 // Policy separates delivery freshness from tuple storage: tuples do not expire.
 // MaxStaleness bounds how long a revocation may remain unseen; zero selects
 // DefaultMaxStaleness. It is part of the binding, so every replica sharing an
@@ -28,7 +32,9 @@ const DefaultMaxStaleness = 5 * time.Second
 // does. A backend that leaves FullAt zero falls back to this process's own last
 // full publication, which every replica tracks separately. Negative values and
 // values below the defaulted PollInterval are invalid. It is not part of the
-// binding.
+// binding. After a promoted rebuild fails, polls stay deltas for
+// min(FullRebuildEvery, ScheduledRebuildBackoff×PollInterval) before the next
+// promotion, so revocations keep publishing while full rebuilds cannot.
 type Policy struct {
 	MaxStaleness     time.Duration
 	PollInterval     time.Duration
@@ -52,12 +58,13 @@ type PollStats struct {
 }
 
 // Stats counts this process's work. ScheduledRebuilds counts the full rebuilds
-// FullRebuildEvery promoted; LastFullRebuild is this process's last full
+// FullRebuildEvery promoted and published; ScheduledRebuildFailures counts the
+// promoted attempts that failed. LastFullRebuild is this process's last full
 // publication, zero before the first.
 type Stats struct {
 	Hits, Fallbacks, Publications, Rebuilds, PollFailures uint64
 	CapacityFallbacks, CapacityFailures, PollConflicts    uint64
-	ScheduledRebuilds                                     uint64
+	ScheduledRebuilds, ScheduledRebuildFailures           uint64
 	LastSuccessfulPoll, LastFullRebuild                   time.Time
 	LastPoll                                              PollStats
 }
@@ -74,8 +81,8 @@ type TupleCache struct {
 	closed, ready                                     atomic.Bool
 	hits, fallbacks, publications, rebuilds, failures atomic.Uint64
 	capacityFallbacks, capacityFailures, conflicts    atomic.Uint64
-	scheduled                                         atomic.Uint64
-	lastSuccess, lastFull                             atomic.Int64
+	scheduled, scheduledFailures                      atomic.Uint64
+	lastSuccess, lastFull, scheduledRetryAt           atomic.Int64
 	lastPoll                                          atomic.Pointer[PollStats]
 	created                                           time.Time
 }
@@ -152,6 +159,7 @@ func (c *TupleCache) Stats() Stats {
 		Rebuilds: c.rebuilds.Load(), PollFailures: c.failures.Load(),
 		CapacityFallbacks: c.capacityFallbacks.Load(), CapacityFailures: c.capacityFailures.Load(),
 		PollConflicts: c.conflicts.Load(), ScheduledRebuilds: c.scheduled.Load(),
+		ScheduledRebuildFailures: c.scheduledFailures.Load(),
 	}
 	if nanos := c.lastSuccess.Load(); nanos != 0 {
 		stats.LastSuccessfulPoll = time.Unix(0, nanos)
@@ -194,11 +202,15 @@ func (c *TupleCache) poll(ctx context.Context, rebuild bool) (err error) {
 	}
 	report := PollStats{StartedAt: time.Now()}
 	stage := "state"
-	succeeded := false
+	succeeded, scheduled := false, false
 	defer func() {
 		report.Duration = time.Since(report.StartedAt)
 		if !succeeded {
 			c.failures.Add(1)
+			if scheduled {
+				c.scheduledFailures.Add(1)
+				c.scheduledRetryAt.Store(time.Now().Add(c.scheduledBackoff()).UnixNano())
+			}
 			report.FailureStage = stage
 			if errors.Is(err, ErrCapacity) {
 				c.capacityFailures.Add(1)
@@ -222,7 +234,7 @@ func (c *TupleCache) poll(ctx context.Context, rebuild bool) (err error) {
 	if before.Binding != "" && before.Binding != c.Binding() {
 		return ErrBinding
 	}
-	scheduled := !rebuild && c.fullRebuildDue(before)
+	scheduled = !rebuild && c.fullRebuildDue(before)
 	rebuild = rebuild || scheduled
 	started := time.Now()
 	stage = "snapshot"
@@ -302,6 +314,9 @@ func (c *TupleCache) fullRebuildDue(before State) bool {
 	if c.policy.FullRebuildEvery == 0 || before.Receipt == "" {
 		return false
 	}
+	if retryAt := c.scheduledRetryAt.Load(); retryAt != 0 && time.Now().UnixNano() < retryAt {
+		return false
+	}
 	last := before.FullAt
 	if last.IsZero() {
 		last = c.created
@@ -310,6 +325,10 @@ func (c *TupleCache) fullRebuildDue(before State) bool {
 		}
 	}
 	return time.Since(last) >= c.policy.FullRebuildEvery
+}
+
+func (c *TupleCache) scheduledBackoff() time.Duration {
+	return min(c.policy.FullRebuildEvery, ScheduledRebuildBackoff*c.policy.PollInterval)
 }
 
 var _ tuples.Snapshotter = (*TupleCache)(nil)

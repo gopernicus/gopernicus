@@ -549,6 +549,73 @@ func TestFullRebuildEveryWithoutFullAtUsesTheProcessClock(t *testing.T) {
 	})
 }
 
+// slowFull is a source whose full snapshot outlasts MaxStaleness while slow.
+type slowFull struct {
+	*source
+	slow bool
+}
+
+func (s *slowFull) Snapshot(ctx context.Context, receipt string) (tuplecache.Snapshot, error) {
+	if receipt == "" && s.slow {
+		time.Sleep(1500 * time.Millisecond)
+	}
+	return s.source.Snapshot(ctx, receipt)
+}
+
+func TestFailedScheduledRebuildBacksOffSoDeltasKeepPublishing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		base := &source{store: memory.New(), tuples: []tuplefacts.Tuple{grant}}
+		if err := base.store.Tuples().ApplyTuples(t.Context(), tuplefacts.Changes{Add: base.tuples}); err != nil {
+			t.Fatal(err)
+		}
+		s := &slowFull{source: base}
+		// PollInterval defaults to 250ms, so the backoff is min(2s, 8×250ms) = 2s.
+		c, err := tuplecache.New(s, memory.NewTupleCache(), tuplecache.WithPolicy(tuplecache.Policy{MaxStaleness: time.Second, FullRebuildEvery: 2 * time.Second}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		poll(t, c)
+		s.slow = true
+		time.Sleep(2 * time.Second)
+		revoke(t, base)
+		if err := c.Poll(t.Context()); !errors.Is(err, tuplecache.ErrUnavailable) {
+			t.Fatalf("promoted rebuild over MaxStaleness: %v", err)
+		}
+		if st := c.Stats(); st.ScheduledRebuildFailures != 1 || st.ScheduledRebuilds != 0 {
+			t.Fatalf("failure not counted: %+v", st)
+		}
+		time.Sleep(250 * time.Millisecond)
+		poll(t, c) // inside the backoff: a delta
+		if len(base.pending) != 0 {
+			t.Fatal("revocation delta was not published during the backoff")
+		}
+		durable := base.durable
+		allowed(t, c, false)
+		if base.durable != durable {
+			t.Fatal("revocation was not served from the mirror")
+		}
+		time.Sleep(time.Second)
+		poll(t, c) // still inside the backoff
+		if st := c.Stats(); st.ScheduledRebuildFailures != 1 {
+			t.Fatalf("promoted again inside the backoff: %+v", st)
+		}
+		time.Sleep(time.Second)
+		if err := c.Poll(t.Context()); !errors.Is(err, tuplecache.ErrUnavailable) {
+			t.Fatalf("promotion after the backoff: %v", err)
+		}
+		if st := c.Stats(); st.ScheduledRebuildFailures != 2 {
+			t.Fatalf("second failure not counted: %+v", st)
+		}
+		s.slow = false
+		time.Sleep(2 * time.Second)
+		poll(t, c)
+		if st := c.Stats(); st.ScheduledRebuilds != 1 || st.ScheduledRebuildFailures != 2 {
+			t.Fatalf("recovered rebuild: %+v", st)
+		}
+	})
+}
+
 // renamedSource is a source whose identity row changed, e.g. after a restore.
 type renamedSource struct{ *source }
 

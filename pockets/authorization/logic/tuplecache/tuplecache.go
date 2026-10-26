@@ -77,7 +77,8 @@ type Source interface {
 // No operation may expose a partially applied batch or partially built mirror.
 // A backend holds one independent mirror per binding: State addresses binding,
 // Read addresses expected.Binding and Publish addresses next.Binding. The host
-// owns the backend's lifecycle.
+// owns the backend's lifecycle. Backends compare mirrors by Binding and Receipt
+// only: the runtime passes State results, FullAt included, back as expected.
 type Backend interface {
 	// State returns the mirror published under binding, or the zero State when
 	// none exists. It returns even an expired receipt for recovery; it does not

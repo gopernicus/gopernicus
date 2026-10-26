@@ -23,6 +23,13 @@ const (
 // audit listing.
 const codeOffsetNotSupported = "offset_not_supported"
 
+// auditQueryKeys are the keys the audit listing reads. Each may appear once, so
+// a host gate and this handler can never read different values of one key.
+var auditQueryKeys = []string{
+	queryResourceType, queryResourceID, querySubjectType, querySubjectID, queryActorType, queryActorID,
+	list.QueryKeyLimit, list.QueryKeyCursor, list.QueryKeyOffset, list.QueryKeyCount, list.QueryKeySearch, list.QueryKeyOrder,
+}
+
 // AuditReadEvent describes one completed audit listing read. Filter holds the
 // exact pairs the caller supplied; Limit is the resolved page size and Returned
 // the number of records written. It carries identifiers only, never records.
@@ -33,7 +40,8 @@ type AuditReadEvent struct {
 	Returned  int
 }
 
-// AuditReadObserver receives every completed audit listing read. It runs on
+// AuditReadObserver receives every completed audit listing read; a HEAD
+// request, whose body is discarded, is not a read. It runs on
 // the request path and must not block; the response does not wait on durable
 // recording beyond what the observer itself does.
 type AuditReadObserver func(context.Context, AuditReadEvent)
@@ -91,6 +99,9 @@ func (h *Adapter) listAudit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !singleValuedQuery(w, r) {
+		return
+	}
 	var filter audit.Filter
 	if filter.ResourceType, filter.ResourceID, ok = optionalPair(w, r, queryResourceType, queryResourceID); !ok {
 		return
@@ -114,10 +125,22 @@ func (h *Adapter) listAudit(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONDomainError(w, err)
 		return
 	}
-	if h.auditRead != nil {
+	if h.auditRead != nil && r.Method != http.MethodHead {
 		h.auditRead(r.Context(), AuditReadEvent{Principal: actor, Filter: filter, Limit: req.Limit, Returned: len(page.Items)})
 	}
 	web.RespondJSONOK(w, newPageResponse(page, newAuditRecordResponse))
+}
+
+// singleValuedQuery answers a named 400 when a listing key is repeated.
+func singleValuedQuery(w http.ResponseWriter, r *http.Request) bool {
+	q := r.URL.Query()
+	for _, key := range auditQueryKeys {
+		if len(q[key]) > 1 {
+			web.RespondJSONError(w, web.ErrBadRequest(key+" may appear at most once"))
+			return false
+		}
+	}
+	return true
 }
 
 // optionalPair reads two query values that are both empty (no filter) or both

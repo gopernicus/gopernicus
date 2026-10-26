@@ -193,7 +193,7 @@ func (a *Adapter) Register(r pockets.RouteRegistrar) error {
 		r.Handle("GET", pathRolesByResource, a.listByResource, a.gate)
 	}
 	if a.AuditRouteEnabled() {
-		r.Handle("GET", pathAudit, a.listAudit, a.auditGate)
+		r.Handle("GET", pathAudit, a.listAudit, web.NoStore(), a.auditGate)
 	}
 	return nil
 }
@@ -212,11 +212,12 @@ func (a *Adapter) RolesBySubject() http.Handler  { return a.handler(a.listBySubj
 func (a *Adapter) RolesByResource() http.Handler { return a.handler(a.listByResource) }
 
 // Audit returns the gated audit listing, or a 404 handler without an AuditGate.
+// Cache-Control: no-store is set ahead of the gate, so its denials carry it too.
 func (a *Adapter) Audit() http.Handler {
 	if !a.AuditRouteEnabled() {
 		return http.NotFoundHandler()
 	}
-	return a.auditGate(http.HandlerFunc(a.listAudit))
+	return web.NoStore()(a.auditGate(http.HandlerFunc(a.listAudit)))
 }
 func typedNil(v any) bool {
 	if v == nil {
