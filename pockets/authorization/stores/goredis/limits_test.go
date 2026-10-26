@@ -113,7 +113,7 @@ func TestTupleCacheDeltaCapacityIsAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 	changes := []tuplecache.Change{{Before: &row}, {Before: &row}}
-	payload, fields, err := changesWire(changes, defaultMaxMutationBytes)
+	payload, fields, err := changesWire(changes, defaultMaxMutationBytes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,8 +124,9 @@ func TestTupleCacheDeltaCapacityIsAtomic(t *testing.T) {
 	before := client.HGetAll(ctx, keyFor(t, c, "store")).Val()
 	// The script independently rejects incoming bytes before decoding them,
 	// even if the caller bypasses the Go encoder with invalid JSON.
+	epoch := client.HGet(ctx, keyFor(t, c, "store"), "!epoch").Val()
 	status, err := deltaScript.Run(ctx, client, []string{keyFor(t, c, "store")}, state.Binding, state.Receipt,
-		next.Binding, next.Receipt, time.Now().Add(time.Minute).UnixMilli(), "not-json", 2).Int()
+		next.Binding, next.Receipt, time.Now().Add(time.Minute).UnixMilli(), "not-json", 2, 0, epoch, "").Int()
 	if err != nil || status != -2 {
 		t.Fatalf("incoming JSON preflight: %d/%v", status, err)
 	}
@@ -147,7 +148,7 @@ func TestTupleCacheDeltaCapacityIsAtomic(t *testing.T) {
 	if err := limited.Publish(ctx, state, next, tuplecache.Snapshot{Changes: changes}, time.Minute); !errors.Is(err, tuplecache.ErrCapacity) {
 		t.Fatalf("oversized malformed set: %v", err)
 	}
-	if got, err := c.State(ctx, "store"); err != nil || got != state {
+	if got, err := c.State(ctx, "store"); err != nil || !sameMirror(got, state) {
 		t.Fatalf("capacity cleared readiness: %+v/%v", got, err)
 	}
 	if err := client.HSet(ctx, keyFor(t, c, "store"), field, before[field]).Err(); err != nil {
@@ -171,7 +172,7 @@ func TestTupleCacheFullCapacityAndChunking(t *testing.T) {
 	for i := range tuples {
 		tuples[i] = tuple("space", fmt.Sprintf("%03d", i), "viewer", "user", fmt.Sprintf("%03d", i), "")
 	}
-	sets, err := fullSets(tuples, defaultMaxMutationBytes)
+	sets, err := fullSets(tuples, defaultMaxMutationBytes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,12 +224,39 @@ func TestTupleCacheFullCapacityAndChunking(t *testing.T) {
 	}
 }
 
+// A keyed fact costs 25 bytes of JSON punctuation plus its 22-byte tag; the
+// per-field bound counts it exactly.
+func TestTupleCacheKeyedFieldSizeIsExact(t *testing.T) {
+	row := tuple("space", "a", "viewer", "user", "alice", "")
+	other := tuple("space", "a", "viewer", "user", "bob", "")
+	signer := newFactSigner(keyA, "store", "epoch")
+	sets, err := fullSets([]tuplefacts.Tuple{row, other}, defaultMaxMutationBytes, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	field := setField(forward(row))
+	encoded, err := json.Marshal(sets[field])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sets[field]) != 2 || len(sets[field][0]) != 8 {
+		t.Fatalf("keyed set: %v", sets[field])
+	}
+	exact := len(field) + len(encoded)
+	if _, err := fullSets([]tuplefacts.Tuple{row, other}, exact, signer); err != nil {
+		t.Fatalf("exact keyed field: %v", err)
+	}
+	if _, err := fullSets([]tuplefacts.Tuple{row, other}, exact-1, signer); !errors.Is(err, tuplecache.ErrCapacity) {
+		t.Fatalf("one byte under the keyed field: %v", err)
+	}
+}
+
 func TestTupleCacheOversizedInputEncoding(t *testing.T) {
 	row := tuple("space", strings.Repeat("x", 100000), "viewer", "user", "alice", "")
-	if _, _, err := changesWire([]tuplecache.Change{{After: &row}}, 100); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, _, err := changesWire([]tuplecache.Change{{After: &row}}, 100, nil); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("huge identifier delta: %v", err)
 	}
-	if _, err := fullSets([]tuplefacts.Tuple{row}, 100); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, err := fullSets([]tuplefacts.Tuple{row}, 100, nil); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("huge identifier full: %v", err)
 	}
 	row.Scope.ID = "a"
@@ -236,7 +264,7 @@ func TestTupleCacheOversizedInputEncoding(t *testing.T) {
 	for i := range changes {
 		changes[i].After = &row
 	}
-	if _, _, err := changesWire(changes, 1000); !errors.Is(err, tuplecache.ErrCapacity) {
+	if _, _, err := changesWire(changes, 1000, nil); !errors.Is(err, tuplecache.ErrCapacity) {
 		t.Fatalf("huge changes batch: %v", err)
 	}
 }

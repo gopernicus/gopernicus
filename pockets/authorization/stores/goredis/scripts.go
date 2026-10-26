@@ -30,21 +30,28 @@ end
 `
 
 var (
-	stateScript = redis.NewScript(metadataLua + `
+	// headerScript returns the stored header and the server time in ms:
+	// {binding, receipt, until, epoch, epoch_at, mac, now}. Malformed core
+	// metadata reads as an absent mirror.
+	headerScript = redis.NewScript(metadataLua + `
 local binding, receipt = state(KEYS[1])
-return {binding, receipt}
+if binding == '' then return {'', '', '', '', '', '', now_ms()} end
+local m = redis.call('HMGET', KEYS[1], '!until', '!epoch', '!epoch_at', '!mac')
+return {binding, receipt, m[1] or '', m[2] or '', m[3] or '', m[4] or '', now_ms()}
 `)
 	readScript = redis.NewScript(metadataLua + `
 local binding, receipt, until_ms = state(KEYS[1])
 local remaining = until_ms - now_ms()
 if binding == '' or binding ~= ARGV[1] or receipt ~= ARGV[2] or remaining <= 0 then return {0} end
+local m = redis.call('HMGET', KEYS[1], '!until', '!epoch', '!epoch_at', '!mac')
 local bytes = 0
 for i = 4, #ARGV do
   local size = redis.call('HSTRLEN', KEYS[1], ARGV[i])
   bytes = bytes + math.max(size, 2)
   if bytes > tonumber(ARGV[3]) then return {-2} end
 end
-local result = {remaining}
+-- The header travels with the sets so Go verifies exactly what it reads.
+local result = {remaining, m[1] or '', m[2] or '', m[3] or '', m[4] or ''}
 for i = 4, #ARGV do
   result[#result+1] = redis.call('HGET', KEYS[1], ARGV[i]) or '[]'
 end
@@ -65,11 +72,18 @@ redis.call('HSET', KEYS[1], unpack(ARGV))
 return 1
 `)
 	replaceScript = redis.NewScript(metadataLua + `
-if not matches(KEYS[1], ARGV[1], ARGV[2]) then return 0 end
+if not matches(KEYS[1], ARGV[1], ARGV[2]) then
+  -- A keyed mirror whose header failed verification in Go is replaced only
+  -- while it still holds the exact receipt and MAC Go observed.
+  if ARGV[1] ~= '' or ARGV[10] ~= '1' then return 0 end
+  local m = redis.call('HMGET', KEYS[1], '!receipt', '!mac')
+  if (m[1] or '') ~= ARGV[11] or (m[2] or '') ~= ARGV[12] then return 0 end
+end
 local deadline = tonumber(ARGV[5])
 if not deadline or deadline <= now_ms() then return -1 end
 if redis.call('TYPE', KEYS[2]).ok ~= 'hash' or redis.call('HGET', KEYS[2], '!prepared') ~= '1' then return -1 end
-redis.call('HSET', KEYS[2], '!schema', '2', '!binding', ARGV[3], '!receipt', ARGV[4], '!until', ARGV[5])
+redis.call('HSET', KEYS[2], '!schema', '2', '!binding', ARGV[3], '!receipt', ARGV[4], '!until', ARGV[5], '!epoch', ARGV[7], '!epoch_at', ARGV[8])
+if ARGV[9] ~= '' then redis.call('HSET', KEYS[2], '!mac', ARGV[9]) end
 redis.call('HDEL', KEYS[2], '!prepared')
 redis.call('RENAME', KEYS[2], KEYS[1])
 retain(KEYS[1], tonumber(ARGV[6]))
@@ -79,13 +93,16 @@ return 1
 if not matches(KEYS[1], ARGV[1], ARGV[2]) then return 0 end
 local binding = state(KEYS[1])
 if binding == '' then return -1 end
+-- Go tagged the incoming facts and MAC'd the header for this epoch.
+if (redis.call('HGET', KEYS[1], '!epoch') or '') ~= ARGV[9] then return 0 end
+local keyed = ARGV[10] ~= ''
 local deadline = tonumber(ARGV[5])
 if not deadline or deadline <= now_ms() then return -1 end
 -- Bound incoming operations and distinct existing fields before decoding either.
 -- Field names are passed separately so no JSON decode is needed for this check.
 local max_bytes, bytes, allowed = tonumber(ARGV[7]), #ARGV[6], {}
 if bytes > max_bytes then return -2 end
-for i = 9, #ARGV do
+for i = 11, #ARGV do
   if not allowed[ARGV[i]] then
     bytes = bytes + redis.call('HSTRLEN', KEYS[1], ARGV[i])
     if bytes > max_bytes then return -2 end
@@ -108,16 +125,24 @@ local function array(a)
   end
   return true
 end
+-- A keyed fact carries its 22-character tag as an eighth element.
+local width = keyed and 8 or 7
 local function valid_tuple(t)
-  if not array(t) or #t ~= 7 or (t[1] ~= '1' and t[1] ~= '2') then return false end
+  if not array(t) or #t ~= width or (t[1] ~= '1' and t[1] ~= '2') then return false end
   if t[1] == '1' and (t[2] ~= '' or t[3] ~= '') then return false end
   for i = 2, 7 do
     if type(t[i]) ~= 'string' or #t[i] > 342 or not encoded(t[i], i == 4 or i == 5 or i == 6 or (t[1] == '2' and i <= 3)) then return false end
   end
+  if keyed and (type(t[8]) ~= 'string' or #t[8] ~= 22 or not encoded(t[8], true)) then return false end
   return true
 end
 local function fields(t)
   return 'f:' .. cjson.encode({t[1], t[2], t[3], t[4]}), 'r:' .. cjson.encode({t[5], t[6], t[7]})
+end
+-- Identity excludes the tag: an add replaces the stored tag and a remove
+-- matches whatever tag is stored.
+local function identity_of(t)
+  return cjson.encode({t[1], t[2], t[3], t[4], t[5], t[6], t[7]})
 end
 local operations = cjson.decode(ARGV[6])
 if not array(operations) then return -1 end
@@ -134,7 +159,7 @@ local function load_set(field)
       if not valid_tuple(fact) then error('invalid canonical tuple') end
       local f, r = fields(fact)
       if field ~= f and field ~= r then error('misplaced canonical tuple') end
-      local identity = cjson.encode(fact)
+      local identity = identity_of(fact)
       if facts[identity] then error('duplicate canonical tuple') end
       facts[identity] = fact
     end
@@ -150,7 +175,7 @@ for _, op in ipairs(operations) do
   local forward, reverse = fields(op.tuple)
   if op.forward ~= forward or op.reverse ~= reverse or not allowed[forward] or not allowed[reverse] then return -1 end
   local f, r = load_set(forward), load_set(reverse)
-  local identity = cjson.encode(op.tuple)
+  local identity = identity_of(op.tuple)
   if op.remove then f[identity], r[identity] = nil, nil
   else f[identity], r[identity] = op.tuple, op.tuple end
 end
@@ -167,7 +192,12 @@ if deadline <= now_ms() then return -1 end
 redis.call('HDEL', KEYS[1], '!schema')
 for _, pair in ipairs(values) do redis.call('HSET', KEYS[1], pair[1], pair[2]) end
 for _, field in ipairs(deleted) do redis.call('HDEL', KEYS[1], field) end
-redis.call('HSET', KEYS[1], '!schema', '2', '!binding', ARGV[3], '!receipt', ARGV[4], '!until', ARGV[5])
+local meta = {'!schema', '2', '!binding', ARGV[3], '!receipt', ARGV[4], '!until', ARGV[5]}
+if keyed then
+  meta[#meta+1] = '!mac'
+  meta[#meta+1] = ARGV[10]
+end
+redis.call('HSET', KEYS[1], unpack(meta))
 retain(KEYS[1], tonumber(ARGV[8]))
 return 1
 `)
