@@ -3,14 +3,14 @@
 // module graph (the load-bearing opt-out property). It owns the SQL; the HOST owns its database lifecycle. It is the
 // dialect sibling of pockets/authentication/stores/turso: same surface plus the
 // Postgres-only WithSchema option — SQLite has no schemas — same migration version
-// set (0001–0026 with 0017 absent, twenty tables backing the Repositories bundle; 0014 adds the
+// set (0001–0027 with 0017 absent, twenty-one tables backing the Repositories bundle; 0014 adds the
 // account-lifecycle columns to users rather than a table, and auth owns no
 // delivery table), same port semantics — a host switches dialect by one import +
 // one Open call. Secrets are persisted as digests, never plaintext (session
 // refresh-token / challenge / api-key / invitation hashes). Repositories probes
 // every always-required table at construction and returns an error naming a missing
-// one (see Repositories); the passkey (0025) and TOTP (0026) tables are probed only
-// when the host wires those factors, through the stores' ProbeSchema; the contractual keyset id columns carry per-column
+// one (see Repositories); the passkey (0025), TOTP (0026) and service-account status (0027) tables
+// are probed only when the host wires those capabilities, through the stores' ProbeSchema; the contractual keyset id columns carry per-column
 // COLLATE "C" for byte-order pagination parity (see the migrations).
 //
 // Migrations follow the scaffold model (matching pockets/authentication/stores/turso):
@@ -101,7 +101,9 @@ var probeTables = append(append(append([]string{}, legacyProbeTables...), oauthP
 // (totp_credentials, recovery_codes): passkeys and TOTP are the host's opt-in,
 // and the bundle's passkey and TOTP stores implement passkey.SchemaProber and
 // totp.SchemaProber, which the pocket calls only under WithPasskeys and
-// WithTOTP.
+// WithTOTP. Nor 0027 (service_account_status): the pocket calls
+// ServiceAccountStatusStore.ProbeSchema only under
+// AdministrationConfig.ServiceAccountStatus.
 //
 // Last it probes the runtime role's posture on AuditTables under the
 // RuntimeMode db was opened with (pgxdb.DB.ProbeAppendOnly): in production it
@@ -189,6 +191,12 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repos
 		// Never probed here: 0026 is required only when the host wires TOTP, and
 		// the pocket then asks through TOTPStore.ProbeSchema.
 		TOTP: NewTOTPStore(db, opts...),
+		// The fleet-wide revocation needs no schema change (SOC 2 S4d).
+		GlobalSessions: oauth2Store,
+		// Never probed here: 0027 is required only when the host sets
+		// AdministrationConfig.ServiceAccountStatus, and the pocket then asks
+		// through ServiceAccountStatusStore.ProbeSchema.
+		ServiceAccountStatus: NewServiceAccountStatusStore(db, opts...),
 	}, nil
 }
 

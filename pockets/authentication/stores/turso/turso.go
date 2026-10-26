@@ -73,7 +73,9 @@ var externalProbeTables = []string{"external_subjects"}
 // probes 0025 (passkey_credentials) or 0026 (totp_credentials, recovery_codes):
 // passkeys and TOTP are the host's opt-in, and the bundle's passkey and TOTP
 // stores implement passkey.SchemaProber and totp.SchemaProber, which the pocket
-// calls only under WithPasskeys and WithTOTP.
+// calls only under WithPasskeys and WithTOTP. Nor 0027 (service_account_status):
+// the pocket calls ServiceAccountStatusStore.ProbeSchema only under
+// AdministrationConfig.ServiceAccountStatus.
 // Last it checks the 0022 immutability
 // triggers (AuditTables) under the RuntimeMode db was opened with, logging a
 // WARN when they are missing or altered.
@@ -147,6 +149,12 @@ func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error
 		// Never probed here: 0026 is required only when the host wires TOTP, and
 		// the pocket then asks through TOTPStore.ProbeSchema.
 		TOTP: NewTOTPStore(db),
+		// The fleet-wide revocation needs no schema change (SOC 2 S4d).
+		GlobalSessions: oauthStore,
+		// Never probed here: 0027 is required only when the host sets
+		// AdministrationConfig.ServiceAccountStatus, and the pocket then asks
+		// through ServiceAccountStatusStore.ProbeSchema.
+		ServiceAccountStatus: NewServiceAccountStatusStore(db),
 	}, nil
 }
 

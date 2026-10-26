@@ -24,7 +24,10 @@ type APIKeyStore struct {
 	qualified
 }
 
-var _ apikey.APIKeyRepository = (*APIKeyStore)(nil)
+var (
+	_ apikey.APIKeyRepository = (*APIKeyStore)(nil)
+	_ apikey.FilteredLister   = (*APIKeyStore)(nil)
+)
 
 // NewAPIKeyStore returns an APIKeyStore backed by db.
 // It panics if db is nil; the caller owns the database lifecycle.
@@ -122,6 +125,47 @@ func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID
 	q := pgxdb.ListQuery[apiKeyRow]{
 		BaseSQL:      `SELECT ` + apiKeyColumns + ` FROM ` + s.table(apiKeysTable) + ` WHERE service_account_id = @service_account_id`,
 		Args:         pgx.NamedArgs{"service_account_id": serviceAccountID},
+		OrderFields:  apikey.OrderFields,
+		DefaultOrder: apikey.DefaultOrder,
+		SearchFields: apikey.SearchFields,
+		PK:           "id",
+		OrderValueOf: func(r apiKeyRow, _ string) any { return r.CreatedAt },
+		PKOf:         func(r apiKeyRow) string { return r.ID },
+	}
+	page, err := pgxdb.List(ctx, s.db, q, req)
+	if err != nil {
+		return list.Page[apikey.APIKey]{}, err
+	}
+	return list.MapPage(page, apiKeyRow.toDomain), nil
+}
+
+// ListByServiceAccountFiltered is ListByServiceAccount narrowed by f in SQL,
+// matching apikey.Filter.Matches exactly: revoked takes precedence, and a key
+// whose expires_at is at or before f.Now is expired. An invalid f →
+// sdk.ErrInvalidInput.
+func (s *APIKeyStore) ListByServiceAccountFiltered(ctx context.Context, serviceAccountID string, f apikey.Filter, req list.Request) (list.Page[apikey.APIKey], error) {
+	if err := f.Validate(); err != nil {
+		return list.Page[apikey.APIKey]{}, err
+	}
+	base := `SELECT ` + apiKeyColumns + ` FROM ` + s.table(apiKeysTable) + ` WHERE service_account_id = @service_account_id`
+	args := pgx.NamedArgs{"service_account_id": serviceAccountID}
+	if f.NeverExpires {
+		base += ` AND expires_at IS NULL`
+	}
+	switch f.Status {
+	case apikey.StatusActive:
+		base += ` AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > @now)`
+	case apikey.StatusExpired:
+		base += ` AND revoked_at IS NULL AND expires_at <= @now`
+	case apikey.StatusRevoked:
+		base += ` AND revoked_at IS NOT NULL`
+	}
+	if f.Status == apikey.StatusActive || f.Status == apikey.StatusExpired {
+		args["now"] = f.Now.UTC()
+	}
+	q := pgxdb.ListQuery[apiKeyRow]{
+		BaseSQL:      base,
+		Args:         args,
 		OrderFields:  apikey.OrderFields,
 		DefaultOrder: apikey.DefaultOrder,
 		SearchFields: apikey.SearchFields,

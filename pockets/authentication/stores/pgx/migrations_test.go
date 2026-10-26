@@ -55,6 +55,8 @@ var canonicalMigrations = []string{
 	"0025_passkey_credentials.sql",
 	// SOC 2 S4c: the TOTP credential and recovery-code tables.
 	"0026_totp.sql",
+	// SOC 2 S4d: the service-account status table.
+	"0027_service_account_status.sql",
 }
 
 // expectedTables are every CREATE TABLE the canonical set must define.
@@ -76,6 +78,7 @@ var expectedTables = []string{
 	"external_subjects",
 	"passkey_credentials",
 	"totp_credentials", "recovery_codes",
+	"service_account_status",
 }
 
 // expectedIndexes are the auth-v3 indexes AV3-2.1 lands: the identifier claim /

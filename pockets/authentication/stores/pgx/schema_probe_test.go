@@ -45,7 +45,7 @@ func probeDropAll(t *testing.T, db *pgxdb.DB) {
 		dropSchema(t, db, schema)
 		return
 	}
-	q := "DROP TABLE IF EXISTS " + strings.Join(append(append(append([]string{}, probeTables...), passkeyProbeTables...), totpProbeTables...), ", ") + ", schema_migrations CASCADE"
+	q := "DROP TABLE IF EXISTS " + strings.Join(append(append(append([]string{}, probeTables...), passkeyProbeTables...), totpProbeTables...), ", ") + ", " + serviceAccountStatusTable + ", schema_migrations CASCADE"
 	if _, err := db.Exec(context.Background(), q); err != nil {
 		t.Fatalf("drop schema: %v", err)
 	}
