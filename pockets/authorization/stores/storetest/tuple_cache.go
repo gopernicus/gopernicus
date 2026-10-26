@@ -29,12 +29,14 @@ func RunTupleCacheBackend(t *testing.T, factory func(*testing.T) tuplecache.Back
 			t.Fatal(err)
 		}
 	}
+	// state drops FullAt, which only State reports; it is checked on its own below.
 	state := func(t *testing.T, b tuplecache.Backend, binding string) tuplecache.State {
 		t.Helper()
 		got, err := b.State(ctx, binding)
 		if err != nil {
 			t.Fatal(err)
 		}
+		got.FullAt = time.Time{}
 		return got
 	}
 
@@ -109,6 +111,54 @@ func RunTupleCacheBackend(t *testing.T, factory func(*testing.T) tuplecache.Back
 		delta := tuplecache.Snapshot{Changes: []tuplecache.Change{{ID: "1", After: &alice}}}
 		if err := b.Publish(ctx, tuplecache.State{}, a1, delta, time.Minute); !errors.Is(err, tuplecache.ErrUnavailable) {
 			t.Fatalf("delta without a mirror: %v", err)
+		}
+	})
+	t.Run("UnstrippedStateAddressesTheMirror", func(t *testing.T) {
+		b := factory(t)
+		publish(t, b, tuplecache.State{}, a1, full(alice))
+		current, err := b.State(ctx, a1.Binding)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sets, err := b.Read(ctx, current, []tuplecache.SetKey{forward}); err != nil || len(sets) != 1 || !slices.Equal(sets[0], []tuples.Tuple{alice}) {
+			t.Fatalf("read with the State result: %v/%v", sets, err)
+		}
+		a2 := tuplecache.State{Binding: a1.Binding, Receipt: "a2"}
+		publish(t, b, current, a2, tuplecache.Snapshot{Changes: []tuplecache.Change{{ID: "1", After: &bob}}})
+		if got := state(t, b, a1.Binding); got != a2 {
+			t.Fatalf("delta with the State result as expected: %+v", got)
+		}
+	})
+	t.Run("FullAtMarksFullPublications", func(t *testing.T) {
+		b := factory(t)
+		publish(t, b, tuplecache.State{}, a1, full(alice))
+		first, err := b.State(ctx, a1.Binding)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first.FullAt.IsZero() {
+			t.Skip("backend does not report FullAt")
+		}
+		a2 := tuplecache.State{Binding: a1.Binding, Receipt: "a2"}
+		publish(t, b, a1, a2, tuplecache.Snapshot{Changes: []tuplecache.Change{{ID: "1", After: &bob}}})
+		if got, err := b.State(ctx, a1.Binding); err != nil || !got.FullAt.Equal(first.FullAt) {
+			t.Fatalf("delta moved FullAt: %v -> %+v/%v", first.FullAt, got, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+		a3 := tuplecache.State{Binding: a1.Binding, Receipt: "a3"}
+		publish(t, b, a2, a3, full(alice))
+		third, err := b.State(ctx, a1.Binding)
+		if err != nil || !third.FullAt.After(first.FullAt) {
+			t.Fatalf("full publication kept FullAt: %v -> %+v/%v", first.FullAt, third, err)
+		}
+		// A next differing from expected only in FullAt is the same receipt:
+		// changes still require a new one.
+		same := tuplecache.State{Binding: third.Binding, Receipt: third.Receipt, FullAt: third.FullAt.Add(time.Hour)}
+		if err := b.Publish(ctx, third, same, full(bob), time.Minute); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("same receipt, different FullAt: %v", err)
+		}
+		if got := state(t, b, a1.Binding); got != a3 {
+			t.Fatalf("refused publication changed the mirror: %+v", got)
 		}
 	})
 	t.Run("InvalidBindingIsInvalidInput", func(t *testing.T) {

@@ -433,6 +433,189 @@ func TestDifferentFreshnessPoliciesUseSeparateMirrors(t *testing.T) {
 	})
 }
 
+// noFullAt is a backend that does not report State.FullAt.
+type noFullAt struct{ tuplecache.Backend }
+
+func (b noFullAt) State(ctx context.Context, binding string) (tuplecache.State, error) {
+	state, err := b.Backend.State(ctx, binding)
+	state.FullAt = time.Time{}
+	return state, err
+}
+
+func TestFullRebuildEveryValidation(t *testing.T) {
+	s := &source{store: memory.New()}
+	for _, policy := range []tuplecache.Policy{
+		{MaxStaleness: time.Second, FullRebuildEvery: -1},
+		{MaxStaleness: time.Second, FullRebuildEvery: 100 * time.Millisecond}, // below the defaulted 250ms PollInterval
+		{MaxStaleness: time.Second, PollInterval: 500 * time.Millisecond, FullRebuildEvery: 400 * time.Millisecond},
+	} {
+		if _, err := tuplecache.New(s, memory.NewTupleCache(), tuplecache.WithPolicy(policy)); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("%+v: %v", policy, err)
+		}
+	}
+	for _, every := range []time.Duration{0, 250 * time.Millisecond, time.Hour} {
+		c, err := tuplecache.New(s, memory.NewTupleCache(), tuplecache.WithPolicy(tuplecache.Policy{MaxStaleness: time.Second, FullRebuildEvery: every}))
+		if err != nil {
+			t.Fatalf("FullRebuildEvery %v: %v", every, err)
+		}
+		_ = c.Close()
+	}
+	// FullRebuildEvery is not part of the binding.
+	a, _ := tuplecache.New(s, memory.NewTupleCache(), tuplecache.WithPolicy(tuplecache.Policy{MaxStaleness: time.Second}))
+	b, _ := tuplecache.New(s, memory.NewTupleCache(), tuplecache.WithPolicy(tuplecache.Policy{MaxStaleness: time.Second, FullRebuildEvery: time.Hour}))
+	if a.Binding() != b.Binding() {
+		t.Fatalf("binding includes FullRebuildEvery: %q vs %q", a.Binding(), b.Binding())
+	}
+}
+
+func TestFullRebuildEveryFollowsTheMirrorClock(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		policy := tuplecache.WithPolicy(tuplecache.Policy{MaxStaleness: time.Second, FullRebuildEvery: 2 * time.Second})
+		backend := memory.NewTupleCache()
+		first, s := fixture(t, []tuplefacts.Tuple{grant}, backend, policy)
+		poll(t, first)
+		if st := first.Stats(); st.Rebuilds != 1 || st.ScheduledRebuilds != 0 || st.LastFullRebuild.IsZero() {
+			t.Fatalf("bootstrap: %+v", st)
+		}
+		state, _ := backend.State(t.Context(), first.Binding())
+		if state.FullAt.IsZero() {
+			t.Fatal("memory backend did not report FullAt")
+		}
+		second, err := tuplecache.New(s, backend, policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer second.Close()
+		time.Sleep(time.Second)
+		poll(t, first)
+		poll(t, second)
+		if first.Stats().Rebuilds != 1 || second.Stats().Rebuilds != 0 {
+			t.Fatalf("rebuilt before the period: %+v / %+v", first.Stats(), second.Stats())
+		}
+		time.Sleep(time.Second)
+		poll(t, first)
+		poll(t, second)
+		if st := first.Stats(); st.Rebuilds != 2 || st.ScheduledRebuilds != 1 {
+			t.Fatalf("period elapsed without a scheduled rebuild: %+v", st)
+		}
+		if second.Stats().Rebuilds != 0 {
+			t.Fatalf("second replica rebuilt the same period: %+v", second.Stats())
+		}
+		if next, _ := backend.State(t.Context(), first.Binding()); !next.FullAt.After(state.FullAt) {
+			t.Fatalf("FullAt did not advance: %v -> %v", state.FullAt, next.FullAt)
+		}
+		allowed(t, second, true)
+		// Deltas between rebuilds still publish without promotion.
+		revoke(t, s)
+		poll(t, second)
+		allowed(t, second, false)
+		if second.Stats().Rebuilds != 0 {
+			t.Fatalf("delta promoted to a rebuild: %+v", second.Stats())
+		}
+	})
+}
+
+func TestFullRebuildEveryWithoutFullAtUsesTheProcessClock(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		policy := tuplecache.WithPolicy(tuplecache.Policy{MaxStaleness: time.Second, FullRebuildEvery: 2 * time.Second})
+		backend := noFullAt{memory.NewTupleCache()}
+		c, s := fixture(t, []tuplefacts.Tuple{grant}, backend, policy)
+		poll(t, c)
+		time.Sleep(time.Second)
+		poll(t, c)
+		if st := c.Stats(); st.Rebuilds != 1 {
+			t.Fatalf("rebuilt before the period: %+v", st)
+		}
+		// A replica started now has no history: it waits a period, not boot.
+		restarted, err := tuplecache.New(s, backend, policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer restarted.Close()
+		poll(t, restarted)
+		if restarted.Stats().Rebuilds != 0 {
+			t.Fatalf("restart rebuilt at boot: %+v", restarted.Stats())
+		}
+		time.Sleep(time.Second)
+		poll(t, c)
+		if st := c.Stats(); st.Rebuilds != 2 || st.ScheduledRebuilds != 1 {
+			t.Fatalf("period elapsed without a scheduled rebuild: %+v", st)
+		}
+		time.Sleep(time.Second)
+		poll(t, restarted)
+		if st := restarted.Stats(); st.ScheduledRebuilds != 1 {
+			t.Fatalf("restarted replica never rebuilt on its own clock: %+v", st)
+		}
+	})
+}
+
+// slowFull is a source whose full snapshot outlasts MaxStaleness while slow.
+type slowFull struct {
+	*source
+	slow bool
+}
+
+func (s *slowFull) Snapshot(ctx context.Context, receipt string) (tuplecache.Snapshot, error) {
+	if receipt == "" && s.slow {
+		time.Sleep(1500 * time.Millisecond)
+	}
+	return s.source.Snapshot(ctx, receipt)
+}
+
+func TestFailedScheduledRebuildBacksOffSoDeltasKeepPublishing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		base := &source{store: memory.New(), tuples: []tuplefacts.Tuple{grant}}
+		if err := base.store.Tuples().ApplyTuples(t.Context(), tuplefacts.Changes{Add: base.tuples}); err != nil {
+			t.Fatal(err)
+		}
+		s := &slowFull{source: base}
+		// PollInterval defaults to 250ms, so the backoff is min(2s, 8×250ms) = 2s.
+		c, err := tuplecache.New(s, memory.NewTupleCache(), tuplecache.WithPolicy(tuplecache.Policy{MaxStaleness: time.Second, FullRebuildEvery: 2 * time.Second}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		poll(t, c)
+		s.slow = true
+		time.Sleep(2 * time.Second)
+		revoke(t, base)
+		if err := c.Poll(t.Context()); !errors.Is(err, tuplecache.ErrUnavailable) {
+			t.Fatalf("promoted rebuild over MaxStaleness: %v", err)
+		}
+		if st := c.Stats(); st.ScheduledRebuildFailures != 1 || st.ScheduledRebuilds != 0 {
+			t.Fatalf("failure not counted: %+v", st)
+		}
+		time.Sleep(250 * time.Millisecond)
+		poll(t, c) // inside the backoff: a delta
+		if len(base.pending) != 0 {
+			t.Fatal("revocation delta was not published during the backoff")
+		}
+		durable := base.durable
+		allowed(t, c, false)
+		if base.durable != durable {
+			t.Fatal("revocation was not served from the mirror")
+		}
+		time.Sleep(time.Second)
+		poll(t, c) // still inside the backoff
+		if st := c.Stats(); st.ScheduledRebuildFailures != 1 {
+			t.Fatalf("promoted again inside the backoff: %+v", st)
+		}
+		time.Sleep(time.Second)
+		if err := c.Poll(t.Context()); !errors.Is(err, tuplecache.ErrUnavailable) {
+			t.Fatalf("promotion after the backoff: %v", err)
+		}
+		if st := c.Stats(); st.ScheduledRebuildFailures != 2 {
+			t.Fatalf("second failure not counted: %+v", st)
+		}
+		s.slow = false
+		time.Sleep(2 * time.Second)
+		poll(t, c)
+		if st := c.Stats(); st.ScheduledRebuilds != 1 || st.ScheduledRebuildFailures != 2 {
+			t.Fatalf("recovered rebuild: %+v", st)
+		}
+	})
+}
+
 // renamedSource is a source whose identity row changed, e.g. after a restore.
 type renamedSource struct{ *source }
 

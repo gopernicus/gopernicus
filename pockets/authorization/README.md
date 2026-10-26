@@ -237,8 +237,9 @@ from the store it wraps, as decorators forward `LoweredPolicy`. One that hides i
 reads as non-recording, and production refuses it.
 
 `Register` logs `audit_recording`, `audit_reader`, `decision_observer`,
-`operation_expiry` and `runtime_mode` beside the other fields, so the boot log
-shows the posture the pocket runs under. With `environment.ModeProduction`,
+`operation_expiry`, `audit_read_route`, `integrity_rules` (the number of rules in
+`Repositories.Mutations.IntegrityPolicy()`, 0 when unwired) and `runtime_mode`
+beside the other fields, so the boot log shows the posture the pocket runs under. With `environment.ModeProduction`,
 `Repositories.Mutations` wired and no `Repositories.OperationExpiry`, `New` logs
 one WARN: operation records are never expired (see
 [Durable operation replay](#durable-operation-replay)).
@@ -247,6 +248,19 @@ one WARN: operation records are never expired (see
 `WithDecisionObserver`, `New` logs one WARN: `authorization: denials are not
 durably recorded; wire WithDecisionObserver`. There is no acknowledgement and no
 refusal; see [Decision observer](#decision-observer).
+
+**An unprotected `owner` is loud.** In production and development, `New` walks the
+model and logs one WARN listing every resource type that declares an `owner`
+relation the store's integrity policy does not protect: `authorization: the
+integrity policy does not protect owner; a last owner can be removed — construct the
+store WithIntegrityPolicy(mutations.DefaultIntegrityPolicy()) or add a rule per
+type` with `resource_types=<a,b>`. With `Repositories.Mutations` nil beside any
+`owner` relation it logs one WARN instead: `authorization: Repositories.Mutations is
+nil beside an owner relation; no integrity policy is verified and the baseline
+RelationshipWriter can remove a last owner`. Neither refuses and neither has an
+acknowledgement: a removable last owner is an availability incident (a resource
+nobody can administer), never an access gain. The zero mode is silent. See
+[Writes, integrity and audit](#writes-integrity-and-audit).
 
 **The append-only posture probe (PostgreSQL).** In production a store refuses to
 boot when its runtime role is superuser, owns an audit table, can
@@ -410,7 +424,8 @@ components, err := authorization.New(authorization.Repositories{
 
 SQL adapters offer the same `WithIntegrityPolicy` option. The default policy is
 empty. `DefaultIntegrityPolicy()` explicitly requires one concrete `owner` on
-every resource type. Empty `ResourceType` matches all resource types; zero
+every resource type; with a mode set, `New` warns about each model type whose
+`owner` the policy leaves unprotected (see [Production posture](#production-posture)). Empty `ResourceType` matches all resource types; zero
 `MinSubjects` means one, and negative values are invalid. Matching rules use the
 largest minimum. Resource minima do not apply to global facts.
 
@@ -972,6 +987,90 @@ flat resource fields are invalid. Unassignment returns only `outcome`; the
 Hosts can construct the public HTTP adapter directly and mount its gated handlers
 on their own paths.
 
+**Write-policy helpers.** `authorizationhttp.RefuseSelfTarget` refuses an assign
+whose subject is the acting principal (same `Type` and `ID`) with
+`ErrSelfTargetRefused` (`sdk.ErrForbidden`, so 403); unassign passes, so the
+integrity policy decides whether a principal may drop its own role.
+`authorizationhttp.AllOf(policies...)` admits only when every policy admits, in
+order, and returns the first refusal; zero policies or a nil entry panics at
+construction. A refusal rides the existing rail: one `role write refused` WARN with
+`error_kind=forbidden` and, with `WithDecisionObserver`, one `OutcomeRefused` event.
+
+```go
+WritePolicy: authorizationhttp.AllOf(authorizationhttp.RefuseSelfTarget, hostRoleWritePolicy),
+```
+
+`RefuseSelfTarget` compares the direct subject only: a grant to `group:X` while the
+actor is a member of `X` passes; a host that must refuse it checks membership in its
+own policy. A "distinct approver" (two people for one grant) is a host workflow,
+not a helper: an invitation, or an approval record whose `operation_id` the
+Granter fences, consulted by the host policy inside `AllOf(RefuseSelfTarget,
+hostPolicy)`. The comparison is byte-exact between the principal's `Type`/`ID`
+and the subject's: a host that maps principals into a different subject type
+namespace (principal `account:1` granted as subject `user:1`) writes its own check.
+
+### Audit listing
+
+`RoleRoutes.AuditGate` mounts `GET /authorization/audit` behind it, independently
+of `Gate`; nil, the default, leaves the route unmounted (404) and `Adapter.Audit()`
+a 404 handler. Like `Gate`, the host middleware supplies authentication and
+authorization; compose a stricter check (step-up MFA) into it when the role gate
+is not enough. It requires `Services.Audit`, which `authorization.New` fills from
+`Repositories.Audit`; a gate without a reader fails `New` with
+`authorizationhttp.ErrAuditGateWithoutReader`.
+
+**`AuditGate` must admit global-history readers only.** Every filter pair is
+optional, so a caller who omits them lists all history across every resource and
+tenant. A gate that authorizes per resource (for example "may manage the
+`resource_id` in the query") is not a tenant boundary here; use the platform-admin
+or auditor gate.
+
+```go
+authorization.WithRoleRoutes(authorizationhttp.RoleRoutes{
+    Gate: hostRoleGate, WritePolicy: hostRoleWritePolicy,
+    AuditGate: hostRoleGate,
+}),
+authorization.WithAuditReadObserver(func(ctx context.Context, ev authorizationhttp.AuditReadEvent) {
+    // record ev as an audit_read row from a host pocket
+}),
+```
+
+| Query | Meaning |
+| --- | --- |
+| `resource_type` + `resource_id` | exact resource filter (optional) |
+| `subject_type` + `subject_id` | exact subject filter (optional) |
+| `actor_type` + `actor_id` | exact actor filter (optional) |
+| `limit` | page size, default 25, at most 100 |
+| `cursor` | the previous page's `next_cursor`; drop it when a filter changes |
+| `count` | `true` adds `total`, a full scan when unfiltered |
+| `order` | `occurred_at` only (`occurred_at:asc` or the default `:desc`) |
+
+Each pair is both-or-neither: one half alone is 400. Every listing key may appear
+at most once (`resource_id=a&resource_id=b` is 400), so the gate and the handler
+can never read different values of one key. The listing pages by cursor
+only: `offset` is 400 with code `offset_not_supported`, and `q` is 400 (the audit
+listing declares no search fields). Items, newest first:
+
+```json
+{"id":"…:00000000000000000001","event_id":"…","occurred_at":"2026-10-25T11:00:00.123456Z",
+ "source":{"actor_type":"user","actor_id":"admin-1","request_id":"req-1"},
+ "change":{"action":"added","tuple":{"scope":{"kind":"resource","resource_type":"project","resource_id":"p1"},"relation":"owner","subject":{"type":"user","id":"u1"}}}}
+```
+
+`occurred_at` is UTC RFC 3339 with nanoseconds; empty source fields are omitted.
+Every response carries `Cache-Control: no-store`, set ahead of the gate so its
+401/403/step-up answers carry it too. Reader errors map through
+`web.RespondJSONDomainError` (`sdk.ErrUnavailable` is 503 `unavailable`).
+
+**Recording reads.** The pocket has no event rail. Each completed read emits one
+`authorizationhttp.AuditReadEvent{Principal, Filter, Limit, Returned}` to the
+`WithAuditReadObserver` callback (also an `authorizationhttp` option for a
+hand-built adapter): identifiers and counts only, never records, never
+deduplicated. A refused or failed read emits nothing (the gate's 401/403 covers a
+denial), and neither does a `HEAD`, whose body is discarded. With an `AuditGate` and no observer, `New` logs one WARN in every mode,
+`authorization: audit reads are not recorded; wire WithAuditReadObserver`, and
+does not refuse.
+
 ## Optional TupleCache
 
 TupleCache mirrors **all raw canonical facts**, including global and resource
@@ -1028,9 +1127,44 @@ pending IDs without decoding every obsolete payload. It publishes before
 acknowledging. It cannot make a currently oversized set fit or bypass freshness.
 Do not delete backlog rows or split one transaction into partial publications.
 
+**Scheduled full rebuilds.** `Policy.FullRebuildEvery` promotes a `Poll` to a full
+rebuild once the mirror's last full publication (`tuplecache.State.FullAt`, on the
+backend's clock) is at least that old. Zero, the default, never does. Negative
+values, and values below the defaulted `PollInterval`, are `sdk.ErrInvalidInput`.
+It is not part of the binding. Reading the period from the mirror means replicas
+sharing a mirror rebuild once per period between them, not once each. A backend
+that leaves `FullAt` zero falls back to each process's own last full publication
+(or its construction, so a restart does not rebuild at boot but restarts the
+period): every replica then rebuilds on its own clock, which is weaker. The memory
+backend reports `FullAt`. Replicas that promote in the same poll window race:
+one publishes, and each other one gets one `ErrConflict` (`PollConflicts`) for that
+period and resumes deltas. That is expected; do not page on it.
+
+**A failed scheduled rebuild backs off.** When a promoted rebuild fails (it
+outlasts `MaxStaleness`, exceeds capacity, or the source or backend errors), the
+runtime counts it in `ScheduledRebuildFailures` and does not promote again for
+`min(FullRebuildEvery, tuplecache.ScheduledRebuildBackoff × PollInterval)`
+(8 intervals): the polls in between stay deltas, so revocations keep publishing.
+While scheduled rebuilds keep failing the replay bound is not met; a rising
+`ScheduledRebuildFailures` is the signal to alert on.
+A full rebuild discards anything the mirror holds that SQL does not, so the
+cadence bounds how long a fact written into Redis behind the relay's back can
+live. Pair it with the goredis store's integrity keys (see the
+[goredis README](stores/goredis/README.md)) at about one hour, on mirrors that
+rebuild well under `MaxStaleness`; a rebuild longer than `MaxStaleness` still
+cannot publish.
+
 At shutdown cancel/join workers, close the runtime and drain requests before
 closing borrowed clients. `Stats`, `LastPoll` and `LastSuccessfulPoll` expose
-fallbacks, capacity failures, publication conflicts, timings and captured counts.
+fallbacks, capacity failures, publication conflicts, timings and captured counts;
+`ScheduledRebuilds`, `ScheduledRebuildFailures` and `LastFullRebuild` show the
+cadence.
+
+**Upgrade note.** `tuplecache.State` gained `FullAt`: an unkeyed literal
+(`State{binding, receipt}`) no longer compiles, and a custom `Backend` or test
+that compares a `State()` result with `==` against a constructed value now
+differs once the backend reports `FullAt`. Compare `Binding` and `Receipt`, as the
+bundled backends do.
 Measure SQL fallback and rebuild capacity alongside Redis latency.
 
 ## Access review
@@ -1053,10 +1187,33 @@ page, err = components.Roles.ListRoleAssignmentsBySubject(ctx, principal, list.R
 page, err = repos.Audit.List(ctx, audit.Filter{ResourceType: "project", ResourceID: id}, list.Request{})
 ```
 
+Over HTTP, with `RoleRoutes.Gate` and `RoleRoutes.AuditGate` wired (see
+[Audit listing](#audit-listing)):
+
+```sh
+# Direct assignments on one resource, and everything one subject holds directly.
+curl -s "$HOST/authorization/roles/by-resource?resource_type=project&resource_id=$ID" -H "$AUTH"
+curl -s "$HOST/authorization/roles/by-subject?subject_type=user&subject_id=$USER" -H "$AUTH"
+
+# Change history for one resource, then everything one admin changed.
+curl -s "$HOST/authorization/audit?resource_type=project&resource_id=$ID" -H "$AUTH"
+curl -s "$HOST/authorization/audit?actor_type=user&actor_id=$ADMIN&limit=100" -H "$AUTH"
+```
+
+**Paging is the export.** Request `limit=100` and follow `next_cursor` until
+`has_more` is false; keep the filters fixed across the walk (a changed filter needs
+a fresh cursor).
+
+**Evidence of the review.** Each completed audit read reaches
+`WithAuditReadObserver` once; a host that records it as an `audit_read` row
+(actor, the filter keys present, limit, returned) leaves a trail of who read the
+history and when. A host without an observer gets one construction WARN.
+
 Limits today: there is no effective-access listing that merges scopes or expands usersets,
-no reverse listing ("who can `manage` this resource"), and no bundled HTTP route or export
-for the audit history — a host serves its own. Denied decisions and refused writes are not in
-the history. Pagination follows `sdk/pkg/list` (cursor or offset per the store).
+and no reverse listing ("who can `manage` this resource"). The global scope is not on the
+bundled role listings (use the Go recipe above). Denied decisions and refused writes are not
+in the history. Role-listing pagination follows `sdk/pkg/list` (cursor or offset per the
+store); the audit listing is cursor only.
 
 ## Schema setup and verification
 

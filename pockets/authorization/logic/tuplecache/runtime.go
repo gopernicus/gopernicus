@@ -18,16 +18,29 @@ import (
 // DefaultMaxStaleness is the revocation window when Policy.MaxStaleness is zero.
 const DefaultMaxStaleness = 5 * time.Second
 
+// ScheduledRebuildBackoff is how many PollIntervals a failed scheduled rebuild
+// waits, bounded by FullRebuildEvery, before the next promotion.
+const ScheduledRebuildBackoff = 8
+
 // Policy separates delivery freshness from tuple storage: tuples do not expire.
 // MaxStaleness bounds how long a revocation may remain unseen; zero selects
 // DefaultMaxStaleness. It is part of the binding, so every replica sharing an
 // authorization database must use the same value. PollInterval zero selects
 // min(1s, MaxStaleness/4); it is not part of the binding, so replicas may differ.
+// FullRebuildEvery promotes a Poll to a full rebuild once the mirror's last full
+// publication (State.FullAt) is at least that old; zero, the default, never
+// does. A backend that leaves FullAt zero falls back to this process's own last
+// full publication, which every replica tracks separately. Negative values and
+// values below the defaulted PollInterval are invalid. It is not part of the
+// binding. After a promoted rebuild fails, polls stay deltas for
+// min(FullRebuildEvery, ScheduledRebuildBackoff×PollInterval) before the next
+// promotion, so revocations keep publishing while full rebuilds cannot.
 type Policy struct {
-	MaxStaleness time.Duration
-	PollInterval time.Duration
-	PollTimeout  time.Duration
-	ReadTimeout  time.Duration
+	MaxStaleness     time.Duration
+	PollInterval     time.Duration
+	PollTimeout      time.Duration
+	ReadTimeout      time.Duration
+	FullRebuildEvery time.Duration
 }
 
 type Option func(*Policy)
@@ -44,10 +57,15 @@ type PollStats struct {
 	FailureStage                                    string
 }
 
+// Stats counts this process's work. ScheduledRebuilds counts the full rebuilds
+// FullRebuildEvery promoted and published; ScheduledRebuildFailures counts the
+// promoted attempts that failed. LastFullRebuild is this process's last full
+// publication, zero before the first.
 type Stats struct {
 	Hits, Fallbacks, Publications, Rebuilds, PollFailures uint64
 	CapacityFallbacks, CapacityFailures, PollConflicts    uint64
-	LastSuccessfulPoll                                    time.Time
+	ScheduledRebuilds, ScheduledRebuildFailures           uint64
+	LastSuccessfulPoll, LastFullRebuild                   time.Time
 	LastPoll                                              PollStats
 }
 
@@ -63,8 +81,10 @@ type TupleCache struct {
 	closed, ready                                     atomic.Bool
 	hits, fallbacks, publications, rebuilds, failures atomic.Uint64
 	capacityFallbacks, capacityFailures, conflicts    atomic.Uint64
-	lastSuccess                                       atomic.Int64
+	scheduled, scheduledFailures                      atomic.Uint64
+	lastSuccess, lastFull, scheduledRetryAt           atomic.Int64
 	lastPoll                                          atomic.Pointer[PollStats]
+	created                                           time.Time
 }
 
 func New(source Source, backend Backend, opts ...Option) (*TupleCache, error) {
@@ -93,11 +113,14 @@ func New(source Source, backend Backend, opts ...Option) (*TupleCache, error) {
 	if p.PollInterval <= 0 || p.PollInterval >= p.MaxStaleness || p.PollTimeout <= 0 || p.ReadTimeout <= 0 {
 		return nil, fmt.Errorf("tuple cache: invalid policy: %w", sdk.ErrInvalidInput)
 	}
+	if p.FullRebuildEvery < 0 || (p.FullRebuildEvery > 0 && p.FullRebuildEvery < p.PollInterval) {
+		return nil, fmt.Errorf("tuple cache: FullRebuildEvery must be zero or at least PollInterval (%s): %w", p.PollInterval, sdk.ErrInvalidInput)
+	}
 	// Shared eligibility must mean the same thing to every process. Bind the
 	// freshness policy as well as the source identity, so a more permissive
 	// relay cannot silently extend another host's revocation bound.
 	binding := fmt.Sprintf("protocol:%d/%s/max-staleness:%d", Protocol, source.Binding(), p.MaxStaleness)
-	return &TupleCache{source: source, backend: backend, policy: p, binding: binding, gate: make(chan struct{}, 1), wake: make(chan struct{}, 1)}, nil
+	return &TupleCache{source: source, backend: backend, policy: p, binding: binding, gate: make(chan struct{}, 1), wake: make(chan struct{}, 1), created: time.Now()}, nil
 }
 
 func nilValue(v any) bool {
@@ -135,10 +158,14 @@ func (c *TupleCache) Stats() Stats {
 		Hits: c.hits.Load(), Fallbacks: c.fallbacks.Load(), Publications: c.publications.Load(),
 		Rebuilds: c.rebuilds.Load(), PollFailures: c.failures.Load(),
 		CapacityFallbacks: c.capacityFallbacks.Load(), CapacityFailures: c.capacityFailures.Load(),
-		PollConflicts: c.conflicts.Load(),
+		PollConflicts: c.conflicts.Load(), ScheduledRebuilds: c.scheduled.Load(),
+		ScheduledRebuildFailures: c.scheduledFailures.Load(),
 	}
 	if nanos := c.lastSuccess.Load(); nanos != 0 {
 		stats.LastSuccessfulPoll = time.Unix(0, nanos)
+	}
+	if nanos := c.lastFull.Load(); nanos != 0 {
+		stats.LastFullRebuild = time.Unix(0, nanos)
 	}
 	if poll := c.lastPoll.Load(); poll != nil {
 		stats.LastPoll = *poll
@@ -175,11 +202,15 @@ func (c *TupleCache) poll(ctx context.Context, rebuild bool) (err error) {
 	}
 	report := PollStats{StartedAt: time.Now()}
 	stage := "state"
-	succeeded := false
+	succeeded, scheduled := false, false
 	defer func() {
 		report.Duration = time.Since(report.StartedAt)
 		if !succeeded {
 			c.failures.Add(1)
+			if scheduled {
+				c.scheduledFailures.Add(1)
+				c.scheduledRetryAt.Store(time.Now().Add(c.scheduledBackoff()).UnixNano())
+			}
 			report.FailureStage = stage
 			if errors.Is(err, ErrCapacity) {
 				c.capacityFailures.Add(1)
@@ -203,6 +234,8 @@ func (c *TupleCache) poll(ctx context.Context, rebuild bool) (err error) {
 	if before.Binding != "" && before.Binding != c.Binding() {
 		return ErrBinding
 	}
+	scheduled = !rebuild && c.fullRebuildDue(before)
+	rebuild = rebuild || scheduled
 	started := time.Now()
 	stage = "snapshot"
 	receipt := before.Receipt
@@ -263,10 +296,39 @@ func (c *TupleCache) poll(ctx context.Context, rebuild bool) (err error) {
 	c.publications.Add(1)
 	if snapshot.Full {
 		c.rebuilds.Add(1)
+		c.lastFull.Store(time.Now().UnixNano())
+		if scheduled {
+			c.scheduled.Add(1)
+		}
 	}
 	c.ready.Store(true)
 	succeeded = true
 	return nil
+}
+
+// fullRebuildDue reads the period from the mirror's FullAt so replicas sharing
+// a mirror rebuild once per period between them. Without FullAt it falls back
+// to this process's last full publication, or its construction, so a restart
+// does not rebuild at boot. An absent mirror rebuilds anyway.
+func (c *TupleCache) fullRebuildDue(before State) bool {
+	if c.policy.FullRebuildEvery == 0 || before.Receipt == "" {
+		return false
+	}
+	if retryAt := c.scheduledRetryAt.Load(); retryAt != 0 && time.Now().UnixNano() < retryAt {
+		return false
+	}
+	last := before.FullAt
+	if last.IsZero() {
+		last = c.created
+		if nanos := c.lastFull.Load(); nanos != 0 {
+			last = time.Unix(0, nanos)
+		}
+	}
+	return time.Since(last) >= c.policy.FullRebuildEvery
+}
+
+func (c *TupleCache) scheduledBackoff() time.Duration {
+	return min(c.policy.FullRebuildEvery, ScheduledRebuildBackoff*c.policy.PollInterval)
 }
 
 var _ tuples.Snapshotter = (*TupleCache)(nil)

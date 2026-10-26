@@ -24,6 +24,15 @@ func WithDecisionObserver(observer decisions.DecisionObserver) Option {
 	return func(cfg *config) { cfg.observer = observer }
 }
 
+// WithAuditReadObserver reports each completed GET /authorization/audit read as
+// one AuditReadEvent, after the page is built and before it is written. A host
+// records it durably (an audit_read row) from a host pocket; reads are never
+// deduplicated. Nil, the default, records nothing; beside an AuditGate New logs
+// one WARN.
+func WithAuditReadObserver(observer AuditReadObserver) Option {
+	return func(cfg *config) { cfg.auditObserver = observer }
+}
+
 // WithLogger sets the borrowed logger for refused role writes. Nil captures
 // slog.Default at construction.
 func WithLogger(logger *slog.Logger) Option {

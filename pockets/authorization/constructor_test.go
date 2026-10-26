@@ -4,16 +4,22 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets"
+	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 const (
@@ -275,5 +281,160 @@ func TestPostureSettingsAreProgrammatic(t *testing.T) {
 	}
 	if cfg.RuntimeMode != "" || cfg.AuditDisabledAcknowledged {
 		t.Fatalf("posture settings read from the environment: %+v", cfg)
+	}
+}
+
+const (
+	integrityWarnText      = "the integrity policy does not protect owner"
+	integrityNilWarnText   = "Repositories.Mutations is nil beside an owner relation"
+	auditReadWarnText      = "audit reads are not recorded; wire WithAuditReadObserver"
+	integrityPolicyFixHint = "mutations.DefaultIntegrityPolicy()"
+)
+
+func integrityModel() decisions.Model {
+	owner := decisions.RelationDef{AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}
+	return decisions.NewSchema([]decisions.ResourceSchema{
+		{Name: "project", Def: decisions.ResourceTypeDef{Relations: map[string]decisions.RelationDef{"owner": owner}, Permissions: map[string]decisions.Expression{"manage": decisions.AnyOf(decisions.Direct("owner"))}}},
+		{Name: "space", Def: decisions.ResourceTypeDef{Relations: map[string]decisions.RelationDef{"owner": owner}, Permissions: map[string]decisions.Expression{"manage": decisions.AnyOf(decisions.Direct("owner"))}}},
+		{Name: "team", Def: decisions.ResourceTypeDef{Relations: map[string]decisions.RelationDef{"member": owner}, Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("member"))}}},
+	})
+}
+
+func ownerlessModel() decisions.Model {
+	member := decisions.RelationDef{AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}
+	return decisions.NewSchema([]decisions.ResourceSchema{{Name: "team", Def: decisions.ResourceTypeDef{
+		Relations: map[string]decisions.RelationDef{"member": member}, Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("member"))},
+	}}})
+}
+
+func integrityRepos(policy *mutations.IntegrityPolicy) Repositories {
+	opts := []memory.Option{memory.WithAudit()}
+	if policy != nil {
+		opts = append(opts, memory.WithIntegrityPolicy(*policy))
+	}
+	store := memory.New(opts...)
+	return Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), OperationExpiry: store.OperationExpiry(), Audit: store.Audit()}
+}
+
+func TestIntegrityWarnsWhenOwnerIsUnprotected(t *testing.T) {
+	projectOnly := mutations.IntegrityPolicy{Rules: []mutations.IntegrityRule{{ResourceType: "project", Relation: "owner"}}}
+	adminOnly := mutations.IntegrityPolicy{Rules: []mutations.IntegrityRule{{Relation: "admin"}}}
+	full := mutations.DefaultIntegrityPolicy()
+	for _, tc := range []struct {
+		name   string
+		policy *mutations.IntegrityPolicy
+		types  string
+		rules  int
+	}{
+		{"empty policy", nil, "project,space", 0},
+		{"one type protected", &projectOnly, "space", 1},
+		{"another relation protected", &adminOnly, "project,space", 1},
+		{"default policy", &full, "", 1},
+	} {
+		for _, mode := range []environment.Mode{"", environment.ModeDevelopment, environment.ModeProduction} {
+			t.Run(tc.name+"/"+mode.String(), func(t *testing.T) {
+				logger, logs := postureLogger()
+				comps, err := New(integrityRepos(tc.policy), WithModel(integrityModel()), WithRuntimeMode(mode), WithLogger(logger), WithDecisionObserver(ignoreDecisions))
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := 0
+				if mode != "" && tc.types != "" {
+					want = 1
+				}
+				out := logs.String()
+				if n := strings.Count(out, integrityWarnText); n != want || strings.Count(out, "level=WARN") != want {
+					t.Fatalf("integrity warnings=%d want %d: %s", n, want, out)
+				}
+				if want == 1 && (!strings.Contains(out, "resource_types="+tc.types) || !strings.Contains(out, integrityPolicyFixHint)) {
+					t.Fatalf("warning does not name %s and the fix: %s", tc.types, out)
+				}
+				if line := registrationLine(t, comps, logs); !strings.Contains(line, fmt.Sprintf("integrity_rules=%d", tc.rules)) {
+					t.Fatalf("registration line lacks integrity_rules=%d: %s", tc.rules, line)
+				}
+			})
+		}
+	}
+}
+
+func TestIntegrityWarnsWhenMutationsIsNilBesideOwner(t *testing.T) {
+	for _, mode := range []environment.Mode{"", environment.ModeDevelopment, environment.ModeProduction} {
+		t.Run(mode.String(), func(t *testing.T) {
+			repos := integrityRepos(nil)
+			repos.Mutations, repos.OperationExpiry = nil, nil
+			logger, logs := postureLogger()
+			if _, err := New(repos, WithModel(integrityModel()), WithRuntimeMode(mode), WithLogger(logger), WithDecisionObserver(ignoreDecisions)); err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if mode != "" {
+				want = 1
+			}
+			if n := strings.Count(logs.String(), integrityNilWarnText); n != want || strings.Count(logs.String(), integrityWarnText) != 0 {
+				t.Fatalf("nil-mutations warnings=%d want %d: %s", n, want, logs.String())
+			}
+		})
+	}
+	// No owner relation, no warning.
+	logger, logs := postureLogger()
+	repos := integrityRepos(nil)
+	if _, err := New(repos, WithModel(ownerlessModel()), WithRuntimeMode(environment.ModeDevelopment), WithLogger(logger)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs.String(), "protect owner") {
+		t.Fatalf("model without owner warned: %s", logs.String())
+	}
+}
+
+func TestAuditGateWiring(t *testing.T) {
+	gate := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(sdk.WithPrincipal(r.Context(), sdk.Principal{Type: "user", ID: "admin-1"})))
+		})
+	}
+	repos := integrityRepos(nil)
+	repos.Audit = nil
+	if _, err := New(repos, WithRoleRoutes(authorizationhttp.RoleRoutes{AuditGate: gate})); !errors.Is(err, authorizationhttp.ErrAuditGateWithoutReader) {
+		t.Fatalf("gate without Repositories.Audit: %v", err)
+	}
+
+	logger, logs := postureLogger()
+	comps, err := New(integrityRepos(nil), WithRoleRoutes(authorizationhttp.RoleRoutes{AuditGate: gate}), WithLogger(logger))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(logs.String(), auditReadWarnText); n != 1 {
+		t.Fatalf("observer warnings=%d: %s", n, logs.String())
+	}
+	logs.Reset()
+	if err := comps.Register(pockets.Mount{Router: web.NewWebHandler()}); err != nil {
+		t.Fatal(err)
+	}
+	if line := logs.String(); !strings.Contains(line, "audit_read_route=true") {
+		t.Fatalf("registration line lacks audit_read_route=true: %s", line)
+	}
+
+	var events []authorizationhttp.AuditReadEvent
+	logs.Reset()
+	comps, err = New(integrityRepos(nil), WithRoleRoutes(authorizationhttp.RoleRoutes{AuditGate: gate}), WithLogger(logger),
+		WithAuditReadObserver(func(_ context.Context, ev authorizationhttp.AuditReadEvent) { events = append(events, ev) }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs.String(), auditReadWarnText) {
+		t.Fatalf("observed gate warned: %s", logs.String())
+	}
+	rec := httptest.NewRecorder()
+	comps.HTTP.Audit().ServeHTTP(rec, httptest.NewRequest("GET", "/authorization/audit", nil))
+	if rec.Code != http.StatusOK || len(events) != 1 || events[0].Principal.ID != "admin-1" {
+		t.Fatalf("status=%d events=%+v body=%s", rec.Code, events, rec.Body)
+	}
+
+	comps, err = New(integrityRepos(nil), WithLogger(logger))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line := registrationLine(t, comps, logs); !strings.Contains(line, "audit_read_route=false") {
+		t.Fatalf("registration line lacks audit_read_route=false: %s", line)
 	}
 }
