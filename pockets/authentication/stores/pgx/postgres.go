@@ -3,13 +3,14 @@
 // module graph (the load-bearing opt-out property). It owns the SQL; the HOST owns its database lifecycle. It is the
 // dialect sibling of pockets/authentication/stores/turso: same surface plus the
 // Postgres-only WithSchema option — SQLite has no schemas — same migration version
-// set (0001–0026 with 0017 absent, twenty tables backing the 20-port bundle; 0014 adds the
+// set (0001–0026 with 0017 absent, twenty tables backing the Repositories bundle; 0014 adds the
 // account-lifecycle columns to users rather than a table, and auth owns no
 // delivery table), same port semantics — a host switches dialect by one import +
 // one Open call. Secrets are persisted as digests, never plaintext (session
 // refresh-token / challenge / api-key / invitation hashes). Repositories probes
-// every canonical table at construction and returns an error naming a missing one
-// (see Repositories); the contractual keyset id columns carry per-column
+// every always-required table at construction and returns an error naming a missing
+// one (see Repositories); the passkey (0025) and TOTP (0026) tables are probed only
+// when the host wires those factors, through the stores' ProbeSchema; the contractual keyset id columns carry per-column
 // COLLATE "C" for byte-order pagination parity (see the migrations).
 //
 // Migrations follow the scaffold model (matching pockets/authentication/stores/turso):
