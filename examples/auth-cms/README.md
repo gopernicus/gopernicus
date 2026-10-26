@@ -379,13 +379,14 @@ v3 secrets (`AUTH_CHALLENGE_PEPPER`, `AUTH_IDENTIFIER_KEY`,
 `AUTH_INVITATION_TOKEN_IN_QUERY`),
 `AUTH_DELIVERY_MODE` (`jobs` default / `in_process` for the ephemeral bounded variant —
 see the Delivery wiring bullet), and
-`AUTH_DEBUG` + `OAUTH_CLIENT_ID/SECRET`. `AUTH_RUNTIME_MODE` is read from the process
+`AUTH_DEBUG` + `AUTH_DEMO_ADMIN_EMAIL` + `OAUTH_CLIENT_ID/SECRET`. `AUTH_RUNTIME_MODE` is read from the process
 environment only — never from `.env`. In development (`AUTH_RUNTIME_MODE=development`)
 the host boots with **none** of the others set: every secret gets a
 required-but-ephemeral single-instance key at boot (WARN-logged, never printed),
 passwordless defaults to `email,phone`, the magic link lands on the bundled
-`/auth/magic` page, and the debug route is off. Production refuses to boot without
-the hex keys, and refuses `AUTH_DEBUG=1`.
+`/auth/magic` page, the debug route is off, and no account is a platform admin.
+Production refuses to boot without the hex keys, and refuses `AUTH_DEBUG=1` and a
+non-empty `AUTH_DEMO_ADMIN_EMAIL`.
 
 ## The A9 proof protocol (copy-pasteable curls)
 
@@ -477,8 +478,9 @@ cannot be promoted by restarting with its id either. The executable end-to-end p
 this leg is therefore the host test `newMachineHost` /
 `TestMachineRoutesGateRefusesANonAdmin` in `cmd/server/apikey_search_test.go`, which
 grants `platform:main#admin` to the signed-up user through the same `Components.Mutations` and
-then drives the curls below over real HTTP. To run them by hand, add a grant for your
-registered id beside the seed's and rebuild.
+then drives the curls below over real HTTP. To run them by hand, boot with
+`AUTH_DEMO_ADMIN_EMAIL=<your address>` (development only) and register + verify that
+address: the account becomes a platform admin (see [Owner drill](#owner-drill-soc-2-s7)).
 
 ```sh
 # a cookie caller mutates through the CSRF double-submit: read the token, echo it.
@@ -649,11 +651,12 @@ An invitation is addressed to its identifier: whoever VERIFIES it resolves the
 `auto_accept` invitations addressed to it, the rest wait for the token.
 
 ```sh
-# A invites x@example.com twice: one auto-accept, one not (two resources)
+# A invites x@example.com twice on project/demo (the host's one registered resource):
+# member with auto-accept, owner without (owner-granting needs a platform admin)
 curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/project/demo -H "X-CSRF-Token: $CSRF" \
   -H 'Content-Type: application/json' -d '{"identifier":"x@example.com","relation":"member","auto_accept":true}'
-curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/project/other -H "X-CSRF-Token: $CSRF" \
-  -H 'Content-Type: application/json' -d '{"identifier":"x@example.com","relation":"member"}'
+curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/project/demo -H "X-CSRF-Token: $CSRF" \
+  -H 'Content-Type: application/json' -d '{"identifier":"x@example.com","relation":"owner"}'
 # Y signs up with ANOTHER address, steps up, then adds x@example.com and confirms
 # the code from the mailer log -> 200; the auto-accept invitation grants on the
 # confirm (invitation_granted resolved_by=verification)
@@ -673,9 +676,12 @@ curl -sX POST -c yjar -b yjar http://localhost:8082/auth/invitations/sync -H "X-
 
 ### Leg 4c — the audit listings (platform admin)
 
-Both audit listings answer a platform admin only, and every read records one
-`audit_read` row (`rail` `authorization` or `security_events`). A role write
-naming the caller itself is refused before host policy (`RefuseSelfTarget`).
+Both audit listings answer a platform admin only (by hand: the
+`AUTH_DEMO_ADMIN_EMAIL` account), and every read records one `audit_read` row
+(`rail` `authorization` or `security_events`). A role write naming the caller
+itself is refused before host policy (`RefuseSelfTarget`). The security-event
+listing is a user-administration route, which defaults to AAL2 for admins: an
+AAL1 admin session gets the RFC 9470 401 until it steps up (see the drill below).
 
 ```sh
 curl -s -c jar -b jar 'http://localhost:8082/authorization/audit?resource_type=project&resource_id=demo'  # {items,next_cursor,has_more}
@@ -684,13 +690,53 @@ curl -s -c jar -b jar 'http://localhost:8082/auth/admin/security-events?offset=5
 curl -s -c bjar -b bjar 'http://localhost:8082/auth/admin/security-events'                              # 403 (not an admin)
 ```
 
+### Owner drill (SOC 2 S7)
+
+`AUTH_DEMO_ADMIN_EMAIL` (development only; production refuses to boot with it set)
+makes one address a platform admin: when an account holds it as a **verified email
+with the sign-in claim**, the host grants `platform:main#admin` once, through
+`Components.Mutations` with audit source `system=demo-admin` (`cmd/server/demoadmin.go`).
+The check runs as each security event is recorded, so registration verify, sign-in,
+passwordless and identifier confirm all reach it. The address is normalized as the
+pocket normalizes emails, and boot logs one WARN naming it.
+
+```sh
+AUTH_RUNTIME_MODE=development AUTH_DEMO_ADMIN_EMAIL=owner@example.com go run ./cmd/server
+```
+
+1. Register + verify `owner@example.com` (Leg 0, code from the mailer log) and sign in
+   (cookie jar `jar`). The server log shows `AUTH_DEMO_ADMIN_EMAIL granted platform:main#admin`.
+2. Invite `x@example.com` twice, one with `"auto_accept":true` (Leg 4b's two curls). The
+   console mailer's invitation link carries the token as `#token=…`, never a query.
+3. A second account signs up with another address, steps up, adds `x@example.com` with
+   `"uses":{"login":true}` and confirms the code (Leg 4b) — the auto-accept invitation
+   grants on the confirm; the other lists under
+   `GET /auth/invitations/mine?identifier_kind=email` and accepts by its token.
+4. As the admin, read both audit routes (Leg 4c). The security-event listing needs AAL2:
+   enroll an authenticator app and step up first:
+
+   ```sh
+   curl -sX POST -c jar -b jar http://localhost:8082/auth/totp/enrollment -H "X-CSRF-Token: $CSRF" \
+     -H 'Content-Type: application/json' -d '{}'            # {secret, otpauth_uri} -> add to an authenticator app
+   curl -sX POST -c jar -b jar http://localhost:8082/auth/totp/enrollment/confirm -H "X-CSRF-Token: $CSRF" \
+     -H 'Content-Type: application/json' -d '{"code":"<CODE>"}'       # 201 + recovery codes
+   # wait for the NEXT code (the confirmed one cannot be reused), then:
+   curl -sX POST -c jar -b jar http://localhost:8082/auth/step-up/totp -H "X-CSRF-Token: $CSRF" \
+     -H 'Content-Type: application/json' -d '{"code":"<NEXT_CODE>"}'  # 200 {"assurance":"aal2"}
+   curl -s -c jar -b jar 'http://localhost:8082/authorization/audit'                        # 200
+   curl -s -c jar -b jar 'http://localhost:8082/auth/admin/security-events'                 # 200
+   ```
+
+5. `GET /auth/admin/security-events?event_type=audit_read` shows the reads from step 4.
+
 ### Leg 5 — audit rows visible (DEFAULT-OFF, development only, platform-admin gated)
 
 The route runs behind a live session and the `platform:main#admin` permission —
 the role-routes gate. The Leg 0 account holds no platform-admin tuple, so it is
 refused; the 200 read is proven over real HTTP in
 `TestDebugSecurityEventsRequiresPlatformAdmin` (`cmd/server/debug_route_test.go`),
-which grants the tuple to a registered user as Leg 7b's proof does.
+which grants the tuple to a registered user as Leg 7b's proof does. By hand, the
+`AUTH_DEMO_ADMIN_EMAIL` account reads it.
 
 ```sh
 # with AUTH_DEBUG=1 and the Leg 0 session (not a platform admin) -> 403
@@ -833,7 +879,7 @@ curl -i -b cjar -X POST http://localhost:8082/authorization/roles \
 **The 200 path needs the `platform:main#admin` tuple**, which this proof host
 boot-seeds for the synthetic `user:demo-owner` (`seedAuthorization`) — establishing
 the first admin is inherently trusted, so a freshly registered browser account is a
-403 by design. The authorized walkthrough is therefore driven in
+403 by design (in development, unless it verifies `AUTH_DEMO_ADMIN_EMAIL`). The authorized walkthrough is therefore driven in
 `TestRoleRoutesPlatformAdminDrivesTheLifecycle`, which seeds the tuple for a REAL
 registered user through the `Components.Mutations` and then walks the whole flow over HTTP:
 
