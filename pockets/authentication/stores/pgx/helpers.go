@@ -33,6 +33,8 @@ const (
 
 	totpCredentialsTable = "totp_credentials"
 	recoveryCodesTable   = "recovery_codes"
+
+	serviceAccountStatusTable = "service_account_status"
 )
 
 // MigrationsFS holds the embedded schema (app-owned). cmd wires it into the

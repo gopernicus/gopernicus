@@ -36,6 +36,7 @@ var authTables = []string{
 	passkeyCredentialsTable,
 	totpCredentialsTable,
 	recoveryCodesTable,
+	serviceAccountStatusTable,
 	passwordsTable,
 	sessionsTable,
 	apiKeysTable,

@@ -18,7 +18,7 @@ with `db.ProbeAuditImmutable` last. The bundle fills `Maintenance`
 ## Migrations
 
 `migrations/*.sql` carry the same version (filename) set as the pgx tree,
-`0001`–`0026` with `0017` absent.
+`0001`–`0027` with `0017` absent.
 
 ### Passkeys (`0025`)
 
@@ -68,6 +68,38 @@ the lockout and resets the count in the same statement) are single statements on
 revokes every session and grant and bumps `auth_revision`; of a pending one, only
 the row. Erasure deletes and counts both tables only when `EraseInput.TOTP` says
 TOTP is wired, and otherwise never names them.
+
+### Service-account status (`0027`)
+
+**`0027_service_account_status.sql` ships; it is required only when
+`AdministrationConfig.ServiceAccountStatus` is set** — apply it ahead of time to
+turn the disable/enable routes on later. It creates `service_account_status`
+(one row per account ever disabled: `status` in `active`/`disabled`,
+`changed_at`, `changed_by`; an account without a row is active; no foreign key)
+and touches no existing table. `Repositories` never probes it. The bundle fills
+`ServiceAccountStatus` (`NewServiceAccountStatusStore`); the pocket calls its
+`ProbeSchema` only when the flag is set, and a database without the table then
+refuses the boot with `ErrServiceAccountStatusSchemaMissing`, naming the file.
+`Disable` writes the status row and revokes every unrevoked key of the account
+in one `BEGIN IMMEDIATE` write transaction; `Enable` writes `active` and
+revokes nothing; an unknown account is `sdk.ErrNotFound`. `APIKeyStore`
+implements `apikey.FilteredLister` (`ListByServiceAccountFiltered`): the status
+and never-expires predicates run in SQL over the fixed-width TEXT timestamps —
+revoked first, expired at or before the filter's instant.
+
+### Global session revocation
+
+`OAuth2Store` implements `session.GlobalRevoker`, filled as `GlobalSessions`
+(no schema change). `RevokeAllBatch` is one `BEGIN IMMEDIATE` transaction per
+page — the whole-database write lock, so every other writer (logins included)
+waits behind each batch for up to the connection's `busy_timeout`: the next
+page of active users after the cursor in byte order, `auth_revision` bumped,
+then their sessions, step-up grants and `password_reset` challenges deleted.
+`SweepOrphans` deletes, in one transaction, the sessions and grants of every
+user that is absent or not active. Each batch and the sweep hold the database
+write lock (`BEGIN IMMEDIATE`) for their whole transaction and are bounded only
+by the context. A failed batch (a busy timeout or a cancelled context) leaves
+the earlier batches committed, and the operation is safe to re-run.
 
 ### Audit rail (`0021` and `0022`)
 

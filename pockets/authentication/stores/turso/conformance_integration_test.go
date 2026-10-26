@@ -33,6 +33,7 @@ var authTables = []string{
 	"passkey_credentials",
 	"totp_credentials",
 	"recovery_codes",
+	"service_account_status",
 	"user_passwords",
 	"sessions",
 	"api_keys",

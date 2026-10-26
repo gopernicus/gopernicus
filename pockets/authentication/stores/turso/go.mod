@@ -4,7 +4,7 @@ go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.9.0
-	github.com/gopernicus/gopernicus/pockets/authentication v0.29.0
+	github.com/gopernicus/gopernicus/pockets/authentication v0.31.0
 	github.com/gopernicus/gopernicus/sdk v0.20.0
 )
 

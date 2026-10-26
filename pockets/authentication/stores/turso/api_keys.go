@@ -22,7 +22,10 @@ type APIKeyStore struct {
 	db *tursodb.DB
 }
 
-var _ apikey.APIKeyRepository = (*APIKeyStore)(nil)
+var (
+	_ apikey.APIKeyRepository = (*APIKeyStore)(nil)
+	_ apikey.FilteredLister   = (*APIKeyStore)(nil)
+)
 
 // NewAPIKeyStore returns an APIKeyStore backed by db.
 // It panics if db is nil; the caller owns the database lifecycle.
@@ -110,6 +113,47 @@ func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID
 	q := tursodb.ListQuery[apiKeyRow]{
 		BaseSQL:      `SELECT ` + apiKeyColumns + ` FROM api_keys WHERE service_account_id = ?`,
 		Args:         []any{serviceAccountID},
+		OrderFields:  apikey.OrderFields,
+		DefaultOrder: apikey.DefaultOrder,
+		SearchFields: apikey.SearchFields,
+		PK:           "id",
+		OrderValueOf: func(r apiKeyRow, _ string) any { return r.CreatedAt.Time },
+		PKOf:         func(r apiKeyRow) string { return r.ID },
+	}
+	page, err := tursodb.List(ctx, s.db, q, req)
+	if err != nil {
+		return list.Page[apikey.APIKey]{}, err
+	}
+	return list.MapPage(page, apiKeyRow.toDomain), nil
+}
+
+// ListByServiceAccountFiltered is ListByServiceAccount narrowed by f in SQL,
+// matching apikey.Filter.Matches exactly: revoked takes precedence, and a key
+// whose expires_at is at or before f.Now is expired — compared as fixed-width
+// TEXT, which orders like the instants it stores. An invalid f →
+// sdk.ErrInvalidInput.
+func (s *APIKeyStore) ListByServiceAccountFiltered(ctx context.Context, serviceAccountID string, f apikey.Filter, req list.Request) (list.Page[apikey.APIKey], error) {
+	if err := f.Validate(); err != nil {
+		return list.Page[apikey.APIKey]{}, err
+	}
+	base := `SELECT ` + apiKeyColumns + ` FROM api_keys WHERE service_account_id = ?`
+	args := []any{serviceAccountID}
+	if f.NeverExpires {
+		base += ` AND expires_at IS NULL`
+	}
+	switch f.Status {
+	case apikey.StatusActive:
+		base += ` AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)`
+		args = append(args, tursodb.FormatTime(f.Now))
+	case apikey.StatusExpired:
+		base += ` AND revoked_at IS NULL AND expires_at <= ?`
+		args = append(args, tursodb.FormatTime(f.Now))
+	case apikey.StatusRevoked:
+		base += ` AND revoked_at IS NOT NULL`
+	}
+	q := tursodb.ListQuery[apiKeyRow]{
+		BaseSQL:      base,
+		Args:         args,
 		OrderFields:  apikey.OrderFields,
 		DefaultOrder: apikey.DefaultOrder,
 		SearchFields: apikey.SearchFields,

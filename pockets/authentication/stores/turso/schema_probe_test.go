@@ -49,7 +49,7 @@ func probeDial(t *testing.T) *tursodb.DB {
 func probeDropAll(t *testing.T, db *tursodb.DB) {
 	t.Helper()
 	ctx := context.Background()
-	for _, tbl := range slices.Concat(probeTables, oauth2ProbeTables, externalProbeTables, passkeyProbeTables, totpProbeTables, []string{"schema_migrations"}) {
+	for _, tbl := range slices.Concat(probeTables, oauth2ProbeTables, externalProbeTables, passkeyProbeTables, totpProbeTables, []string{serviceAccountStatusTable, "schema_migrations"}) {
 		if _, err := db.Exec(ctx, "DROP TABLE IF EXISTS "+tbl); err != nil {
 			t.Fatalf("drop %s: %v", tbl, err)
 		}
