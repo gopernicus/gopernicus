@@ -1,5 +1,250 @@
 # Releasing gopernicus modules
 
+## Ambient transactions per datastore instance (published 2026-10-27)
+
+Four annotated tags (not signed) on four modules, plus `workshop/gopernicus/v0.9.2` for the
+scaffold pins (R-4; cut by the owner after this PR merges). Each tag was cut at its PR's
+squash-merge commit on `main` after a green `live-stores` dispatch there, pushed, THEN polled on
+the proxy, and cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache,
+`proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build ./...`, a consumer pinning
+`go 1.26.10`). No sdk tag (the `transaction.Transactor` change is comment-only), no migration.
+Design and rulings: `plans/querierfrom-instance-scope.md` (ratified 2026-10-27; executed copy in
+`plans/`). The audit entry is **AUDIT-056**. Under the owner's 2026-10-23 process ruling this
+section is the whole record: there is no handoff file and no manifest. The operator surface is
+the docs site: *Persistence* ("Two databases never share a transaction"), *Database posture*
+("Two roles"), *Operations runbooks* ("Tenants and offboarding"), the sdk *Capabilities* page,
+the authorization pocket page and the integrations catalog. The reference is the pgxdb and turso
+READMEs' "Ambient transactions are per instance" paragraphs and the two authorization store
+READMEs.
+
+**What changed.** Before, both SQL connectors stored the ambient transaction under one context
+key that every `*DB` shared. In a process with two databases, a store over one database called
+inside the other's `Transact` ran its SQL on the wrong database's transaction, and a `Transact`
+on one inside the other failed with a false `ErrNestedTransact`. Now the context key carries the
+owning `*DB`. `(*DB).TxFrom(ctx)` and `(*DB).QuerierFrom(ctx)` answer only for their own
+instance, and `Transact`/`TransactSnapshot` refuse nesting only on the same instance. The
+package-level `TxFromContext` is removed from both connectors. The sixteen authorization store
+sites (eight pgx, eight turso) call `<own db>.TxFrom`. **Two databases never share a
+transaction**: the framework provides no cross-database atomicity, and ordering or an outbox is
+the host's job.
+
+| Step | Tag | Commit | PR | Cold verification |
+|---|---|---|---|---|
+| 1 | `integrations/datastores/pgxdb/v0.15.0` | `d5c9f213` | #233 (PR-1) | OK; set A, including the negative |
+| 1 | `integrations/datastores/turso/v0.10.0` | `d5c9f213` | #233 (PR-1) | OK; set A, including the negative |
+| 2 | `pockets/authorization/stores/pgx/v0.22.0` | `18bb3f57` | #234 (PR-2) | OK; set B, gps-three-sixty shape |
+| 2 | `pockets/authorization/stores/turso/v0.21.0` | `18bb3f57` | #234 (PR-2) | OK; set B |
+| 3 | `workshop/gopernicus/v0.9.2` | this PR's squash commit | this PR (PR-3) | owner: a cold `init --db pgx` / `--db turso` from `@v0.9.2` (task-12) |
+
+Order: #233 merged at 2026-10-27T21:05:13Z (`d5c9f213`); `live-stores` went green on `main` (run
+40583774102), and both connector tags were cut there. Their messages name the removal, the
+lockstep floor and the store-tag freeze. PR-2 repinned both authorization stores (pgxdb v0.14.0 →
+v0.15.0, turso v0.9.0 → v0.10.0, by explicit `GOWORK=off go get`, then tidy; the authorization
+core and sdk pins stay). #234 merged at 2026-10-27T21:25:20Z (`18bb3f57`); `live-stores` went
+green on `main` (run 40586686568), and both store tags were cut there. Every module ships MINOR
+under the v0 convention; the workshop tag is a PATCH ("scaffold pins only; no rule-set change").
+
+**The store-tag freeze — lifted.** From #233's merge until #234's merge, `main`'s authorization
+store `go.mod`s pinned pgxdb v0.14.0 / turso v0.9.0 while their code called `TxFrom`, so a
+`GOWORK=off` build of those modules was red and a store tag cut in that window would have been
+permanently broken. No store tag was cut inside it. The window was 20 minutes (21:05:13Z →
+21:25:20Z), and it closed when #234 merged; the store tags v0.22.0 / v0.21.0 are the first after
+it.
+
+**The MVS sets.** Each tag was cold-verified when it was cut; every set selected sdk v0.20.0.
+- **Set A** (step 1, positive): pgxdb v0.15.0 + authentication pgx v0.16.0 + cms pgx v0.5.0 +
+  events pgx v0.4.0 + jobs pgx v0.7.0 + secrets pgx v0.2.1 built. The turso twin, turso v0.10.0 +
+  authentication turso v0.15.0 + cms turso v0.4.0 + events turso v0.3.0 + jobs turso v0.6.0,
+  built. None of these stores references the removed symbol; MVS lifts their connector pin.
+- **Set A, negative (recorded on purpose, verbatim).** A consumer requiring pgxdb v0.15.0 +
+  authorization pgx v0.21.0 tidies and then fails `go build ./...`:
+  `…/stores/pgx@v0.21.0/mutations.go:81:20: undefined: pgxdb.TxFromContext`, at all eight sites
+  (`mutations.go:81`, `operations.go:68,126`, `read_snapshot.go:19`, `relationships.go:618`,
+  `tuple_cache.go:33`, `tuples.go:384`, `writes.go:97`). turso v0.10.0 + authorization turso
+  v0.20.0 likewise: `…/stores/turso@v0.20.0/mutations.go:41:22: undefined: tursodb.TxFromContext`,
+  at all eight sites. The fix: `go get
+  github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx@v0.22.0` (turso: `…/stores/turso@v0.21.0`).
+- **Set B** (step 2): authorization v0.31.0 + stores pgx v0.22.0 / turso v0.21.0 + pgxdb v0.15.0 /
+  turso v0.10.0 built.
+- **gps-three-sixty shape** (step 2): authentication v0.32.0 + authentication pgx v0.16.0 +
+  authorization v0.31.0 + authorization pgx v0.22.0 + jobs pgx v0.7.0 + pgxdb v0.15.0 +
+  authorization goredis v0.6.0 built; `go mod verify` passed. goredis v0.6.0 transitively requires
+  authorization stores/turso v0.17.0 and datastores/turso v0.9.0 (its test-only requires). That is
+  harmless while the host imports no turso package. A host that imports the turso store must
+  require v0.21.0.
+- **Set C** (this PR, from the tags): auth-cms, production-baseline and cms at `GOWORK=off` from
+  an EMPTY module cache over `proxy.golang.org` + `sum.golang.org`: `all modules verified` and
+  `go build ./...` in each (this covers `production-baseline/cmd/bootstrap`, both
+  `workshop/migrations` runners and auth-cms's jobs-store graph). Selected: auth-cms pgxdb v0.15.0,
+  datastores/turso v0.10.0, authorization pgx v0.22.0; the baseline pgxdb v0.15.0, authorization
+  pgx v0.22.0; cms datastores/turso v0.10.0; sdk v0.20.0 in all three. external-identity,
+  goth-showcase, jobs-minimal and minimal are excluded: no SQL connector is in their module graph.
+
+**Not tagged.** sdk (the `Transactor` clause is comment-only; it ships with the next sdk tag, the
+v0.2.0 precedent); the authorization core and `pockets` (comment-only qualifiers, the S6 #185
+precedent); authentication, cms, events, jobs and secrets stores (none references
+`TxFromContext`; MVS lifts their connector pin, set A); `pockets/authorization/stores/goredis`
+(untouched: its `go.mod` requires authorization stores pgx v0.18.0 / turso v0.17.0 for TESTS
+only); views, ui/goth and the examples. Nothing retracts.
+
+**Standing notes for future store trains.**
+- **The authorization floor.** pgxdb ≥ v0.15.0 ⇒ authorization stores pgx ≥ v0.22.0;
+  datastores/turso ≥ v0.10.0 ⇒ authorization stores turso ≥ v0.21.0. A future repin train of ANY
+  sibling store that lifts a connector drags this floor in through MVS; name it in that train's
+  notes.
+- **goredis.** A future goredis-store repin of the connectors must move its test-only
+  authorization store requires (pgx v0.18.0 / turso v0.17.0 today) to ≥ v0.22.0 / v0.21.0 in the
+  same commit, or its `GOWORK=off -tags=integration` build breaks.
+
+**Upgrade notes.** Eleven rows. One break (row 1, `TxFromContext` removed) and one lockstep (row
+2); everything else is a routing change that only a host with two `Open` calls can see. The "Read
+first" box and the rows are the plan's, verbatim.
+
+> **Read first:** `grep -rnE 'TxFromContext|QuerierFrom\(|\.Transact\(|TransactSnapshot\(|ErrNestedTransact|(pgxdb|tursodb|turso)\.Open\(' --include='*.go'` — count your `Open` calls.
+> **By host shape:** every host → rows 1, 2, 9; ONE `Open` per process → row 3 (no behaviour
+> change); two `Open`s over two DATABASES → rows 4, 5; two `Open`s over ONE database → row 6 (read
+> it first); hosts with their own `TxFromContext` caller (battleboard) → row 7; gps-three-sixty →
+> row 8.
+> - **Pins (lockstep, transitive):** pgxdb **v0.15.0** WITH authorization stores pgx **v0.22.0**;
+>   turso **v0.10.0** WITH authorization stores turso **v0.21.0** — whether you bump the connector
+>   or another store's tag lifts it. authentication/cms/events/jobs/secrets stores, every pocket
+>   core, sdk, views, ui/goth are unchanged (MVS lifts their connector pin).
+
+| # | Flip | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | **BREAKING:** `pgxdb.TxFromContext` / `tursodb.TxFromContext` removed; `(*DB).TxFrom(ctx)` added | a caller of the package-level helper stops compiling; replace with `<the *DB>.TxFrom(ctx)` | none (the instance is required) | pgxdb@v0.15.0, turso@v0.10.0 |
+| 2 | **Lockstep:** authorization stores pgx v0.21.0 / turso v0.20.0 do not build against the new connectors — `…/stores/pgx@v0.21.0/mutations.go:81: undefined: pgxdb.TxFromContext` — and MVS brings the new connector in through ANY later store tag that requires it | the error names a module you never touched | hold pgxdb v0.14.0 / turso v0.9.0 (every other store accepts them) until both pins move together | authorization stores pgx@v0.22.0, turso@v0.21.0 |
+| 3 | **One `Open` per process: no behaviour change.** `QuerierFrom`, `Transact`, `TransactSnapshot`, `ErrNestedTransact` behave exactly as before | nothing | — | pgxdb@v0.15.0, turso@v0.10.0 |
+| 4 | **Two `*DB` over two databases:** a store over B called inside `A.Transact` now runs on B's pool (was: on A's transaction — the wrong database) | a workflow that "worked" because table names collided now writes to the right database; a "relation does not exist" error goes away | — | pgxdb@v0.15.0, turso@v0.10.0 |
+| 5 | **Two `*DB` over two databases:** `B.Transact` inside `A.Transact` is allowed (was: false `ErrNestedTransact`); `A.Transact` inside `A.Transact` still refuses; a nested request holds one connection from each pool | the inner commits on its own when its callback returns; the outer may still roll back — no cross-database atomicity; order non-retractable writes last or use `pockets/events`' outbox; nest instances in one fixed order, give requests a deadline, size `DB_MAX_CONNS` on the inner pool for the outer's concurrency | — | pgxdb@v0.15.0, turso@v0.10.0 |
+| 6 | **Two `*DB` over ONE database (two roles, a duplicate `Open`):** a store over B inside `A.Transact` WAS on A's transaction (atomic by accident) and is NOW on B's pool | no longer atomic with A; it lock-waits on rows or tables A holds — on PostgreSQL unbounded unless `DB_LOCK_TIMEOUT`/`DB_STATEMENT_TIMEOUT` are set (the server's deadlock detector cannot see a client-side wait; the request pins two connections); on a SQLite file every inner write fails `SQLITE_BUSY` after `busy_timeout`; symptom: requests stall in pool acquire / `idle in transaction` on A while B saturates | build those stores over A (one `*DB`, one transaction); otherwise set `DB_LOCK_TIMEOUT` and never nest the pair | pgxdb@v0.15.0, turso@v0.10.0 |
+| 7 | **Battleboard** `internal/outbound/domains/tenancy/scope.go:62`: `tx, inTx := pgxdb.TxFromContext(ctx)` → `tx, inTx := s.db.TxFrom(ctx)`; the `Run` doc comment's "or inside any other pgxdb transaction, is refused" becomes "or inside another transaction of the same `*DB`" | one line; `Scope.Querier` keeps returning the scope's own transaction so `set_config('app.tenant_id', …, true)` stays transaction-local and FORCE RLS keeps answering tenant-owned stores; `organizations.go` (`QuerierFrom`) unchanged; one pool, so rows 3 and 7 are its whole upgrade; pins per row 2 (it pins authorization pgx v0.21.0 today) | — | host |
+| 8 | **gps-three-sixty:** no code change (no `Transact`, no `TxFromContext`); two databases, so row 6 does not apply. After row 2, a future business `db.Transact` around authorization/authentication calls over `iamDB` runs them on `iamDB`, and `iamDB.Transact` may nest inside it. Two flips WITHOUT a signal under R-1 (a): `Apply`/`Fence`/`Expire` over `iamDB` inside `db.Transact` used to refuse (`ErrMutationInsideTransaction`, for the wrong reason) and now commit on their own — a grant applied inside a business transaction that later rolls back STAYS applied (a dangling permission on a resource never created); and `CacheableContext` is now true there, so checks inside a business transaction may be served from the goredis tuple cache | write grants after the business commit, or compensate on rollback with `OperationID` + `Fence`; pins only | — | host |
+| 9 | `ErrNestedTransact` message text: "this database instance already holds a transaction; pass the ambient ctx to this instance's repositories instead" | a log alert keyed on the old string stops matching | alert on `errors.Is(err, pgxdb.ErrNestedTransact)` / `tursodb.ErrNestedTransact`, not the message | pgxdb@v0.15.0, turso@v0.10.0 |
+| 10 | sdk `transaction.Transactor` contract clause: an implementation neither joins nor refuses another instance's transaction; nesting is per instance | none | — | sdk (untagged) |
+| 11 | scaffold pins pgxdb v0.15.0 / turso v0.10.0; emitted README runs the guard `@v0.9.2` | a cold `init` lands on the fixed connector; hosts pinning the guard at v0.9.1 need not bump (no rule-set change) | — | workshop@v0.9.2 (R-4) |
+
+**S4d part 2 interaction.** `RotateAt`/`DeleteIfIdle` stay on the pool path; the fix does not
+change them.
+
+**Handoff notes — what a host does on upgrade, by host shape.** Repin with explicit `GOWORK=off
+go get <module>@<tag>`, then `GOWORK=off go mod tidy`; move the connector and the authorization
+store in the same commit (row 2).
+- **Every host** (rows 1, 2, 9). Run the Read-first grep. Replace any `TxFromContext` call with
+  `<the *DB>.TxFrom(ctx)`. Re-key log alerts on `errors.Is(err, …ErrNestedTransact)`.
+- **Single-DB hosts** (one `Open` per process, row 3): no change beyond the pins.
+- **Two `Open`s over two databases** (rows 4, 5): stores now run on their own database. Nothing
+  is atomic across the two: order the write you cannot take back last, or use an outbox. Nest
+  instances in one fixed order and size the inner pool.
+- **Two `Open`s over ONE database** (row 6, read it first): hold one `*DB` for stores you want in
+  one transaction. Otherwise set `DB_LOCK_TIMEOUT` (and `DB_STATEMENT_TIMEOUT`) and never nest
+  the pair.
+- **battleboard** (rows 3, 7): one line in `Scope.Querier`, `pgxdb.TxFromContext(ctx)` →
+  `s.db.TxFrom(ctx)`, plus the `Run` comment and the row-2 pins (authorization pgx v0.21.0 →
+  v0.22.0 with pgxdb v0.15.0).
+- **gps-three-sixty** (row 8): pins only (pgxdb v0.15.0 + authorization pgx v0.22.0; the shape
+  built in step 2). Under R-1 (a), a grant applied inside a business `db.Transact` that rolls
+  back STAYS applied: write grants after the business commit, or compensate with `OperationID` +
+  `Fence`. Checks inside a business transaction may be served from the goredis tuple cache. Its
+  goredis v0.6.0 drags in authorization stores/turso v0.17.0 + datastores/turso v0.9.0
+  transitively; harmless while no turso package is imported, but a host importing the turso store
+  must require v0.21.0.
+- **Examples (this PR).** Every example builds, vets and tests at `GOWORK=off` on these tags.
+  Pins moved (explicit `GOWORK=off go get`, then `GOWORK=off go mod tidy`): `auth-cms` pgxdb
+  v0.14.0→v0.15.0, datastores/turso v0.9.0→v0.10.0, authorization stores/pgx v0.21.0→v0.22.0;
+  `production-baseline` pgxdb v0.14.0→v0.15.0, authorization stores/pgx v0.21.0→v0.22.0; `cms`
+  datastores/turso v0.9.0→v0.10.0. `external-identity`, `goth-showcase`, `jobs-minimal` and
+  `minimal` pin no moved module.
+- **Scaffold (this PR, row 11).** `init` pins pgxdb v0.15.0 / datastores/turso v0.10.0 (sdk
+  stays v0.20.0); `new pocket`'s store templates likewise; the emitted README runs the guard
+  `@v0.9.2`. The scaffold pins no authorization store.
+
+**The review record.** Every PR passed a code review before merge; the fixes were folded as
+follow-up commits on the PR.
+- **#233 (PR-1), lead-backend, ship-with-edits** (1 MED, 7 LOW) and **data-integration,
+  ship-with-edits** (1 MED, 5 LOW). The lead-backend MED was an AUDIT historical-entry
+  (AUDIT-034, Firestore) qualifier, which was reverted. The data-integration MED was the
+  pre-existing fresh-database requirement of the pgxdb live suite, noted in the PR and under
+  "Known and deferred". The LOWs were all folded in:
+  - docs wording;
+  - the turso `Expire` comment;
+  - a turso commit-variant write test;
+  - a pgx `ReadTupleSnapshot` routing test;
+  - isolation checks over three nesting shapes;
+  - reflows.
+
+  Both reviewers upheld all six implementer deviations:
+  1. Red-before-green ran the new store tests unchanged against an extracted `origin/main` tree.
+     A per-site revert was impossible, because the old site code no longer compiles once
+     `TxFromContext` is removed.
+  2. The live tests set `Config.LockTimeout` instead of a DSN parameter.
+  3. The pgx same-database `LOCK TABLE` pin runs inside `b.Transact` nested in `a.Transact`. A
+     bare `LOCK TABLE` outside a transaction block fails with 25P01.
+  4. turso's `ReadTupleSnapshot` site is asserted as routing, because turso has no isolation
+     check.
+  5. An extra `Expire` contract comment, "of m.db", in pgx `operations.go` (mirrored on turso
+     during review).
+  6. Fixture choices: the pgx foreign `Open` sets a 5s lock timeout, and the turso store test
+     defines its own grant helper (`grantCmd` sits behind the integration build tag).
+- **#234 (PR-2):** pins only; gated by `make guard && make check` and the `GOWORK=off` legs below.
+
+**Verification record.**
+- `make guard` and `make check` pass on each PR. `live-stores` green on `main` before each tag
+  (runs 40583774102 at `d5c9f213` and 40586686568 at `18bb3f57`).
+- **PR-1 (#233).** pgxdb live **510/0/0** on a fresh PostgreSQL 17 database; authorization pgx
+  live **797/0/1**, bare and with `POSTGRES_TEST_SCHEMA` (the skip is the known non-C collation
+  test); turso connector `-tags=integration` on the local-file driver **230/0/0**; turso
+  authorization store `-tags=integration` **1020/0/0**. **Red before green:** the 13
+  foreign-instance subtests per dialect fail on `main` `25eadbd0` and pass with the change; the
+  lead-backend reviewer reproduced that independently. The lead's own reruns: pgxdb two-instance
+  9/0, the foreign-instance tests 13/0 on pgx and 13/0 on turso.
+- **PR-2 (#234), `GOWORK=off` against the connector tags.** authorization pgx live **797/0/1**,
+  bare and schema-scoped; turso store `-tags=integration` **1020/0/0**.
+- **Cold verification:** every tag above; sets A (with the negative), B, the gps-three-sixty
+  shape and C as listed.
+- **This PR (PR-3).** Every example builds, vets and tests at `GOWORK=off`; set C from an empty
+  module cache. A cold `init --db pgx` and `init --db turso` from THIS tree (built binary, empty
+  module cache, `GOWORK=off`, the proxy) pins sdk v0.20.0 + pgxdb v0.15.0 / datastores/turso
+  v0.10.0, cites the guard `@v0.9.2` in its README, tidies, builds, vets, passes `go mod verify`,
+  and `guard --posture` is clean (25 rules, 2 packages). The cold `init` from `@v0.9.2` is the
+  owner's, after the tag (task-12). `make docs-build` in `workshop/documentation` succeeds.
+
+**Owner rulings.** Ratified 2026-10-27 ("all recs"): **R-1 (a)** `ErrMutationInsideTransaction`,
+`CacheableContext` and snapshot reads judge only the store's own instance's transaction (row 8 is
+the price); **R-2 (a)** `TxFromContext` removed outright, no deprecated shim (a shim would need a
+second instance-blind key); **R-3 (a)** per-store foreign-instance tests now, a storetest family
+when the authorization core next tags; **R-4 (a)** tag `workshop/gopernicus/v0.9.2` for the
+scaffold pins; **R-5 (a)** three PRs; **R-6 (b)** the libSQL-server turso leg WAIVED, with the
+local-file legs as the proof. During the build: the sdk clause was reworded to "may reject
+nesting on its own instance, never because another instance holds one"; **AUDIT-056** was added.
+
+**As-built deviations a host can see.**
+- **The sdk clause** reads: an implementation "neither joins nor refuses another instance's
+  transaction; it may reject nesting on its own instance, never because another instance holds
+  one — two datastores never share a transaction" (owner rewording of the plan's text).
+- **AUDIT-056** records the migration; the plan had only qualified the existing AUDIT entries.
+- **13 foreign-instance subtests per dialect**, not one per site: the reviews added a pgx
+  `ReadTupleSnapshot` routing case beside its isolation case, a turso foreign-commit write case,
+  and an own-instance-nests-around-a-foreign-one case.
+- **Isolation checks over three nesting shapes** in the pgxdb live two-instance test (plain in
+  plain, plain in snapshot, snapshot in plain) where the plan named the `TransactSnapshot` outer
+  variant.
+- **The pgx foreign instance sets `LockTimeout: 5s`** on its bare `Open`, so a regression waits a
+  bounded time instead of hanging the suite.
+
+**Known and deferred.**
+- **The Turso libSQL-server leg was WAIVED** (R-6), as in S4d parts 1 and 2; the local-file
+  driver runs (connector 230/0/0, store 1020/0/0) are accepted as Turso coverage; CI's
+  `live-stores` skips Turso.
+- **pgxdb `live_test.go:68`** (`TestLive_OpenAndMigrate`) counts every `default`-source ledger
+  row, so it fails on a database a prior suite has migrated. Pre-existing; narrow it to
+  `version = '0001_init.sql'`. Until then run the pgxdb live suite on a fresh database.
+- **The DI9 comments** in `pockets/authentication/stores/{pgx,turso}/session_activity.go` still
+  name `pgxdb.QuerierFrom` / `tursodb.QuerierFrom` as package functions.
+- **R-3 (b):** a storetest `RunForeignInstance` family when the authorization core next tags.
+- **S4d part 2 LOW-2:** pgx `Rotate`/`RotateAt`/`ConsumeGrace` lack turso's `session_profile`
+  filter (owner rec: yes).
+
 ## Guard P9 reads every host ledger (workshop/gopernicus v0.9.1 — published 2026-10-26)
 
 **PATCH.** Plan: [plans/guard-p9-ledgers.md](plans/guard-p9-ledgers.md) (ratified 2026-10-26).

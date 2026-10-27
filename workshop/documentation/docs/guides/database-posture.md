@@ -17,6 +17,12 @@ The scaffold uses one `DB_URL` for the migration runner and the server. Split th
   function inoperative, and a docker image's default `postgres` role is a superuser;
 - a **runtime** role the server connects as, with data access only.
 
+A migrator-role `*DB` and a runtime-role `*DB` over one database are two datastore instances.
+Their transactions do not join, and they can block each other: an inner transaction on one waits
+on locks the outer holds on the other, unbounded without `DB_LOCK_TIMEOUT`. Never run the
+migrator inside a runtime transaction; migrations already run pre-boot. See *Persistence*, "Two
+databases never share a transaction".
+
 Create the runtime role with SQL, not the provider console: Neon console and API roles carry
 `pg_write_all_data` (through `neon_superuser`), which no per-table `REVOKE` removes, and a role
 holding `rds_superuser` can set `session_replication_role`.

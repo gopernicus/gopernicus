@@ -24,7 +24,8 @@ timeout) and requires a blank import of `integrations/datastores/turso/localfile
 to register the pure-Go driver. Both SQL connectors offer snapshot transactions
 for work that must see one consistent state: `pgxdb.DB.TransactSnapshot` runs a
 read-write REPEATABLE READ transaction, and turso `DB.BeginRead` opens a pinned
-read snapshot.
+read snapshot. Ambient transactions are per `*DB`: two databases never share a
+transaction, and nesting is refused only on the same instance.
 
 Omitted PostgreSQL pool lifetimes retain DSN/driver defaults; positive fields
 override them. Authentication, authorization and events SQL store constructors
