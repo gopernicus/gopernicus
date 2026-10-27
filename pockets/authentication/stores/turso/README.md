@@ -18,7 +18,7 @@ with `db.ProbeAuditImmutable` last. The bundle fills `Maintenance`
 ## Migrations
 
 `migrations/*.sql` carry the same version (filename) set as the pgx tree,
-`0001`–`0027` with `0017` absent.
+`0001`–`0029` with `0017` and `0028` absent.
 
 ### Passkeys (`0025`)
 
@@ -86,6 +86,34 @@ revokes nothing; an unknown account is `sdk.ErrNotFound`. `APIKeyStore`
 implements `apikey.FilteredLister` (`ListByServiceAccountFiltered`): the status
 and never-expires predicates run in SQL over the fixed-width TEXT timestamps —
 revoked first, expired at or before the filter's instant.
+
+### Session activity (`0029`)
+
+**`0029_session_activity.sql` ships; it is required only when
+`SessionsConfig.IdleTimeout` is set** — apply it ahead of time to turn idle
+expiry on later. It adds one nullable column, `sessions.last_rotated_at TEXT`
+(NULL for every existing row), written in exactly `created_at`'s fixed-width
+TEXT encoding (`tursodb.FormatTime`), so the two order alike; every idle
+comparison runs in Go, never in SQL. SQLite has no `lock_timeout`: the ALTER
+briefly holds the database write lock, and a writer that outlasts the
+connection's `busy_timeout` fails the file — **on lock timeout, re-run `make
+migrate`**. `Repositories` never probes it, and every other statement names its
+columns explicitly, so an older binary keeps working on a migrated table.
+`SessionStore` implements `session.ActivityRepository`; the pocket calls its
+`ProbeSchema` only when `IdleTimeout` is set, and a database without the column
+then refuses the boot with `ErrIdleTimeoutSchemaMissing`, naming the file.
+`GetByRefreshHashWithActivity` reads the row and its stamp in one `SELECT` over
+a wired-only column list; `RotateAt` is `Rotate`'s compare-and-swap plus
+`last_rotated_at = now` (the app clock) in one `UPDATE`; `Rotate` and
+`ConsumeGrace` never write the stamp; `DeleteIfIdle` is a conditional `DELETE`
+on `id`, `last_rotated_at IS` the observed stamp (NULL-safe), and the observed
+`rotation_count`. All four run on the pool, never on a transaction the context
+carries. The only supported manual write is the
+grandfather reset, `UPDATE sessions SET last_rotated_at = NULL …`; never
+backfill a value. A value the store did not write breaks that session's
+refresh: `datetime('now')` (not the fixed-width encoding) fails every wired
+refresh's scan, and `''` reads as unstamped but misses `DeleteIfIdle`'s
+compare-and-swap, so an idle judgement fails as an internal error.
 
 ### Global session revocation
 

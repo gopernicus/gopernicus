@@ -43,7 +43,7 @@ option — SQLite has no schemas** (a host switches dialect by one import + one
 
 | member | shape |
 |---|---|
-| `Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repositories, error)` | the full bundle including `OAuth2` and `SessionManagement`, no migration side effects — probes canonical tables and ALTER-added columns in migration order, and errors (`sdk.ErrNotFound`, naming the table or column + the `authentication` migration source) when one is missing; an infrastructure/query failure is never misreported as a missing table; it refuses a database without the `0024` functions the same way, naming the file; it never probes `0025`, `0026` or `0027` (see [Passkeys](#passkeys-0025), [TOTP](#totp-0026) and [Service-account status](#service-account-status-0027)). Last it runs `db.ProbeAppendOnly(ctx, AuditTables(opts...)...)` under the `RuntimeMode` `db` was opened with (see [Audit rail](#audit-rail-0021-and-0022) and [Retention](#retention-0023-and-0024)). The bundle fills `Maintenance` (`NewMaintenanceStore`) and `UserErasure` (`NewErasureStore`); `ServiceAccountStore` implements `serviceaccount.CascadeDeleter` |
+| `Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repositories, error)` | the full bundle including `OAuth2` and `SessionManagement`, no migration side effects — probes canonical tables and ALTER-added columns in migration order, and errors (`sdk.ErrNotFound`, naming the table or column + the `authentication` migration source) when one is missing; an infrastructure/query failure is never misreported as a missing table; it refuses a database without the `0024` functions the same way, naming the file; it never probes `0025`, `0026`, `0027` or `0029` (see [Passkeys](#passkeys-0025), [TOTP](#totp-0026), [Service-account status](#service-account-status-0027) and [Session activity](#session-activity-0029)). Last it runs `db.ProbeAppendOnly(ctx, AuditTables(opts...)...)` under the `RuntimeMode` `db` was opened with (see [Audit rail](#audit-rail-0021-and-0022) and [Retention](#retention-0023-and-0024)). The bundle fills `Maintenance` (`NewMaintenanceStore`) and `UserErasure` (`NewErasureStore`); `ServiceAccountStore` implements `serviceaccount.CascadeDeleter` |
 | `AuditTables(opts ...Option) []pgxdb.AppendOnlyTable` | the append-only tables this store owns — `security_events`, schema-qualified under `WithSchema`, verified against the trigger function `0022` ships, with the one `DefinerFunction` `0024` ships (`security_events_purge_before(pg_catalog.timestamptz, pg_catalog.int4)`). A migrator preflights the runtime role with `pgxdb.InspectTablePrivileges(ctx, q, role, pgx.AuditTables(opts...)...)`, deciding exactly as the boot probe will |
 | `Option` | construction option, accepted by `Repositories` and by every `NewXStore(db, opts ...Option)` constructor, so a host composing its own bundle gets the same seam |
 | `WithSchema(s pgxdb.Schema) Option` | places every table these stores touch in `s`; the zero `Schema` is the default and renders today's unqualified SQL byte-for-byte. It never panics — validation happened in `pgxdb.NewSchema` at the host |
@@ -89,7 +89,7 @@ change outside this option. With a schema set the probe IS scoped to it.
 ## Migrations
 
 `migrations/*.sql` carry the **identical version (filename) set** as the turso
-tree — `0001`–`0027` (twenty-one tables; auth owns no delivery table). Same filename
+tree — `0001`–`0029` with `0017` and `0028` absent (twenty-one tables; auth owns no delivery table). Same filename
 = same logical schema step; content is per-dialect. After export, the host owns
 the final migration stream and applies it pre-boot through its own ledger.
 
@@ -161,6 +161,32 @@ unknown account is `sdk.ErrNotFound`. `APIKeyStore` implements
 `apikey.FilteredLister` (`ListByServiceAccountFiltered`): the status and
 never-expires predicates run in SQL — revoked first, expired at or before the
 filter's instant.
+
+### Session activity (`0029`)
+
+**`0029_session_activity.sql` ships; it is required only when
+`SessionsConfig.IdleTimeout` is set** — apply it ahead of time to turn idle
+expiry on later. It begins with `SET LOCAL lock_timeout = '5s'` and adds one
+nullable column, `sessions.last_rotated_at TIMESTAMPTZ` (`ADD COLUMN IF NOT
+EXISTS`, NULL for every existing row). The ALTER is metadata-only but takes
+`ACCESS EXCLUSIVE` on `sessions`, so under traffic it can lose the lock race:
+**on lock timeout, re-run `make migrate`** (the file applies whole or not at
+all). `Repositories` never probes it, and every other statement names its
+columns explicitly, so an older binary keeps working on a migrated table.
+`SessionStore` implements `session.ActivityRepository`; the pocket calls its
+`ProbeSchema` only when `IdleTimeout` is set, and a database without the column
+then refuses the boot with `ErrIdleTimeoutSchemaMissing`, naming the file. The
+probe resolves `sessions` exactly as the store's statements do (the qualified
+name under `WithSchema`, else the `search_path`), so a same-named table in
+another schema never satisfies it. `GetByRefreshHashWithActivity` reads the row
+and its stamp in one `SELECT` over a wired-only column list; `RotateAt` is
+`Rotate`'s compare-and-swap plus `last_rotated_at = now` (the app clock, to the
+microsecond) in one `UPDATE`; `Rotate` and `ConsumeGrace` never write the stamp;
+`DeleteIfIdle` is a conditional `DELETE` on `id`, `last_rotated_at IS NOT
+DISTINCT FROM` the observed stamp, and the observed `rotation_count`. All four
+run on the pool, never on a transaction the context carries. The only
+supported manual write is the grandfather reset, `UPDATE sessions SET
+last_rotated_at = NULL …`; never backfill a value.
 
 ### Global session revocation
 

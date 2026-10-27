@@ -143,3 +143,14 @@ func TestSchemaProbe_CreatesNoSchema(t *testing.T) {
 		}
 	}
 }
+
+// TestSessionActivityNeverBlanketProbed pins 0029 out of Repositories'
+// blanket column probe: the column is required only when the host sets
+// SessionsConfig.IdleTimeout, and SessionStore.ProbeSchema asks then.
+func TestSessionActivityNeverBlanketProbed(t *testing.T) {
+	for _, pc := range probeColumns {
+		if pc.migration == sessionActivityMigration || pc.column == "last_rotated_at" {
+			t.Fatalf("probeColumns lists %+v; 0029 must be probed only through SessionStore.ProbeSchema", pc)
+		}
+	}
+}

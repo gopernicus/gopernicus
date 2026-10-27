@@ -75,7 +75,9 @@ var externalProbeTables = []string{"external_subjects"}
 // stores implement passkey.SchemaProber and totp.SchemaProber, which the pocket
 // calls only under WithPasskeys and WithTOTP. Nor 0027 (service_account_status):
 // the pocket calls ServiceAccountStatusStore.ProbeSchema only under
-// AdministrationConfig.ServiceAccountStatus.
+// AdministrationConfig.ServiceAccountStatus. Nor 0029 (sessions.last_rotated_at,
+// deliberately absent from probeColumns): the pocket calls
+// SessionStore.ProbeSchema only under SessionsConfig.IdleTimeout.
 // Last it checks the 0022 immutability
 // triggers (AuditTables) under the RuntimeMode db was opened with, logging a
 // WARN when they are missing or altered.

@@ -205,3 +205,52 @@ func createDecoyUser(t *testing.T, repos auth.Repositories, label string) {
 		t.Fatalf("create %s user: %v", label, err)
 	}
 }
+
+// TestLive_SessionActivityProbe_Decoy proves SessionStore.ProbeSchema reads
+// the sessions table the store's statements resolve, in both directions: a
+// default schema WITH last_rotated_at never answers for a WithSchema store
+// whose schema lacks it, and a schema off the search_path WITH the column
+// never answers for a bare store whose default schema lacks it.
+func TestLive_SessionActivityProbe_Decoy(t *testing.T) {
+	db := probeDial(t)
+	ctx := context.Background()
+	schema := disposableSchema(t, "auth_decoy_activity")
+	assertNotOnSearchPath(t, db, schema)
+	dropSchema(t, db, schema)
+	t.Cleanup(func() { dropSchema(t, db, schema) })
+	if err := pgxdb.RunMigrations(ctx, db, MigrationsFS, MigrationsDir); err != nil {
+		t.Fatalf("migrate default schema: %v", err)
+	}
+	if err := pgxdb.RunMigrations(ctx, db, MigrationsFS, MigrationsDir, pgxdb.WithSchema(schema)); err != nil {
+		t.Fatalf("migrate schema: %v", err)
+	}
+
+	if _, err := db.Exec(ctx, `ALTER TABLE `+schema.Table(sessionsTable)+` DROP COLUMN last_rotated_at`); err != nil {
+		t.Fatalf("drop the schema's column: %v", err)
+	}
+	err := NewSessionStore(db, WithSchema(schema)).ProbeSchema(ctx)
+	if !errors.Is(err, sdk.ErrNotFound) || !strings.Contains(err.Error(), schema.Table(sessionsTable)) || !strings.Contains(err.Error(), sessionActivityMigration) {
+		t.Fatalf("WithSchema ProbeSchema with the column only in the default schema = %v, want sdk.ErrNotFound naming %s and %s", err, schema.Table(sessionsTable), sessionActivityMigration)
+	}
+	if err := NewSessionStore(db).ProbeSchema(ctx); err != nil {
+		t.Fatalf("bare ProbeSchema on the migrated default schema = %v, want nil", err)
+	}
+
+	if _, err := db.Exec(ctx, `ALTER TABLE `+schema.Table(sessionsTable)+` ADD COLUMN last_rotated_at TIMESTAMPTZ`); err != nil {
+		t.Fatalf("restore the schema's column: %v", err)
+	}
+	if _, err := db.Exec(ctx, `ALTER TABLE `+sessionsTable+` DROP COLUMN last_rotated_at`); err != nil {
+		t.Fatalf("drop the default schema's column: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := db.Exec(context.Background(), `ALTER TABLE `+sessionsTable+` ADD COLUMN IF NOT EXISTS last_rotated_at TIMESTAMPTZ`); err != nil {
+			t.Errorf("restore the default schema's column: %v", err)
+		}
+	})
+	if err := NewSessionStore(db).ProbeSchema(ctx); !errors.Is(err, sdk.ErrNotFound) {
+		t.Fatalf("bare ProbeSchema with the column only in another schema = %v, want sdk.ErrNotFound", err)
+	}
+	if err := NewSessionStore(db, WithSchema(schema)).ProbeSchema(ctx); err != nil {
+		t.Fatalf("WithSchema ProbeSchema on the schema's own column = %v, want nil", err)
+	}
+}
