@@ -89,11 +89,14 @@ type ExternalAuthenticator struct {
 	// external-only engine).
 	registration RegistrationMode
 
-	cache   *cacher.Cache
-	logins  *cacher.Cache
-	ttl     time.Duration
-	grace   time.Duration
-	timeout time.Duration
+	cache  *cacher.Cache
+	logins *cacher.Cache
+	// ageDenials remembers which tokens already recorded an
+	// authentication-age denial, in the login-record store.
+	ageDenials *cacher.Cache
+	ttl        time.Duration
+	grace      time.Duration
+	timeout    time.Duration
 
 	// mirrorBroken latches when a store drops InitialCredentials.External, so a
 	// broken store cannot create one orphan user per request.
@@ -229,6 +232,7 @@ func newExternalAuthenticator(repos ExternalRepositories, cfg ExternalConfig, mo
 		logins = cacher.NewMemory(cacher.WithMaxEntries(cfg.LoginRecordCacheEntries))
 	}
 	e.logins = cacher.New(logins, cacher.WithNamespace(loginRecordCacheNamespace))
+	e.ageDenials = cacher.New(logins, cacher.WithNamespace(ageDenialCacheNamespace))
 	for _, p := range cfg.Providers {
 		issuer := p.Provider.Issuer()
 		e.providers[issuer] = externalProvider{ExternalProvider: p, issuer: issuer}
@@ -302,7 +306,7 @@ func (e *ExternalAuthenticator) Verify(ctx context.Context, raw string, transpor
 		return Principal{}, Credential{}, ErrMFARequired
 	}
 	if reason := e.authenticationAgeRefusal(p, identity); reason != "" {
-		return Principal{}, Credential{}, e.deny(ctx, p, "", reason)
+		return Principal{}, Credential{}, e.denyAuthenticationAge(ctx, p, raw, identity.ExpiresAt, reason)
 	}
 	userID, err := e.resolveSubject(ctx, p, identity)
 	if err != nil {
@@ -327,6 +331,29 @@ func (e *ExternalAuthenticator) authenticationAgeRefusal(p externalProvider, ide
 		return externalReasonAgeExceeded
 	}
 	return ""
+}
+
+// denyAuthenticationAge denies a token refused by MaxAuthenticationAge on
+// every request, but records external_subject_denied once per token: a client
+// retrying an over-age token would otherwise write one row per request. The
+// key is the token's SHA-256, so the cache never holds the token. A cache miss,
+// an evicted entry or a cache error records the row (a cache fault costs a
+// duplicate, never a missing one) and never changes the denial. The entry
+// lives until the token expires, at most 24 hours and at least one minute; a
+// token with no known expiry is remembered for the 24-hour ceiling.
+func (e *ExternalAuthenticator) denyAuthenticationAge(ctx context.Context, p externalProvider, raw string, expiresAt time.Time, reason string) error {
+	sum := sha256.Sum256([]byte(raw))
+	key := hex.EncodeToString(sum[:])
+	if _, found, err := e.ageDenials.Get(ctx, key); err == nil && found {
+		return ErrExternalSubjectDenied
+	}
+	err := e.deny(ctx, p, "", reason)
+	ttl := maxLoginRecordTTL
+	if !expiresAt.IsZero() {
+		ttl = max(min(expiresAt.Sub(e.now()), maxLoginRecordTTL), minLoginRecordTTL)
+	}
+	_ = e.ageDenials.Set(ctx, key, []byte{1}, ttl)
+	return err
 }
 
 // recordLogin records external_login once per token per login-record cache,

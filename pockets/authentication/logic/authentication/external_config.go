@@ -29,6 +29,7 @@ const (
 
 	defaultLoginRecordCacheEntries = 10_000
 	loginRecordCacheNamespace      = "authext_login"
+	ageDenialCacheNamespace        = "authext_age_denied"
 	maxLoginRecordTTL              = 24 * time.Hour
 	minLoginRecordTTL              = time.Minute
 )
@@ -102,7 +103,9 @@ type ExternalConfig struct {
 	// under its own "authext_login" namespace, so one token records one row per
 	// cache. Nil selects an in-process cacher.Memory: dedupe per instance. A
 	// store shared across instances dedupes fleet-wide. It is separate from
-	// RevocationCache so login records never evict revocation facts.
+	// RevocationCache so login records never evict revocation facts. The same
+	// store, under "authext_age_denied", records external_subject_denied once
+	// per token for the MaxAuthenticationAge reasons.
 	LoginRecordCache cacher.Storer
 	// LoginRecordCacheEntries bounds the default in-process login-record cache
 	// (10,000).
