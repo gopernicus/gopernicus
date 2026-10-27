@@ -303,9 +303,17 @@ it is in scope when its module ships a `migrations/` directory (the pgx and turs
 stores do; the memory, goredis and firestore stores do not). `--posture`
 resolves the module directory with `go list -m -f '{{.Dir}}' <module>` in the
 host root — a `go.work`, a `replace` or the module cache answers, bounded by a
-timeout — and a resolution error is a finding naming the module. The host
-ledger is `workshop/migrations/primary/`. For each `NNNN_<name>.sql` in the
-store's `migrations/` (`_`-prefixed files skipped), the ledger holds a file with
+timeout — and a resolution error is a finding naming the module. A host
+ledger is any directory under `workshop/migrations/` (`_`- and `.`-prefixed
+skipped; with none, `primary/`), one per database, and each store lives in
+exactly one: its home is the ledger holding byte-identical copies of its files,
+and identical copies in a second ledger are one finding naming both (a suffix
+match alone never makes a home). With more than one ledger, the P9 status line
+names each store's ledger —
+`P9 ok (3 stores; ledgers: authentication→iam, authorization→iam, jobs→primary)`
+(workshop/gopernicus v0.9.1 and later; earlier releases read `primary/` only).
+For each `NNNN_<name>.sql` in the
+store's `migrations/` (`_`-prefixed files skipped), the home ledger holds a file with
 the same `<name>` after any numeric prefix (hosts renumber; the version is the
 filename, so a renumbered copy keeps its bytes) and the same bytes. A missing or
 edited copy is one finding per store file; the fix is a re-export — copy the
