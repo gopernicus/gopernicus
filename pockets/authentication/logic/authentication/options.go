@@ -249,10 +249,19 @@ func WithPassword(value PasswordConfig) Option {
 	}
 }
 
-// SessionsConfig sets the access-token and refresh-token lifetimes.
+// SessionsConfig sets the access-token and refresh-token lifetimes and the
+// optional idle timeout.
 type SessionsConfig struct {
 	AccessTokenTTL time.Duration
 	RefreshTTL     time.Duration
+	// IdleTimeout ends a first-party session whose last refresh rotation is at
+	// least this old: the refresh is refused with ErrInvalidRefreshToken and the
+	// row deleted (session_idle_expired). Zero is off. It must exceed
+	// AccessTokenTTL (ErrIdleTimeoutBelowAccessTokenTTL) and needs
+	// Repositories.Sessions to implement session.ActivityRepository
+	// (ErrIdleTimeoutRequires) over a migrated schema
+	// (ErrIdleTimeoutSchemaMissing).
+	IdleTimeout time.Duration
 }
 
 // WithSessions replaces the complete SessionsConfig group, including zero values.
@@ -260,6 +269,7 @@ func WithSessions(value SessionsConfig) Option {
 	return func(c *constructorConfig) {
 		c.AccessTokenTTL = value.AccessTokenTTL
 		c.RefreshTTL = value.RefreshTTL
+		c.IdleTimeout = value.IdleTimeout
 	}
 }
 

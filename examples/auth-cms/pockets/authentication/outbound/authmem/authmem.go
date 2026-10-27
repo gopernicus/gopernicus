@@ -55,6 +55,10 @@ import (
 // sdk.DatabaseID strategy, amended D10) — mimicking a schema default.
 var ids = sdk.IDGenerator{}
 
+// sessionRepo carries the idle-timeout capability, so this host may set
+// AUTH_IDLE_TIMEOUT.
+var _ session.ActivityRepository = sessionRepo{}
+
 // data holds every auth entity in maps behind one mutex. The v2 collections
 // (oauthAccounts, securityEvents) are slices where the port has no single-key
 // identity; the rest are keyed maps.
@@ -102,6 +106,10 @@ type data struct {
 	// accountStatus is the service-account status table, by service-account
 	// ID; an absent row is active.
 	accountStatus map[string]serviceaccount.Status
+
+	// sessionStamps is the sessions activity column (last_rotated_at), by
+	// session ID; an absent entry is NULL. Only RotateAt writes it.
+	sessionStamps map[string]time.Time
 }
 
 // Store is an in-memory auth datastore. Its Repositories method yields the port
@@ -133,7 +141,16 @@ func New() *Store {
 		totpCreds:        map[string]totp.Credential{},
 		totpCodes:        map[string][]totp.RecoveryCode{},
 		accountStatus:    map[string]serviceaccount.Status{},
+		sessionStamps:    map[string]time.Time{},
 	}}
+}
+
+// deleteSession removes a session row and its activity stamp together; every
+// session delete goes through it so a stamp never outlives its row. The caller
+// holds the write lock.
+func (d *data) deleteSession(id string) {
+	delete(d.sessions, id)
+	delete(d.sessionStamps, id)
 }
 
 // Repositories bundles the per-port views as the pocket's repository set. Every
@@ -539,16 +556,69 @@ func (r sessionRepo) Delete(_ context.Context, id string) error {
 	if _, ok := r.sessions[id]; !ok {
 		return sdk.ErrNotFound
 	}
-	delete(r.sessions, id)
+	r.deleteSession(id)
 	return nil
 }
+
+// --- session.ActivityRepository ---
+
+// GetByRefreshHashWithActivity is GetByRefreshHash plus the row's stamp, read
+// under the same lock.
+func (r sessionRepo) GetByRefreshHashWithActivity(ctx context.Context, hash string) (session.Session, session.RefreshMatch, session.Activity, error) {
+	sess, match, err := r.GetByRefreshHash(ctx, hash)
+	if err != nil {
+		return session.Session{}, 0, session.Activity{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	stamp, ok := r.sessionStamps[sess.ID]
+	return sess, match, session.Activity{LastRotatedAt: stamp, Stamped: ok}, nil
+}
+
+// RotateAt is Rotate's compare-and-swap plus the activity stamp, under one
+// lock.
+func (r sessionRepo) RotateAt(_ context.Context, id, expectedCurrentHash, newHash string, now time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.sessions[id]
+	if !ok || s.RefreshTokenHash != expectedCurrentHash {
+		return session.ErrRotationConflict
+	}
+	s.PreviousRefreshTokenHash = expectedCurrentHash
+	s.PreviousUsed = false
+	s.RotationCount++
+	s.RefreshTokenHash = newHash
+	r.sessions[id] = s
+	r.sessionStamps[id] = now
+	return nil
+}
+
+// DeleteIfIdle deletes the row only while its stamp (NULL matching NULL) and
+// rotation count are the observed ones.
+func (r sessionRepo) DeleteIfIdle(_ context.Context, id string, observed session.Activity, observedRotationCount int) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.sessions[id]
+	if !ok || s.RotationCount != observedRotationCount {
+		return false, nil
+	}
+	stamp, stamped := r.sessionStamps[id]
+	if stamped != observed.Stamped || (stamped && !stamp.Equal(observed.LastRotatedAt)) {
+		return false, nil
+	}
+	r.deleteSession(id)
+	return true, nil
+}
+
+// ProbeSchema always succeeds: the in-memory store has the activity column.
+func (r sessionRepo) ProbeSchema(context.Context) error { return nil }
 
 func (r sessionRepo) DeleteByUser(_ context.Context, userID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for id, s := range r.sessions {
 		if s.UserID == userID {
-			delete(r.sessions, id)
+			r.deleteSession(id)
 		}
 	}
 	return nil

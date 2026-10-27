@@ -284,7 +284,7 @@ func mustAuthenticationService(d authenticationFixture) *authlogic.Components {
 	}
 	opts := []authlogic.Option{
 		authlogic.WithPassword(authlogic.PasswordConfig{Hasher: d.Hasher, ValidatePassword: d.ValidatePassword, Compromised: d.Compromised, CompromisedFailOpen: d.CompromisedFailOpen, PasswordFlowsDisabled: d.PasswordFlowsDisabled, RequireVerifiedEmail: d.RequireVerifiedEmail}),
-		authlogic.WithSessions(authlogic.SessionsConfig{AccessTokenTTL: d.AccessTokenTTL, RefreshTTL: d.RefreshTTL}),
+		authlogic.WithSessions(authlogic.SessionsConfig{AccessTokenTTL: d.AccessTokenTTL, RefreshTTL: d.RefreshTTL, IdleTimeout: d.IdleTimeout}),
 		authlogic.WithDelegatedTokens(d.DelegatedTokens),
 		authlogic.WithIdentity(authlogic.IdentityConfig{Normalizer: d.Normalizer, IdentifierKeyer: d.IdentifierKeyer, CredentialPolicy: d.CredentialPolicy, Registration: d.Registration}),
 		authlogic.WithMachine(d.Machine),

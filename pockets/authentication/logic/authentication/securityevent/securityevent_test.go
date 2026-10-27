@@ -134,6 +134,7 @@ func TestEventTypesAreRegistered(t *testing.T) {
 	for _, tc := range []struct{ got, want string }{
 		{TypeSessionRevoked, "session_revoked"},
 		{TypeAllSessionsRevoked, "all_sessions_revoked"},
+		{TypeSessionIdleExpired, "session_idle_expired"},
 		{TypeUserErased, "user_erased"},
 		{TypeServiceAccountDeleted, "service_account_deleted"},
 		{TypeSecurityEventsPurged, "security_events_purged"},

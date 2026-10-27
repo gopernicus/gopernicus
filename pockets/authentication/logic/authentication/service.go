@@ -224,6 +224,7 @@ type constructorConfig struct {
 	DelegatedTokens         DelegatedTokensConfig
 	AccessTokenTTL          time.Duration
 	RefreshTTL              time.Duration
+	IdleTimeout             time.Duration
 	Passwordless            []string
 	PublicAuthBaseURL       string
 	PasswordResetURL        string
@@ -331,6 +332,11 @@ type Service struct {
 	delegatedTokens DelegatedTokensConfig
 	accessTTL       time.Duration
 	refreshTTL      time.Duration
+	// idleTimeout is SessionsConfig.IdleTimeout; activity is the sessions
+	// store's ActivityRepository, non-nil exactly when idleTimeout is set, so
+	// an unwired refresh never reads or writes the activity column.
+	idleTimeout time.Duration
+	activity    session.ActivityRepository
 
 	// passwordless is the resolved set of enabled passwordless kinds (PasswordlessConfig.Passwordless),
 	// keyed by kind for O(1) lookups. Empty when passwordless is off; the transport
@@ -446,6 +452,10 @@ func newService(d constructorConfig) *Service {
 	if d.ServiceAccountStatus {
 		serviceAccountStatus = d.ServiceAccountStatuses
 	}
+	var activity session.ActivityRepository
+	if d.IdleTimeout > 0 {
+		activity, _ = d.Sessions.(session.ActivityRepository)
+	}
 	return &Service{
 		authenticationLimits: d.AuthenticationLimits.withDefaults(),
 		users:                d.Users,
@@ -492,6 +502,8 @@ func newService(d constructorConfig) *Service {
 		delegatedTokens:    d.DelegatedTokens,
 		accessTTL:          accessTTL,
 		refreshTTL:         refreshTTL,
+		idleTimeout:        d.IdleTimeout,
+		activity:           activity,
 		passwordless:       passwordless,
 		publicBaseURL:      d.PublicAuthBaseURL,
 		passwordResetURL:   d.PasswordResetURL,

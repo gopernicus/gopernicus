@@ -108,6 +108,10 @@ type mountDeps struct {
 	// default below, so a host overrides one semantic surface without restating
 	// the others.
 	RouteAuth RouteAuthentication
+	// LivenessFloorRelaxed lowers the sensitive groups' liveness floor from
+	// Live() to Stateless() (authentication.BrowserConfig.
+	// BundledRouteAuthLivenessFloorRelaxed).
+	LivenessFloorRelaxed bool
 	// Proxies logs the one production trusted-proxy warning; nil outside
 	// production.
 	Proxies *proxyPosture
@@ -199,10 +203,17 @@ type RouteAuthentication struct {
 //   - BrowserAccount — cookie-only, live, redirecting on denial: the bundled
 //     browser UI reads only its own cookie and never a header.
 //
-// The floor every group runs inside is RequirePrincipal(Stateless()): the
-// default set, so it admits whatever kinds are wired (external included) while
-// denying delegated tokens, and stateless, so a host override owns the tier.
-func (a RouteAuthentication) withDefaults(svc authService) RouteAuthentication {
+// Every group runs inside a floor over the default credential set, so it
+// admits whatever kinds are wired (external included) while denying delegated
+// tokens. A host override owns the credential set and transports; the liveness
+// floor of a sensitive group — SessionHydration, SessionSecurityReads,
+// CredentialManagement, MachineLifecycle, UserAdministration — is
+// RequirePrincipal(Live()) unless relaxed, so an override lowered to
+// Stateless() or LiveOnMutation() still proves a live session there (one
+// session read per call; the default postures reuse their own Live() read).
+// OAuthLinkStart, CSRFBootstrap, Invitations and BrowserAccount, and every
+// group when relaxed, keep the RequirePrincipal(Stateless()) floor.
+func (a RouteAuthentication) withDefaults(svc authService, relaxed bool) RouteAuthentication {
 	if a.OAuthLinkStart == nil {
 		a.OAuthLinkStart = svc.RequirePrincipal(Accept(CredentialAccessToken), FirstParty())
 	}
@@ -239,19 +250,23 @@ func (a RouteAuthentication) withDefaults(svc authService) RouteAuthentication {
 	// Bundled authentication/account routes cannot become OAuth resource routes
 	// through a host override. Preserve the existing API-key policy seams while
 	// requiring verified first-party/key proof after every configured strategy.
-	floor := svc.RequirePrincipal(Stateless())
-	protect := func(strategy web.Middleware) web.Middleware {
+	stateless := svc.RequirePrincipal(Stateless())
+	live := stateless
+	if !relaxed {
+		live = svc.RequirePrincipal(Live())
+	}
+	protect := func(strategy, floor web.Middleware) web.Middleware {
 		return func(next http.Handler) http.Handler { return strategy(floor(next)) }
 	}
-	a.OAuthLinkStart = protect(a.OAuthLinkStart)
-	a.SessionSecurityReads = protect(a.SessionSecurityReads)
-	a.CSRFBootstrap = protect(a.CSRFBootstrap)
-	a.SessionHydration = protect(a.SessionHydration)
-	a.CredentialManagement = protect(a.CredentialManagement)
-	a.MachineLifecycle = protect(a.MachineLifecycle)
-	a.UserAdministration = protect(a.UserAdministration)
-	a.Invitations = protect(a.Invitations)
-	a.BrowserAccount = protect(a.BrowserAccount)
+	a.OAuthLinkStart = protect(a.OAuthLinkStart, stateless)
+	a.SessionSecurityReads = protect(a.SessionSecurityReads, live)
+	a.CSRFBootstrap = protect(a.CSRFBootstrap, stateless)
+	a.SessionHydration = protect(a.SessionHydration, live)
+	a.CredentialManagement = protect(a.CredentialManagement, live)
+	a.MachineLifecycle = protect(a.MachineLifecycle, live)
+	a.UserAdministration = protect(a.UserAdministration, live)
+	a.Invitations = protect(a.Invitations, stateless)
+	a.BrowserAccount = protect(a.BrowserAccount, stateless)
 	return a
 }
 
@@ -276,7 +291,7 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	svc, inv, views := d.Auth, d.Invitations, d.Views
 	// The bundled route groups' authenticators: the host's override where it set
 	// one (authentication.BrowserConfig.BundledRouteAuth), the audited default otherwise.
-	auth := d.RouteAuth.withDefaults(svc)
+	auth := d.RouteAuth.withDefaults(svc, d.LivenessFloorRelaxed)
 	limits := d.RouteLimits.withDefaults()
 	r = clientInfoRegistrar{inner: noStoreRegistrar{inner: r}, proxies: d.Proxies}
 	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, adminMFA: d.AdministrationMFA, eraser: d.Eraser, events: d.SecurityEvents, syncer: d.InvitationSync, claims: d.ClaimIdentifiers, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy,

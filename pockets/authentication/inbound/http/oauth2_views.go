@@ -39,6 +39,10 @@ type SessionView struct {
 	Current    bool
 }
 
+// SessionsPage is the GET /auth/sessions model: the caller's live sessions.
+// With SessionsConfig.IdleTimeout set it may include first-party sessions that
+// will be refused at their next refresh for idleness; idle expiry is judged at
+// refresh only.
 type SessionsPage struct {
 	PageContext
 	Sessions []SessionView

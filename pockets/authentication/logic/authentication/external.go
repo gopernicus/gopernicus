@@ -35,7 +35,13 @@ const (
 	externalReasonInvalidIdentifier = "invalid_identifier"
 	externalReasonInactive          = "inactive"
 	externalReasonRevoked           = "revoked"
+	externalReasonAgeExceeded       = "authentication_age_exceeded"
+	externalReasonAuthTimeMissing   = "authenticated_at_missing"
 )
+
+// authenticationAgeLeeway absorbs clock skew between the provider and this
+// host when MaxAuthenticationAge is applied.
+const authenticationAgeLeeway = 60 * time.Second
 
 const latencySamples = 256
 
@@ -227,7 +233,7 @@ func newExternalAuthenticator(repos ExternalRepositories, cfg ExternalConfig, mo
 		issuer := p.Provider.Issuer()
 		e.providers[issuer] = externalProvider{ExternalProvider: p, issuer: issuer}
 		if mode == environment.ModeProduction && p.RevocationFailOpen {
-			e.logger.Warn("external provider revocation fails open on the default liveness tier", "provider", p.Name)
+			e.logger.Warn("auth: production posture requirement waived", "posture_waiver", "RevocationFailOpen", "runtime_mode", mode.String(), "provider", p.Name)
 		}
 	}
 	return e
@@ -295,12 +301,32 @@ func (e *ExternalAuthenticator) Verify(ctx context.Context, raw string, transpor
 		}, p.Name))
 		return Principal{}, Credential{}, ErrMFARequired
 	}
+	if reason := e.authenticationAgeRefusal(p, identity); reason != "" {
+		return Principal{}, Credential{}, e.deny(ctx, p, "", reason)
+	}
 	userID, err := e.resolveSubject(ctx, p, identity)
 	if err != nil {
 		return Principal{}, Credential{}, err
 	}
 	e.recordLogin(ctx, p, userID, raw, identity.ExpiresAt, assurance)
 	return Principal{Type: PrincipalUser, ID: userID}, Credential{Kind: CredentialExternalToken, Transport: transport, Identity: identity.Clone(), Assurance: assurance, Methods: []session.MethodKind{session.MethodExternal}}, nil
+}
+
+// authenticationAgeRefusal applies p.MaxAuthenticationAge to identity on
+// every request, before the subject resolves, so a denied token never
+// provisions: an identity with no authentication time, or one older than the
+// bound plus authenticationAgeLeeway, is refused with its reason. A zero bound
+// refuses nothing.
+func (e *ExternalAuthenticator) authenticationAgeRefusal(p externalProvider, identity sdkauth.Identity) string {
+	switch {
+	case p.MaxAuthenticationAge <= 0:
+		return ""
+	case identity.AuthenticatedAt.IsZero():
+		return externalReasonAuthTimeMissing
+	case e.now().Sub(identity.AuthenticatedAt) > p.MaxAuthenticationAge+authenticationAgeLeeway:
+		return externalReasonAgeExceeded
+	}
+	return ""
 }
 
 // recordLogin records external_login once per token per login-record cache,

@@ -31,6 +31,14 @@ var ErrInvalidRefreshToken = fmt.Errorf("invalid refresh token: %w", sdk.ErrUnau
 //  5. Matched previous, already consumed → reuse: revoke the session, record
 //     refresh_reuse (blocked, + unconditional WARN), 401.
 //
+// With SessionsConfig.IdleTimeout wired, branches 3 and 4 first judge the
+// session's last activity (idleSince's grandfather rule): an idle session is
+// deleted with a compare-and-swap DeleteIfIdle, recorded once as
+// session_idle_expired, and answered with the same generic 401. Branch 5 is
+// reached before any idle judgement, so a replayed consumed slot is always
+// reuse; the re-resolution after a CAS conflict and the grace lane never judge
+// or stamp.
+//
 // The write path is compare-and-swap, never blind: a racing refresh cannot
 // corrupt the chain or false-revoke an honest client.
 func (s *Service) Refresh(ctx context.Context, presented string) (TokenPair, error) {
@@ -48,7 +56,17 @@ func (s *Service) Refresh(ctx context.Context, presented string) (TokenPair, err
 }
 
 func (s *Service) refreshByHash(ctx context.Context, hash string) (TokenPair, error) {
-	sess, match, err := s.sessions.GetByRefreshHash(ctx, hash)
+	var (
+		sess     session.Session
+		match    session.RefreshMatch
+		activity session.Activity
+		err      error
+	)
+	if s.activity != nil {
+		sess, match, activity, err = s.activity.GetByRefreshHashWithActivity(ctx, hash)
+	} else {
+		sess, match, err = s.sessions.GetByRefreshHash(ctx, hash)
+	}
 	if err != nil {
 		if errors.Is(err, sdk.ErrNotFound) {
 			return TokenPair{}, ErrInvalidRefreshToken // branch 1
@@ -79,8 +97,16 @@ func (s *Service) refreshByHash(ctx context.Context, hash string) (TokenPair, er
 	}
 	switch match {
 	case session.RefreshMatchCurrent:
+		if last, idle := s.idleExpired(sess, activity); idle {
+			return s.expireIdle(ctx, sess, hash, activity, last)
+		}
 		return s.rotate(ctx, sess, hash)
 	case session.RefreshMatchPrevious:
+		if !sess.PreviousUsed {
+			if last, idle := s.idleExpired(sess, activity); idle {
+				return s.expireIdle(ctx, sess, hash, activity, last)
+			}
+		}
 		return s.grace(ctx, sess, hash)
 	default:
 		return TokenPair{}, ErrInvalidRefreshToken
@@ -95,7 +121,7 @@ func (s *Service) rotate(ctx context.Context, sess session.Session, currentHash 
 	if err != nil {
 		return TokenPair{}, err
 	}
-	if err := s.sessions.Rotate(ctx, sess.ID, currentHash, newHash); err != nil {
+	if err := s.rotateHash(ctx, sess.ID, currentHash, newHash); err != nil {
 		if errors.Is(err, session.ErrRotationConflict) {
 			return s.reResolve(ctx, sess, currentHash)
 		}
@@ -109,6 +135,16 @@ func (s *Service) rotate(ctx context.Context, sess session.Session, currentHash 
 	sess.RotationCount++
 	s.recordRefresh(ctx, sess, "")
 	return TokenPair{AccessToken: access, AccessExpiresAt: expiresAt, RefreshToken: rawNew}, nil
+}
+
+// rotateHash runs the rotation compare-and-swap: RotateAt, which also stamps
+// the activity column, when idle expiry is wired; Rotate, which never names
+// the column, otherwise. Both report a lost CAS as ErrRotationConflict.
+func (s *Service) rotateHash(ctx context.Context, id, currentHash, newHash string) error {
+	if s.activity != nil {
+		return s.activity.RotateAt(ctx, id, currentHash, newHash, s.now())
+	}
+	return s.sessions.Rotate(ctx, id, currentHash, newHash)
 }
 
 // grace performs branch 4: single-use grace on the previous slot. A CAS conflict
@@ -146,6 +182,12 @@ func (s *Service) reResolve(ctx context.Context, sess session.Session, hash stri
 		}
 		return TokenPair{}, err
 	}
+	return s.reResolveFrom(ctx, sess, hash, fresh, match)
+}
+
+// reResolveFrom is reResolve's branch over an already-read row, so a caller
+// that has just read it does not read again.
+func (s *Service) reResolveFrom(ctx context.Context, sess session.Session, hash string, fresh session.Session, match session.RefreshMatch) (TokenPair, error) {
 	if !fresh.FirstParty() {
 		return TokenPair{}, ErrDelegatedCredential
 	}

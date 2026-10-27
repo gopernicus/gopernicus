@@ -65,6 +65,11 @@ const (
 // one year. Ninety days is the recommended setting for hosts that rotate.
 const DefaultAPIKeyMaxTTL = 365 * 24 * time.Hour
 
+// DefaultAccessTokenTTLCeiling is the AccessTokenTTL above which production
+// logs posture_warning=access_token_ttl_long: one hour. It WARNs, never
+// refuses.
+const DefaultAccessTokenTTLCeiling = authlogic.DefaultAccessTokenTTLCeiling
+
 // The MFAConfig.Methods values.
 const (
 	// MFAMethodPasskey admits AAL2 from a user-verified passkey.
@@ -102,6 +107,7 @@ type constructorConfig struct {
 	OriginPolicy                  web.OriginPolicy
 	MachineRoutesGate             web.Middleware
 	BundledRouteAuth              inbound.BundledRouteAuthentication
+	LivenessFloorRelaxed          bool
 	RuntimeMode                   environment.Mode `env:"AUTH_RUNTIME_MODE"`
 	DeliveryMode                  delivery.Mode    `env:"AUTH_DELIVERY_MODE"`
 	ChallengeProtector            protection.ChallengeProtector
@@ -135,6 +141,7 @@ type constructorConfig struct {
 	TokenSigner                   cryptids.JWTSigner
 	AccessTokenTTL                time.Duration `env:"AUTH_ACCESS_TOKEN_TTL" default:"15m"`
 	RefreshTTL                    time.Duration `env:"AUTH_REFRESH_TTL" default:"168h"`
+	IdleTimeout                   time.Duration `env:"AUTH_IDLE_TIMEOUT"`
 	Granter                       invitations.Granter
 	InviteCheck                   inbound.InviteCheck
 	ResourcePermissions           map[string]string
@@ -237,7 +244,8 @@ func WithPassword(value PasswordConfig) Option {
 	}
 }
 
-// SessionsConfig sets the access-token and refresh-token lifetimes.
+// SessionsConfig sets the access-token and refresh-token lifetimes and the
+// optional idle timeout.
 type SessionsConfig struct {
 	// AccessTokenTTL is the access-JWT lifetime (§1.1, D8). Zero → 15m. Keep it
 	// short: it bounds the revocation-asymmetry window on stateless routes.
@@ -246,6 +254,23 @@ type SessionsConfig struct {
 	// 7d. It is set at mint and NEVER extended by rotation (fixed horizon); a
 	// stolen refresh token therefore cannot outlive it.
 	RefreshTTL time.Duration `env:"AUTH_REFRESH_TTL" default:"168h"`
+	// IdleTimeout ends a first-party session nobody has refreshed for this
+	// long: inactivity is no refresh rotation within IdleTimeout, judged at
+	// POST /auth/refresh, which then answers the generic 401, deletes the row
+	// and records session_idle_expired. Zero (the default) is off and reads
+	// nothing new. A client that refreshes on a timer is never idle; an access
+	// token already issued keeps passing Stateless() and safe LiveOnMutation()
+	// reads for at most AccessTokenTTL. Sessions rotated before it was set are
+	// judged from their first refresh after it. Delegated OAuth connections
+	// keep OAuth2Config's SessionTTL.
+	//
+	// It must exceed AccessTokenTTL (ErrIdleTimeoutBelowAccessTokenTTL, every
+	// mode; under twice it WARNs idle_granularity, at or above RefreshTTL
+	// idle_never_fires). Set, it needs Repositories.Sessions to implement
+	// session.ActivityRepository (ErrIdleTimeoutRequires) over a schema with
+	// migration 0029_session_activity.sql (ErrIdleTimeoutSchemaMissing): setting
+	// the env var on an unmigrated database refuses boot.
+	IdleTimeout time.Duration `env:"AUTH_IDLE_TIMEOUT"`
 }
 
 // WithSessions replaces the complete SessionsConfig group, including zero values.
@@ -253,6 +278,7 @@ func WithSessions(value SessionsConfig) Option {
 	return func(c *constructorConfig) {
 		c.AccessTokenTTL = value.AccessTokenTTL
 		c.RefreshTTL = value.RefreshTTL
+		c.IdleTimeout = value.IdleTimeout
 	}
 }
 
@@ -854,7 +880,21 @@ type BrowserConfig struct {
 	// It is authentication only. It cannot unmount the authenticator from a
 	// protected bundled surface, and it never substitutes for the host
 	// authorization seams (MachineRoutesGate, UserAdminCheck, InviteCheck).
+	// An override owns its group's credential set and transports; the
+	// liveness floor of the sensitive groups (SessionHydration,
+	// SessionSecurityReads, CredentialManagement, MachineLifecycle,
+	// UserAdministration) stays Live() unless
+	// BundledRouteAuthLivenessFloorRelaxed is set.
 	BundledRouteAuth inbound.BundledRouteAuthentication
+	// BundledRouteAuthLivenessFloorRelaxed lowers the liveness floor under the
+	// sensitive bundled groups from Live() to Stateless(), so a BundledRouteAuth
+	// override's own tier governs again: a revoked session's access token then
+	// passes an override lowered to Stateless() until it expires, and an
+	// external token under RevocationFailOpen passes during a provider outage.
+	// Production logs posture_waiver=BundledRouteAuthLivenessFloorRelaxed;
+	// development WARNs. It is a wiring assertion set as a literal, not an env
+	// knob.
+	BundledRouteAuthLivenessFloorRelaxed bool
 	// Views is the OPTIONAL HTML rendering port (design §9.2, R12/V16). Nil (default)
 	// → the HTML surface is absent: the HTML GET pages and form decoding are NOT
 	// registered and the shared POST routes accept JSON only, so the pocket is
@@ -897,6 +937,7 @@ func WithBrowser(value BrowserConfig) Option {
 		c.OriginPolicy = value.OriginPolicy
 		c.BrowserLoginPath = value.BrowserLoginPath
 		c.BundledRouteAuth = value.BundledRouteAuth
+		c.LivenessFloorRelaxed = value.BundledRouteAuthLivenessFloorRelaxed
 		c.Views = value.Views
 		c.HTMLPolicy = value.HTMLPolicy
 	}

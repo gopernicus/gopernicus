@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/stores/storetest"
 )
 
@@ -20,6 +21,15 @@ func TestConformance(t *testing.T) {
 	storetest.Run(t, func(t *testing.T) auth.Repositories {
 		return New().Repositories()
 	})
+}
+
+// TestSessionActivityWired fails, rather than skipping, if authmem's sessions
+// lose the idle-timeout capability the conformance suite's SessionActivity
+// group would otherwise skip over.
+func TestSessionActivityWired(t *testing.T) {
+	if _, ok := New().Repositories().Sessions.(session.ActivityRepository); !ok {
+		t.Fatal("authmem Sessions does not implement session.ActivityRepository")
+	}
 }
 
 // TestPasskeyConformance runs the passkey suite, separate from Run, against

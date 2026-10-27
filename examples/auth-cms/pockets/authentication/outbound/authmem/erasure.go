@@ -148,7 +148,7 @@ func (r erasureRepo) Erase(ctx context.Context, in user.EraseInput) (user.Erasur
 	for sid, s := range r.sessions {
 		if s.UserID == id {
 			sessions[sid] = true
-			delete(r.sessions, sid)
+			r.deleteSession(sid)
 			c.Sessions++
 		}
 	}

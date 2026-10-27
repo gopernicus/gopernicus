@@ -1,12 +1,22 @@
 package authenticationhttp
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
+
+var _ session.ActivityRepository = (*idleMemSessions)(nil)
 
 // doChangePassword issues a cookie-lane POST /auth/password/change carrying the
 // double-submit CSRF token the browser-safe gate now requires (design §9.1, the
@@ -288,5 +298,131 @@ func TestChangePasswordRouteHappyPath(t *testing.T) {
 	relogin := do(t, h, "POST", "/auth/login", `{"email":"i@example.com","password":"finalpass789012"}`)
 	if relogin.Code != http.StatusOK {
 		t.Errorf("re-login with new password status = %d, want 200", relogin.Code)
+	}
+}
+
+// idleMemSessions adds the idle-timeout capability to memSessions: a stamp per
+// row that only RotateAt writes, and a compare-and-swap DeleteIfIdle.
+type idleMemSessions struct {
+	*memSessions
+	stampMu sync.Mutex
+	stamps  map[string]time.Time
+}
+
+func (s *idleMemSessions) GetByRefreshHashWithActivity(ctx context.Context, hash string) (session.Session, session.RefreshMatch, session.Activity, error) {
+	sess, match, err := s.GetByRefreshHash(ctx, hash)
+	if err != nil {
+		return session.Session{}, 0, session.Activity{}, err
+	}
+	s.stampMu.Lock()
+	defer s.stampMu.Unlock()
+	stamp, ok := s.stamps[sess.ID]
+	return sess, match, session.Activity{LastRotatedAt: stamp, Stamped: ok}, nil
+}
+
+func (s *idleMemSessions) RotateAt(ctx context.Context, id, expectedCurrentHash, newHash string, now time.Time) error {
+	if err := s.Rotate(ctx, id, expectedCurrentHash, newHash); err != nil {
+		return err
+	}
+	s.stampMu.Lock()
+	defer s.stampMu.Unlock()
+	s.stamps[id] = now
+	return nil
+}
+
+func (s *idleMemSessions) DeleteIfIdle(_ context.Context, id string, observed session.Activity, observedRotationCount int) (bool, error) {
+	s.stampMu.Lock()
+	defer s.stampMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.m[id]
+	if !ok || sess.RotationCount != observedRotationCount {
+		return false, nil
+	}
+	stamp, stamped := s.stamps[id]
+	if stamped != observed.Stamped || (stamped && !stamp.Equal(observed.LastRotatedAt)) {
+		return false, nil
+	}
+	delete(s.m, id)
+	delete(s.stamps, id)
+	return true, nil
+}
+
+func (s *idleMemSessions) ProbeSchema(context.Context) error { return nil }
+
+// TestRefreshRouteIdleExpiryIsTheGenericDenial: with SessionsConfig.IdleTimeout
+// wired, POST /auth/refresh inside the window rotates; after a full window
+// without a refresh it answers exactly the response an unknown refresh token
+// gets (the pinned generic 401 — no idle-specific code or body) and the
+// session row is gone.
+func TestRefreshRouteIdleExpiryIsTheGenericDenial(t *testing.T) {
+	var clockMu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		now = now.Add(d)
+	}
+	users := newMemUsers()
+	passwords := &memPasswords{m: map[string]string{}}
+	inner := &memSessions{m: map[string]session.Session{}}
+	sessions := &idleMemSessions{memSessions: inner, stamps: map[string]time.Time{}}
+	challenges := &memChallenges{byID: map[string]challenge.Challenge{}}
+	// The wrapper is not a *memSessions, so wire the user fakes to the inner
+	// store here, as newServiceWithFakes does for a bare one.
+	wireCredentialFakes(users, passwords, inner, &memOAuthAccounts{}, nil, challenges)
+	svc := newServiceWithFakes(authenticationFixture{
+		Users:          users,
+		Identifiers:    newMemIdentifiers(users),
+		Passwords:      passwords,
+		Sessions:       sessions,
+		ActiveSessions: memActiveSessions{users, inner},
+		Challenges:     challenges,
+		PasswordResets: &memPasswordResets{ch: challenges, pw: passwords, sess: inner},
+		Hasher:         fakeHasher{},
+		Limiter:        ratelimiter.NewMemory(),
+		Clock:          clock,
+		AccessTokenTTL: time.Minute,
+		IdleTimeout:    3 * time.Minute,
+	})
+	mux := web.NewWebHandler()
+	mount(mux, mountDeps{Auth: svc})
+
+	do(t, mux, "POST", "/auth/register", `{"email":"idle@example.com","password":"password123456789","display_name":"I"}`)
+	login := do(t, mux, "POST", "/auth/login", `{"email":"idle@example.com","password":"password123456789"}`)
+	rc := refreshCookie(login)
+	if rc == nil {
+		t.Fatalf("no refresh cookie from login; status %d body=%s", login.Code, login.Body)
+	}
+
+	advance(2 * time.Minute)
+	rotated := do(t, mux, "POST", "/auth/refresh", "", &http.Cookie{Name: rc.Name, Value: rc.Value})
+	next := refreshCookie(rotated)
+	if rotated.Code != http.StatusOK || next == nil || next.Value == "" {
+		t.Fatalf("refresh inside the idle window = %d; body=%s", rotated.Code, rotated.Body)
+	}
+	if len(sessions.stamps) != 1 {
+		t.Fatalf("rotation did not stamp: %v", sessions.stamps)
+	}
+
+	advance(3 * time.Minute)
+	idle := do(t, mux, "POST", "/auth/refresh", "", &http.Cookie{Name: next.Name, Value: next.Value})
+	unknown := do(t, mux, "POST", "/auth/refresh", "", &http.Cookie{Name: next.Name, Value: "not-a-refresh-token"})
+	if idle.Code != http.StatusUnauthorized {
+		t.Fatalf("idle refresh = %d, want 401; body=%s", idle.Code, idle.Body)
+	}
+	if idle.Code != unknown.Code || idle.Body.String() != unknown.Body.String() {
+		t.Errorf("idle refresh = %d %q, want the unknown-token response %d %q", idle.Code, idle.Body, unknown.Code, unknown.Body)
+	}
+	inner.mu.Lock()
+	rows := len(inner.m)
+	inner.mu.Unlock()
+	if rows != 0 {
+		t.Errorf("idle session rows = %d, want 0", rows)
 	}
 }

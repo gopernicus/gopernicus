@@ -90,7 +90,8 @@ type Session struct {
 }
 
 // NewSession mints a fresh session for userID expiring ttl after now (the fixed
-// refresh horizon, D2 — rotation never extends it). It app-mints the session ID
+// refresh horizon, D2 — rotation never extends it; idle expiry, when wired, can
+// only end it sooner). It app-mints the session ID
 // (see Session.ID) and a high-entropy opaque refresh token, returning the
 // session with its RefreshTokenHash still empty (the service stores the token's
 // SHA-256 hash, never the raw value) alongside the raw refresh token to deliver

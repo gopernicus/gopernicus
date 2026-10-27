@@ -37,7 +37,10 @@ type adapterConfig struct {
 	HTMLPolicy        *HTMLResourcePolicy
 	MachineGate       web.Middleware
 	RouteAuth         BundledRouteAuthentication
-	UserErasureRoute  bool
+	// LivenessFloorRelaxed lowers the sensitive groups' liveness floor to
+	// Stateless().
+	LivenessFloorRelaxed bool
+	UserErasureRoute     bool
 	// SecurityEventsRoute opts in to GET /auth/admin/security-events.
 	SecurityEventsRoute bool
 	AdministrationMFA   bool
@@ -194,6 +197,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		Passkeys: passkeys, PasskeyViews: passkeyViews,
 		TOTP: totps, TOTPViews: totpViews,
 		GlobalRevoker: globalRevoker, AccountStatus: accountStatus, KeyFilter: keyFilter, Registration: registration,
+		LivenessFloorRelaxed: cfg.LivenessFloorRelaxed,
 	}
 	switch {
 	case totpViews != nil:
