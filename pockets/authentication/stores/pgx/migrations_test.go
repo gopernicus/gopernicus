@@ -57,6 +57,9 @@ var canonicalMigrations = []string{
 	"0026_totp.sql",
 	// SOC 2 S4d: the service-account status table.
 	"0027_service_account_status.sql",
+	// SOC 2 S4d part 2: sessions.last_rotated_at. It adds no table; the
+	// column is asserted below. 0028 is reserved for S4c part 2.
+	"0029_session_activity.sql",
 }
 
 // expectedTables are every CREATE TABLE the canonical set must define.
@@ -126,6 +129,7 @@ var expectedColumns = []string{
 	"trace_id",               // security_events (0021)
 	"recorded_at",            // security_events (0021)
 	"erased_at",              // users (0023)
+	"last_rotated_at",        // sessions (0029)
 }
 
 func migrationNames(t *testing.T) []string {
@@ -236,6 +240,18 @@ var retentionIndexes = []struct{ name, table string }{
 	{"idx_oauth_authorization_codes_expires_at", oauthCodesTable},
 	{"idx_oauth_clients_expires_at", oauthClientsTable},
 	{"idx_oauth_refresh_history_expires_at", oauthHistoryTable},
+}
+
+// TestSessionActivityMigrationShape pins 0029's lock discipline: the lock
+// timeout first, then one re-runnable, nullable, default-free ADD COLUMN.
+func TestSessionActivityMigrationShape(t *testing.T) {
+	sql := readMigration(t, sessionActivityMigration)
+	if !strings.HasPrefix(sql, "SET LOCAL lock_timeout = '5s';\n") {
+		t.Errorf("%s must begin with SET LOCAL lock_timeout", sessionActivityMigration)
+	}
+	if !strings.HasSuffix(sql, "\nALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_rotated_at TIMESTAMPTZ;\n") {
+		t.Errorf("%s must end with the one nullable ADD COLUMN IF NOT EXISTS", sessionActivityMigration)
+	}
 }
 
 // TestRetentionMigrationOrder pins 0023's lock discipline: the lock timeout

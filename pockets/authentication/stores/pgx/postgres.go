@@ -3,14 +3,14 @@
 // module graph (the load-bearing opt-out property). It owns the SQL; the HOST owns its database lifecycle. It is the
 // dialect sibling of pockets/authentication/stores/turso: same surface plus the
 // Postgres-only WithSchema option — SQLite has no schemas — same migration version
-// set (0001–0027 with 0017 absent, twenty-one tables backing the Repositories bundle; 0014 adds the
+// set (0001–0029 with 0017 and 0028 absent, twenty-one tables backing the Repositories bundle; 0014 adds the
 // account-lifecycle columns to users rather than a table, and auth owns no
 // delivery table), same port semantics — a host switches dialect by one import +
 // one Open call. Secrets are persisted as digests, never plaintext (session
 // refresh-token / challenge / api-key / invitation hashes). Repositories probes
 // every always-required table at construction and returns an error naming a missing
 // one (see Repositories); the passkey (0025), TOTP (0026) and service-account status (0027) tables
-// are probed only when the host wires those capabilities, through the stores' ProbeSchema; the contractual keyset id columns carry per-column
+// and the session-activity column (0029) are probed only when the host wires those capabilities, through the stores' ProbeSchema; the contractual keyset id columns carry per-column
 // COLLATE "C" for byte-order pagination parity (see the migrations).
 //
 // Migrations follow the scaffold model (matching pockets/authentication/stores/turso):
@@ -103,7 +103,9 @@ var probeTables = append(append(append([]string{}, legacyProbeTables...), oauthP
 // totp.SchemaProber, which the pocket calls only under WithPasskeys and
 // WithTOTP. Nor 0027 (service_account_status): the pocket calls
 // ServiceAccountStatusStore.ProbeSchema only under
-// AdministrationConfig.ServiceAccountStatus.
+// AdministrationConfig.ServiceAccountStatus. Nor 0029 (sessions.last_rotated_at,
+// deliberately absent from probeColumns): the pocket calls
+// SessionStore.ProbeSchema only under SessionsConfig.IdleTimeout.
 //
 // Last it probes the runtime role's posture on AuditTables under the
 // RuntimeMode db was opened with (pgxdb.DB.ProbeAppendOnly): in production it

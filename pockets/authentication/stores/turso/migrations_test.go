@@ -56,6 +56,9 @@ var canonicalMigrations = []string{
 	"0026_totp.sql",
 	// SOC 2 S4d: the service-account status table.
 	"0027_service_account_status.sql",
+	// SOC 2 S4d part 2: sessions.last_rotated_at. It adds no table; the
+	// column is asserted below. 0028 is reserved for S4c part 2.
+	"0029_session_activity.sql",
 }
 
 // expectedTables are every CREATE TABLE the canonical set must define.
@@ -132,6 +135,7 @@ var expectedColumns = []string{
 	"trace_id",               // security_events (0021)
 	"recorded_at",            // security_events (0021)
 	"erased_at",              // users (0023)
+	"last_rotated_at",        // sessions (0029)
 }
 
 func migrationNames(t *testing.T) []string {

@@ -120,6 +120,7 @@ never migrates. Its files are the host's:
 | `0032_passkey_credentials.sql` | `pockets/authentication/stores/pgx/migrations` `0025`, renumbered; required only when `WithPasskeys` is wired (applied here ahead of time, so passkeys can be toggled on later) |
 | `0033_totp.sql` | `pockets/authentication/stores/pgx/migrations` `0026`, renumbered; required only when `WithTOTP` is wired (applied here ahead of time, so TOTP can be toggled on later) |
 | `0034_service_account_status.sql` | `pockets/authentication/stores/pgx/migrations` `0027`, renumbered; required only when `AdministrationConfig.ServiceAccountStatus` is set (applied here ahead of time, so the service-account status can be turned on later) |
+| `0035_session_activity.sql` | `pockets/authentication/stores/pgx/migrations` `0029`, renumbered; required only when `SessionsConfig.IdleTimeout` is set (applied here ahead of time, so idle expiry can be turned on later; on lock timeout, re-run `make migrate`) |
 
 When a store ships a new migration, copy it in as the next number. Never
 renumber a file once it is applied: the filename is its ledger identity.
