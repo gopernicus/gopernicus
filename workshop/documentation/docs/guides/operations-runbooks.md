@@ -35,6 +35,58 @@ Each names the bundled route or service call, what it records, and what is missi
 - **Lag:** outstanding access JWTs live up to `AccessTokenTTL` on the default tier
   (*Production posture*, "Revocation SLA"). For every user at once, see *Keys and rotation*.
 
+## Revoke all sessions
+
+Authentication v0.31.0 (SOC 2 S4d). For a suspected fleet-wide session compromise.
+
+- **Route** (opt-in: `AdministrationConfig.GlobalSessionRevocationRoute`, beside
+  `Repositories.GlobalSessions` and a `UserAdminCheck`): `POST /auth/admin/sessions/revoke-all`
+  with the body `{}`. The caller presents a first-party access token or an external token
+  (never an API key or a delegated token: 401); the host check sees the action
+  `UserAdminRevokeAllSessions` (`revoke-all-sessions`); under `MFARequired: admins` the
+  caller must be at **AAL2** (an AAL1 admin gets 401 with the RFC 9470 challenge: step up
+  and retry).
+- **Budget:** one call a minute per actor; a second is **429**. Re-running later is safe.
+- **Answer:** 200 `{"users":n,"sessions":n,"grants":n,"batches":n,"revoked_at":"…"}`, and
+  the session cookies are cleared: the caller's own native session ends with the rest, so
+  sign in again. The run is detached from the request (10-minute limit); if the client
+  times out first, read the outcome from the rail.
+- **Service:** `Service.RevokeAllSessions(ctx, actor)` for a host CLI, when the admin path
+  itself (an IdP, an admin sign-in) is what is compromised. The pocket README has the recipe.
+- **Recorded:** `all_sessions_revoked_global` twice: `started` (`batch_size`), then
+  `success` with `users`, `sessions`, `grants`, `batches`, `duration_ms`, or `failure` with
+  the partial counts and `error_kind` (re-run it). Read them with
+  `GET /auth/admin/security-events?event_type=all_sessions_revoked_global`.
+- **What survives:** outstanding access JWTs on safe reads under the default tier, for up
+  to `AccessTokenTTL` (rotate `AUTH_JWT_SECRET` too to end them at once, *Keys and
+  rotation*); API keys (next runbook); external IdP sessions (an external admin's next
+  provider token still signs in; deactivate the user locally to stop one).
+
+## Disable a service account
+
+Authentication v0.31.0 (SOC 2 S4d). A reversible pause of a machine identity.
+
+- **Prerequisite:** migration 0027 (`service_account_status`, baseline ledger 0034)
+  applied pre-boot, then `AdministrationConfig.ServiceAccountStatus`
+  (`AUTH_SERVICE_ACCOUNT_STATUS`). Set without the table, the host refuses to boot naming
+  0027; unset, the table is never read.
+- **Routes** (behind the machine routes' gate): `POST /auth/service-accounts/{id}/disable`
+  and `…/enable`, body `{}`. Each answers
+  `{"service_account":{…,"status":…},"changed":bool,"keys_revoked":n}`; a repeat is
+  `changed: false`. **Service:** `DisableServiceAccount` / `EnableServiceAccount`.
+- **What happens:** disable marks the account disabled AND revokes every unrevoked key in
+  one transaction; its keys, act-as-user ones included, are refused from then on, and a
+  mint is 409 `service_account_disabled`. Enable restores minting only: **the old keys stay
+  revoked**, so mint and distribute new ones. A compromised account: revoke its keys or
+  delete it; disable is the reversible pause. Un-wiring the flag or rolling the binary back
+  resumes mints on a disabled account (the revoked keys stay revoked).
+- **Recorded:** `service_account_disabled` (`keys_revoked`), `service_account_enabled`;
+  a refused key writes `apikey_auth blocked reason=service_account_disabled`.
+- **Find keys that never expire or expire soon** (the listing is per account,
+  `GET /auth/service-accounts/{id}/keys?status=active&never_expires=true`); across accounts,
+  in SQL:
+  `select service_account_id, key_prefix, expires_at from api_keys where revoked_at is null and (expires_at is null or expires_at < now() + interval '30 days')`.
+
 ## An abusive IP
 
 There is no bundled block list. What exists:

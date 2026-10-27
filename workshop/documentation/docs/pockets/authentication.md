@@ -559,6 +559,71 @@ The pocket README's "The invitation link and the landing page" and "Reading the 
 over HTTP" sections are the reference. Account merge (two existing accounts for one
 invitee) is not offered yet.
 
+## Added by S4d (session and machine governance)
+
+Authentication v0.31.0 (SOC 2 slice S4d part 1), with stores pgx v0.15.0 / Turso v0.14.0
+and views/goth v0.9.0. Everything is a host opt-in or today's behaviour except one break:
+API keys at the MFA gates.
+
+- **Revoke every session.** `Service.RevokeAllSessions(ctx, actor)` bumps every active
+  user's `auth_revision` and deletes their sessions, step-up grants and `password_reset`
+  challenges, in keyset batches of 500 users (one store transaction each), then sweeps
+  the rows of users who are not active. It is not globally atomic: a failure returns the
+  partial counts and a re-run is safe. It records `all_sessions_revoked_global`
+  `started`, then `success` (or `failure`) with the counts. It needs
+  `Repositories.GlobalSessions`, which the bundled stores fill. Delegated OAuth2
+  connections are sessions, so they end too; API keys and external IdP sessions do not.
+- **The opt-in route.** `AdministrationConfig.GlobalSessionRevocationRoute` mounts `POST
+  /auth/admin/sessions/revoke-all`: a first-party access token or an external token,
+  `Live()` (an API key or a delegated token is a 401), the browser-safe gate,
+  `UserAdminCheck` with the new action `UserAdminRevokeAllSessions`
+  (`revoke-all-sessions`), the admins MFA gate, then one call a minute per actor (429).
+  The body is strict `{}`; the 200 is `{"users","sessions","grants","batches","revoked_at"}`
+  and clears the session cookies (the caller's own session ends with the rest). The run
+  is detached from the request, with a 10-minute limit. JSON only; distinct from the
+  self-service `POST /auth/sessions/revoke-all`. **A `UserAdminCheck` that does not switch
+  on `Action` admits the new action.**
+- **Registration mode.** `IdentityConfig.Registration` (`AUTH_REGISTRATION`): `open` (the
+  zero value), `invitation_only` or `closed`, applied on every account-creating path:
+  `POST /auth/register`, passwordless provision-on-redeem (decided when the link is
+  issued), OAuth first sign-in and external first verification. An unknown value refuses
+  boot in every mode; `invitation_only` needs a Granter; `closed` beside
+  `ProvisionOnFirstVerification` is a construction error. Refusals are 403
+  `registration_invitation_required` / `registration_closed`; under `closed` the register
+  routes answer 404. The goth login hides "Create an account" under `closed` only
+  (`LoginPage.RegistrationClosed`).
+- **API-key lifetime.** `AdministrationConfig.APIKeyMaxTTL` (`AUTH_API_KEY_MAX_TTL`):
+  zero is 365 days in production and unlimited in development; 90 days is recommended.
+  Under a bound, an omitted `expires_at` is filled with now plus the bound (echoed in the
+  201; `api_key_minted` carries `expires_at_defaulted`); beyond it is 400
+  `api_key_ttl_exceeded` (`max_ttl_seconds`, `max_expires_at`); a past one is 400
+  `api_key_expiry_past`. `APIKeyUnlimitedTTLAcknowledged` keeps production unlimited
+  with a WARN. Existing keys are untouched.
+- **Key listing filters.** `GET /auth/service-accounts/{id}/keys?status=active|expired|revoked&never_expires=true|false`,
+  filtered in the store (`apikey.FilteredLister`; without it a filtered call is 400
+  `filter_unsupported`). A repeated key or an unknown value is 400;
+  `status=expired&never_expires=true` is 400 `filter_contradiction`. Every key row now
+  carries `status`.
+- **Disable a service account.** `AdministrationConfig.ServiceAccountStatus`
+  (`AUTH_SERVICE_ACCOUNT_STATUS`) needs migration 0027 (`service_account_status`) only
+  when it is set. `POST /auth/service-accounts/{id}/disable` marks the account disabled
+  AND revokes every unrevoked key in one transaction; `…/enable` restores minting only,
+  and the old keys stay revoked. Both answer `{"service_account","changed","keys_revoked"}`.
+  A disabled account mints nothing (409 `service_account_disabled`) and its keys are
+  refused. `serviceAccountResponse.status` is always present.
+- **API keys at MFA gates (BREAKING).** An API key cannot step up, so `RequireMFA()`, the
+  admins gate and the machine gate refuse it: 403 `mfa_credential_not_eligible` with no
+  `WWW-Authenticate` challenge, recorded as `mfa_required_denied reason=api_key`.
+  `MFAConfig.APIKeysExempt` restores the pass (production logs
+  `posture_waiver=APIKeysExempt`); the revoke-all route refuses keys regardless.
+- **Boot lines.** `auth: registration registration=<mode> source=…`, `auth: api key
+  lifetime api_key_max_ttl=<d>|unlimited source=…`, and `api_keys=denied|exempt` on the
+  MFA posture line.
+
+The pocket README's "Session and machine governance (SOC 2 S4d)" section is the reference,
+including the revocation table and a CLI recipe for when the admin path is the thing that
+is compromised.
+
 ## Production posture
 
 Production has no implicit mode and fails closed on incomplete security wiring. Among other requirements:

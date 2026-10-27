@@ -82,6 +82,12 @@ type archiveConfig struct {
 	Dir string `env:"AUDIT_ARCHIVE_DIR"`
 }
 
+// sessionRevocationConfig mounts the fleet-wide revoke, POST
+// /auth/admin/sessions/revoke-all; false unmounts it.
+type sessionRevocationConfig struct {
+	Route bool `env:"AUTH_GLOBAL_SESSION_REVOCATION_ROUTE" default:"false"`
+}
+
 // composition is what the pockets are built from once the keys, the server
 // settings, the archive, the stores and the provider are resolved: run fills
 // it over PostgreSQL, the tests over in-memory stores.
@@ -96,6 +102,7 @@ type composition struct {
 	authenticationRepos authentication.Repositories
 	authorizationRepos  authorization.Repositories
 	provider            sdkauth.Provider
+	globalRevokeRoute   bool
 }
 
 // auditArchive is the sink the maintenance pass archives each security-event
@@ -182,6 +189,11 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 		return err
 	}
 
+	var revocation sessionRevocationConfig
+	if err := environment.ParseEnvTags("", &revocation); err != nil {
+		return err
+	}
+
 	router := newRouter(srv.TrustedProxyCount, log)
 	provider, err := newProvider(ctx, router, srv.Origin(), mode, log)
 	if err != nil {
@@ -198,6 +210,7 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 		authenticationRepos: authenticationRepos,
 		authorizationRepos:  authorizationRepos,
 		provider:            provider,
+		globalRevokeRoute:   revocation.Route,
 	})
 	if err != nil {
 		return err
@@ -358,7 +371,7 @@ func mount(router *web.WebHandler, c composition) (mounted, error) {
 			ProvisionOnFirstVerification: true,
 			RequireVerifiedEmail:         true,
 		}}}),
-		authentication.WithAdministration(authentication.AdministrationConfig{UserAdminCheck: admins.check, UserErasureRoute: true, SecurityEventsRoute: true}),
+		authentication.WithAdministration(authentication.AdministrationConfig{UserAdminCheck: admins.check, UserErasureRoute: true, SecurityEventsRoute: true, GlobalSessionRevocationRoute: c.globalRevokeRoute}),
 		authentication.WithMFA(authentication.MFAConfig{Required: authentication.MFARequiredAdmins}),
 		authentication.WithMaintenance(authentication.MaintenanceConfig{
 			Config:                        maintenance.Config{ArchiveSink: c.archive.sink, ArchiveLocation: c.archive.location},
@@ -448,10 +461,10 @@ func accessModel() decisions.Model {
 func adminWritesAnyRole(context.Context, authorizationhttp.RoleWriteRequest) error { return nil }
 
 // userAdmins admits the global admin role to every user-administration
-// action this host names, the irreversible erase and the security-event read
-// included, and refuses any other: an action a later release adds is denied
-// until the check names it. decisions is set once the authorization pocket
-// exists, before any route is served.
+// action this host names, the irreversible erase, the security-event read and
+// the fleet-wide session revoke included, and refuses any other: an action a
+// later release adds is denied until the check names it. decisions is set once
+// the authorization pocket exists, before any route is served.
 type userAdmins struct {
 	decisions *decisions.Service
 }
@@ -460,7 +473,8 @@ func (u *userAdmins) check(ctx context.Context, req authenticationhttp.UserAdmin
 	switch req.Action {
 	case authenticationhttp.UserAdminList, authenticationhttp.UserAdminRead, authenticationhttp.UserAdminDeactivate,
 		authenticationhttp.UserAdminReactivate, authenticationhttp.UserAdminResendVerification, authenticationhttp.UserAdminErase,
-		authenticationhttp.UserAdminResetPasskeys, authenticationhttp.UserAdminResetTOTP, authenticationhttp.UserAdminReadAudit:
+		authenticationhttp.UserAdminResetPasskeys, authenticationhttp.UserAdminResetTOTP, authenticationhttp.UserAdminReadAudit,
+		authenticationhttp.UserAdminRevokeAllSessions:
 	default:
 		return fmt.Errorf("user administration action %q is not admitted: %w", req.Action, sdk.ErrForbidden)
 	}

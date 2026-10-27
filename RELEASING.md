@@ -1,5 +1,308 @@
 # Releasing gopernicus modules
 
+## Session and machine governance (SOC 2 slice S4d part 1 — published 2026-10-26)
+
+Four annotated tags (not signed) on four modules. Each was cut at its PR's squash-merge commit
+on `main`, pushed, THEN polled on the proxy, and cold-verified from a scratch consumer
+(`GOWORK=off`, an empty module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`,
+`go build <module>/...`). No sdk tag; one migration (0027, conditional). Design and rulings:
+`plans/s4d-session-machine-governance.md` (ratified 2026-10-26; the executed copy is added
+after the owner drill). Under the owner's 2026-10-23 process ruling this section is the whole
+record: there is no handoff file and no manifest. The handoff notes below say what a host does
+on upgrade, and hosts adopt them once, at the roadmap's end. The operator surface is the docs
+site: the authentication page's *Added by S4d*, *Production posture* ("Added by S4d" and the
+Revocation SLA's closing line), *Keys and rotation* ("Revoking every session at once",
+"API-key lifetime") and *Operations runbooks* ("Revoke all sessions", "Disable a service
+account"). The reference is the authentication README's "Session and machine governance (SOC 2
+S4d)" and the two store READMEs' 0027 and global-revocation sections.
+
+| Step | Tag | Commit | PR | Cold verification |
+|---|---|---|---|---|
+| 1 | `pockets/authentication/v0.31.0` | `dfe104b6` | #214 (PR-1) | OK; set A |
+| 2 | `pockets/authentication/stores/pgx/v0.15.0` | `b90a4eee` | #216 (PR-2) | OK; set B, gps-360-go shape |
+| 2 | `pockets/authentication/stores/turso/v0.14.0` | `b90a4eee` | #216 (PR-2) | OK; set B |
+| 3 | `pockets/authentication/views/goth/v0.9.0` | `b10c1df8` | #215 (PR-3) | OK; set C (full, after step 2) |
+
+Order: 1 after #214 merged and a `live-stores` dispatch went green on `main` at `dfe104b6`;
+PR-2 and PR-3 then ran in parallel worktrees off tag 1. 3 after #215 merged and its
+run-and-look; 2 after #216 merged and a `live-stores` dispatch went green on `main` at
+`b90a4eee` (run 40416938960). #215 and #216 each carried their module's repin to core v0.31.0
+(views v0.28.0 → v0.31.0, stores v0.29.0 → v0.31.0; explicit `GOWORK=off go get`, then tidy;
+sdk stays v0.20.0). Every module ships MINOR under the v0 convention. The tag messages name
+rows 3, 4, 6 and 8 (below), the conditional 0027 and each module's requirements.
+
+**The MVS sets.** Each tag was cold-verified when it was cut.
+- **Set A** (step 1): authentication v0.31.0 beside the RELEASED stores pgx v0.14.0 / turso v0.13.0 and views/goth
+  v0.8.1 selected sdk v0.20.0 and built. No lockstep: no existing port gained or changed a method, so the new slots
+  stay nil under the released stores.
+- **Set B** (step 2): both stores + authentication v0.31.0 + pgxdb v0.14.0 + datastores/turso v0.9.0 selected sdk
+  v0.20.0 and built. A gps-360-go-shaped consumer (authentication v0.31.0 + the pgx store v0.15.0 + the authorization
+  goredis store v0.6.0) built.
+- **Set C** (step 3, full after step 2): views/goth v0.9.0 + ui/goth v0.2.1 + rsc-qr v0.1.0 + go-webauthn v0.1.0 +
+  set B (an auth-cms-shaped consumer) built.
+- **This PR (from the tags):** auth-cms and production-baseline at `GOWORK=off` from an EMPTY module cache over
+  `proxy.golang.org` + `sum.golang.org`: `all modules verified` in both, and both binaries built (see the verification
+  record).
+
+**Not tagged.** sdk, `pockets`, `workshop/gopernicus` (no new P-rule: the constructor refusals and WARNs are the
+check), ui/goth, the examples, and every other module. Nothing retracts.
+
+**Upgrade notes.** Eleven rows. One behaviour break (row 3, API keys denied at the MFA gates, with the
+`MFAConfig.APIKeysExempt` hatch); one production-only behaviour change (row 4, the API-key lifetime bound); one
+conditional boot failure (rows 6/7: `AUTH_SERVICE_ACCOUNT_STATUS` set without migration 0027); everything else opt-in,
+additive or a WARN. The "Read first" box, rows 1, 3, 8 and 10 and the paragraph under the table are the plan's,
+verbatim; rows 2, 4, 5, 6, 7, 9 and 11 are amended for the as-built #214–#216 and this PR (the plan's text is quoted
+under the table). The pin bullet in the box is appended.
+
+> **Read first:** `grep -rnE 'RequireMFA\(|Accept\(.*CredentialAPIKey|UserAdminCheck|AdministrationConfig\{|MFAConfig\{|
+> IdentityConfig\{|apikey\.APIKeyRepository|session\.ManagementRepository' --include='*.go'`. **By host shape:** every host →
+> rows 1, 2; hosts admitting API keys on `RequireMFA()` routes or through `UserAdminCheck` → row 3 (the break); machine hosts in
+> production → rows 4–6; store hosts → rows 7–8; goth hosts → row 9; OAuth-only hosts (gps-360-go) → rows 1, 2 only.
+> - **Pins (appended):** pin **authentication v0.31.0**; a store host pins **stores pgx v0.15.0** or **turso v0.14.0**
+>   (both require core v0.31.0 and sdk v0.20.0); a goth host pins **views/goth v0.9.0** (requires core v0.31.0). sdk,
+>   ui/goth and every other module are unchanged. turso v0.14.0 and go-webauthn v0.1.0 declare `go 1.26.10`: a consumer
+>   whose `go` directive is older needs `GOTOOLCHAIN=auto` (the default) or a `go` bump.
+
+| # | Flip | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | `IdentityConfig.Registration` (`AUTH_REGISTRATION`); unknown value refuses boot; `closed` + `ProvisionOnFirstVerification` refuses | zero = `open`, today's behaviour; boot line names the mode | — | authentication@v0.31.0 |
+| 2 | **(amended)** `RevokeAllSessions`, `Repositories.GlobalSessions`, the opt-in route `POST /auth/admin/sessions/revoke-all` (`AdministrationConfig.GlobalSessionRevocationRoute`; `ErrGlobalSessionRevocationRouteRequires` without the slot or a `UserAdminCheck`), `UserAdminRevokeAllSessions` (`revoke-all-sessions`), three event types (`all_sessions_revoked_global` started/success/failure, `service_account_disabled`, `service_account_enabled`); the route admits **first-party access tokens and external tokens** (`Accept(AccessToken, ExternalToken), Live()`; owner ruling H1), refuses API keys and delegated tokens (401), runs detached from the request (10-minute limit), one call a minute per actor (429) | additive; a host `UserAdminCheck` ignoring `Action` admits the new action — but the route mounts only under the flag; **a check with an allow-list (the baseline's) denies it until it names the action**; an external admin's own IdP session survives the revoke (its next token is admitted) | leave false | authentication@v0.31.0 |
+| 3 | **BREAKING:** API keys denied at `RequireMFA()`, the admin and the machine MFA gates (403 `mfa_credential_not_eligible`, no challenge); admin passkey/TOTP reset and every admin route included | a service account administering users or calling an `Accept(…APIKey)` + `RequireMFA()` route is refused | `MFAConfig.APIKeysExempt` (production WARN) | authentication@v0.31.0 |
+| 4 | **(amended)** `APIKeyMaxTTL` (`AUTH_API_KEY_MAX_TTL`): production zero → `DefaultAPIKeyMaxTTL` **365 d** (R-3 (a); 90 d recommended), development zero = unlimited; `expires_at` beyond it → 400 `api_key_ttl_exceeded` (`max_ttl_seconds`, `max_expires_at`); at or before now → 400 `api_key_expiry_past` in every case; omitted under a bound → **filled with now + max** and echoed in the 201, `api_key_minted` gains `expires_at` (or `never`) and `expires_at_defaulted` (R-4 (a)); boot line `auth: api key lifetime api_key_max_ttl=<d>\|unlimited source=config\|default\|acknowledged` | **behaviour change in production:** keys minted without `expires_at` now expire a year after mint, with no pre-expiry signal; existing keys untouched | `APIKeyUnlimitedTTLAcknowledged` (production `posture_waiver` WARN); set `APIKeyMaxTTL` explicitly | authentication@v0.31.0 |
+| 5 | **(amended)** `apikey.FilteredLister`; `?status=active\|expired\|revoked` / `?never_expires=true\|false`; `apiKeyResponse.status` on every row; strict parsing of the two new params (a repeated key or an unknown value → 400 `filter_invalid`; `status=expired&never_expires=true` → 400 `filter_contradiction`; `status=revoked&never_expires=true` is valid) | additive; a store without the lister → 400 `filter_unsupported` on a filtered call only; cursors do not bind the clock | — | authentication@v0.31.0 |
+| 6 | **(amended)** `ServiceAccountStatus` (`AUTH_SERVICE_ACCOUNT_STATUS`) + `Repositories.ServiceAccountStatus`; disable/enable routes (strict `{}` → `{service_account, changed, keys_revoked}`); disable revokes every unrevoked key in the same transaction, enable restores minting only; a mint racing a disable re-reads the status and revokes its own key (M1); `serviceAccountResponse.status` (always present); `apikey_auth reason=service_account_disabled`; mint on a disabled account → 409 `service_account_disabled`; `changed_by` is `<type>:<id>` | opt-in; wired + 0027 absent → BOOT FAILURE naming 0027 (`ErrServiceAccountStatusSchemaMissing`; 5 s probe); the flag without the slot, `ServiceAccounts` or `APIKeys` → `ErrServiceAccountStatusRequires`; unwired never reads the table; wired, a status-store read failure answers 503 on API-key routes, never 401 | leave false | authentication@v0.31.0 |
+| 7 | **(amended)** **migration 0027** (`service_account_status`, no FK, excluded from the blanket schema probe), ledger 0034 (byte-identical, G34); `GlobalRevoker` (keyset batches; pgx `SET LOCAL lock_timeout 5s / statement_timeout 60s` per batch, turso one `BEGIN IMMEDIATE` per batch, which holds the database write lock), `StatusRepository` (Disable/Enable lock the account row; an unknown account → `sdk.ErrNotFound`) and `FilteredLister` filled; **no store-side mint guard** (it would break `APIKeyStore.Create` on a database without 0027; core's M1 re-check is the guarantee) | apply 0027 before setting row 6's flag; otherwise optional | — | stores pgx@v0.15.0, turso@v0.14.0 |
+| 8 | stores repin core v0.29.0 → v0.31.0 | MVS lifts a store host's core | — | stores pgx@v0.15.0, turso@v0.14.0 |
+| 9 | **(amended)** `LoginPage.RegistrationClosed`; the goth login hides "Create an account" under `closed` (only; `invitation_only` keeps it); the register-form 403 renders core's invitation-required copy in goth's existing message slot (no templ change for it), keeping the email | a `closed` host on views v0.8.1 still renders the link (it answers 404); **a host's own login template must guard the link itself** (auth-cms's now does) | — | views/goth@v0.9.0 |
+| 10 | the BE9 WARN (admins + no native factor + machine routes); `machineMFA` unchanged | one WARN line | wire a factor / override `MachineLifecycle` | authentication@v0.31.0 |
+| 11 | **(amended)** auth-cms (#214, #215) wires row 2 (mounted by default; `AUTH_GLOBAL_SESSION_REVOCATION_ROUTE=false` unmounts it), row 6 (`AUTH_SERVICE_ACCOUNT_STATUS`), `AUTH_REGISTRATION`, `AUTH_API_KEY_MAX_TTL` and a development-only `AUTH_DEMO_API_KEYS_EXEMPT`; `authmem` implements the three ports; its login override honours `RegistrationClosed`. The baseline (this PR) wires row 2 behind the same `AUTH_GLOBAL_SESSION_REVOCATION_ROUTE`, opt-in (unmounted unless `=true`) and names `UserAdminRevokeAllSessions` in its allow-list; it stays machine-unwired; both `.env.example` | example behaviour | — | examples (untagged) |
+
+Row 3 is the behaviour break; row 4 is a production-only behaviour change; row 6/7 is the conditional boot failure. Every
+module ships MINOR under v0; tag messages name rows 3, 4, 6, 8. **Not touched:** sdk, `pockets`, workshop (no P-rule), ui/goth,
+any existing port's method set (the set-A invariant).
+
+The plan's text for the amended rows was:
+- **Row 2:** "`RevokeAllSessions`, `Repositories.GlobalSessions`, the opt-in route, `UserAdminRevokeAllSessions`, three
+  event types | additive; a host `UserAdminCheck` ignoring `Action` admits the new action — but the route mounts only
+  under the flag | leave false | authentication@v0.31.0". The plan's route authenticator was
+  `Accept(CredentialAccessToken), FirstParty(), Live()`; H1 (owner ruling) admits external tokens.
+- **Row 4:** "`APIKeyMaxTTL`: production zero → the R-3 default; `expires_at` beyond it → 400; past → 400; omitted → R-4
+  | **behaviour change in production:** keys minted without `expires_at` now expire (or 400); `api_key_minted` names it |
+  `APIKeyUnlimitedTTLAcknowledged` (production WARN); set `APIKeyMaxTTL` explicitly | authentication@v0.31.0". R-3 and
+  R-4 were both ruled (a), so there is no 400 for an omitted expiry.
+- **Row 5:** "`apikey.FilteredLister`; `?status=`/`?never_expires=`; `apiKeyResponse.status`; strict parsing of the two
+  new params | additive; a store without the lister → 400 `filter_unsupported` on a filtered call only | — |
+  authentication@v0.31.0".
+- **Row 6:** "`ServiceAccountStatus` + `Repositories.ServiceAccountStatus`; disable/enable routes;
+  `serviceAccountResponse.status`; `apikey_auth reason` | opt-in; wired + 0027 absent → BOOT FAILURE naming 0027;
+  unwired never reads the table | leave false | authentication@v0.31.0".
+- **Row 7:** "**migration 0027** (`service_account_status`), ledger 0034; `GlobalRevoker` + `StatusRepository` +
+  `FilteredLister` filled | apply 0027 before setting row 6's flag; otherwise optional | — | stores pgx@v0.15.0,
+  turso@v0.14.0".
+- **Row 9:** "`LoginPage.RegistrationClosed`; the goth login hides "Create an account" under `closed`; the register-form
+  403 copy | a `closed` host on views v0.8.1 still renders the link (it answers 404) | — | views/goth@v0.9.0".
+- **Row 11:** "auth-cms wires rows 2, 6 (and `invitation_only` behind an env), `authmem` implements the three ports;
+  baseline stays machine-unwired; both `.env.example` | example behaviour | — | examples (untagged)". The baseline did
+  not wire row 2 in the plan; Verification §3 needed it on, so this PR wires it.
+
+Build-time deviations a host can see, folded here:
+- **Row 2, the external admin.** The plan's §3 expected the external admin's next request to be 401 at the pocket. As
+  built (and as the README and the Revocation SLA say), an external token is not a session: the revoke bumps the
+  admin's local revision, but the provider's token is re-verified per request and is admitted again; the local kill
+  switch for an external user is deactivation, and the per-actor budget throttles a repeat. §3 below records the 200.
+- **Row 5, L8.** `status=revoked&never_expires=true` is a valid filter (a revoked never-expiring key exists); only
+  `expired` contradicts `never_expires=true`. The plan's §1(4) line was corrected after the PR-1 review.
+- **Row 1, invitation lookups.** A known user's magic link does no invitation lookup under `invitation_only` (M3): the
+  mode governs account creation only.
+
+**The 0027 rule.** `service_account_status` is required ONLY when `AUTH_SERVICE_ACCOUNT_STATUS`
+(`AdministrationConfig.ServiceAccountStatus`) is wired. Unwired and unmigrated, the host boots and the table is never
+read; wired and unmigrated, it refuses boot naming `0027_service_account_status.sql`
+(`ErrServiceAccountStatusSchemaMissing`; the probe runs under a 5 s deadline and maps only `sdk.ErrNotFound`, anything
+else to `sdk.ErrUnavailable`). A host may apply 0027 ahead of time. The baseline ledger carries it as
+`0034_service_account_status.sql` (byte-identical, G34); the baseline ledger now ends at 0034. The S4c-2 plan takes
+0028.
+
+**Measured revoke durations** (#216, 10k active users, 30k sessions, 10k grants, batches of 500): native PostgreSQL 17.4
+**73–100 ms** for the whole run, slowest batch 6.8 ms; turso on the local-file driver **387 ms**. No libSQL-server
+measurement was taken (the leg was waived, below). On turso each batch holds the database write lock for its duration.
+
+**Handoff notes — what a host does on upgrade, by host shape and module** (applied at the roadmap's end). Pins: sdk
+v0.20.0 (unchanged); authentication **v0.31.0**; stores pgx **v0.15.0** / turso **v0.14.0** for a store host; views/goth
+**v0.9.0** for a goth host; every other module unchanged. Repin with explicit `GOWORK=off go get <module>@<tag>`, then
+`GOWORK=off go mod tidy`.
+- **Every host** (rows 1, 2, 10).
+  1. Read the boot log: `auth: registration registration=open source=default` (today's behaviour), `auth: api key
+     lifetime …` and `api_keys=denied` on the MFA posture line. `AUTH_REGISTRATION` with any value other than `open`,
+     `invitation_only` or `closed` refuses boot.
+  2. Choose a registration mode if `open` is wrong: `invitation_only` needs a Granter, `closed` cannot sit beside
+     `ProvisionOnFirstVerification`. A goth host repins views/goth v0.9.0 so the login hides "Create an account" under
+     `closed`; a host with its own login template guards the link on `RegistrationClosed`.
+  3. To offer revoke-all over HTTP, make the `UserAdminCheck` switch on `Action` with an allow-list that names
+     `UserAdminRevokeAllSessions` (only the platform admins), then set `GlobalSessionRevocationRoute: true`. Give the
+     route a proxy read timeout longer than a fleet run. Keep a CLI over `RevokeAllSessions` for when the admin path is
+     what is compromised (README recipe).
+- **Hosts admitting API keys on `RequireMFA()` routes or through `UserAdminCheck`** (row 3, the break). Run the Read-first
+  grep. A service account that administers users, or calls a route with `Accept(…APIKey)` + `RequireMFA()`, now gets 403
+  `mfa_credential_not_eligible` with no challenge. Move that automation to a route without `RequireMFA()`, or set
+  `MFAConfig.APIKeysExempt` (production logs `posture_waiver=APIKeysExempt`) while it moves. A machine client switching
+  on the 401 challenge sees a 403 instead and must not retry.
+- **Machine hosts in production** (rows 4–6).
+  1. Decide the key lifetime: zero is now 365 days; set `AUTH_API_KEY_MAX_TTL=2160h` (90 days) if clients rotate.
+     Automation that mints without `expires_at` keeps working and gets an expiry a year out; nothing warns before it,
+     so schedule rotation and run the runbook's SQL for never-expiring and soon-expiring keys. A client sending
+     `expires_at` beyond the bound or in the past gets 400.
+  2. To pause machine identities, apply 0027 pre-boot, then set `AUTH_SERVICE_ACCOUNT_STATUS=1`. Disable revokes the
+     keys; enable restores minting only. A compromised account: revoke its keys or delete it.
+  3. The BE9 WARN (row 10) means native sessions mint keys at AAL1: wire passkeys or TOTP, or override
+     `BundledRouteAuth.MachineLifecycle`.
+- **Store hosts** (rows 7, 8). Repin the store (MVS lifts core to v0.31.0). The stores fill `GlobalSessions`,
+  `ServiceAccountStatus` and the filtered lister; 0027 is optional until row 6's flag is set. A host implementing
+  `session.ManagementRepository` or `apikey.APIKeyRepository` itself changes nothing (no port method changed) and gains
+  the features only by implementing the new ports; run `storetest` (the three sub-suites skip when a port is nil).
+- **Goth hosts** (row 9). Repin views/goth v0.9.0.
+- **OAuth-only hosts (gps-360-go): rows 1, 2 only.** Repin authentication v0.31.0 and the pgx store v0.15.0 (the gps-360-go
+  shape built in set B). The registration mode governs its first Google sign-in; whether it is `open`,
+  `invitation_only` (onboarding by invitation to the Google-verified address) or `closed` (a frozen roster) is decided at
+  its adoption. Nothing else in this slice touches it unless it wires machine repositories.
+- **React/SPA hosts** (the JSON contracts).
+  - `POST /auth/admin/sessions/revoke-all` with `{}` (cookie callers send the CSRF header): 200
+    `{"users":n,"sessions":n,"grants":n,"batches":n,"revoked_at":"<UTC RFC 3339 nanos>"}` and the session cookies cleared,
+    so the next call is 401 (sign in again); 401 with the RFC 9470 challenge at AAL1 (step up, retry); 403
+    `permission_denied` for a non-admin; 429 `rate_limited` for a second call within a minute; 404 when unmounted.
+  - `GET /auth/service-accounts/{id}/keys?status=active|expired|revoked&never_expires=true|false`: every row carries
+    `status`; 400 `filter_invalid`, `filter_contradiction` or `filter_unsupported`. A mint answers 201 with the
+    (possibly defaulted) `expires_at`, 400 `api_key_ttl_exceeded` (`max_ttl_seconds`, `max_expires_at`) or
+    `api_key_expiry_past`, 409 `service_account_disabled`.
+  - `POST /auth/service-accounts/{id}/disable` and `…/enable` with `{}`: 200
+    `{"service_account":{…,"status":"disabled"|"active"},"changed":bool,"keys_revoked":n}`; 404 when unwired.
+    `status` is on every `serviceAccountResponse`.
+  - Registration: 403 `registration_invitation_required` / `registration_closed` at `POST /auth/register`; the browser
+    OAuth callback lands on its destination with `?auth=registration_closed|registration_invitation_required`.
+- **Examples (this PR).** Every example builds, vets and tests at `GOWORK=off` on the S4d tags. Pins moved (explicit
+  `GOWORK=off go get`, then `GOWORK=off go mod tidy`): `auth-cms` views/goth v0.8.1→v0.9.0 (its authentication pin moved
+  to v0.31.0 in #215); `production-baseline` authentication v0.30.0→v0.31.0 and authentication stores/pgx
+  v0.14.0→v0.15.0; `external-identity` authentication v0.30.0→v0.31.0. `cms`, `goth-showcase`, `jobs-minimal` and
+  `minimal` pin no moved module. No non-S4d pin moved, direct or indirect. external-identity runs the standalone external
+  engine with no API keys, admin routes or machine routes: row 3 and the BE9 WARN do not reach it (its boot log carries
+  no new WARN; an MFA token is 200, a single-factor one 401, as before). The baseline gains row 2 (above) and an S4d
+  block in `.env.example`; it reads `AUTH_GLOBAL_SESSION_REVOCATION_ROUTE` only, and names the pocket's other S4d keys
+  as not read (it provisions on first IdP sign-in with no Granter, so only `open` boots, and it wires no machine
+  identity).
+
+**The review record.** Every PR passed a lead-backend code review before merge; the fixes were folded as follow-up
+commits on the PR.
+- **#214 (PR-1), ship-with-edits, no blocker** (1 HIGH, 4 MEDIUM, 8 LOW). **H1** (owner ruling 2026-10-26): the revoke-all
+  route admits external tokens — `Accept(AccessToken, ExternalToken), Live()` — and still refuses delegated tokens and
+  API keys (`TestRevokeAllAdmitsExternalAdmins`). **M1** a key minted while a disable races it is re-checked after the
+  insert and revoked (the live race: 0 of 43 keys worked after enable). **M2** the fleet revoke runs detached from the
+  request context, bounded at 10 minutes. **M3** a known user's magic link does no invitation I/O
+  (`TestExistingUsersMagicLinkSkipsTheInvitationLookup`). **M4** the evidence rows go through the Recorder's failure
+  accounting (`RecordReporting`). **L1–L7** fixed. **L8** was a plan line, corrected (row 5's
+  `revoked&never_expires`).
+- **#216 (PR-2), ship-with-edits, 0 HIGH.** **M1** the global-revocation race test is committed
+  (`TestGlobalRevocationRacesMints_Postgres`, `…_LocalSQLite`). **M2** the baseline README row for 0034. LOWs: turso
+  `SweepOrphans` uses `NOT EXISTS`, turso `Delete` goes through `MapError`, and the re-run notes in both READMEs. Not
+  done: the optional storetest additions (exact-multiple paging, mixed-case id order), because they live in core, which
+  was already released as v0.31.0 (below).
+- **#215 (PR-3).** Its record is the run-and-look and the tests (`TestLoginRegistrationClosed`,
+  `TestRegister_InvitationRequiredRerender`, auth-cms's `TestLoginOverrideHonorsRegistrationClosed`); #215 records no
+  review finding. The one scope addition: auth-cms's own login template printed the link unconditionally and is now
+  guarded.
+
+**Verification record.**
+- CI `check`, `vuln` and the CodeQL analyses passed on the final run of #214–#216. Three CodeQL
+  `go/clear-text-logging` alerts on #214 (the MFA posture line's `api_keys=` value and the API-key lifetime boot
+  line's duration and source, none of them a credential) were dismissed as false positives. `make guard` and `make check` pass on this PR's repinned tree. S4d adds no guard and no
+  P-rule.
+- **Cold verification:** every tag above; sets A, B (and the gps-360-go shape) and C as listed; this PR's empty-cache
+  from-the-tags builds.
+- **§1, the real auth-cms binary over HTTP** (#214, development): **48/48** — revoke-all gated (non-admin 403, AAL1
+  admin 401 + challenge, after a TOTP step-up 200 with counts and both cookies cleared), every session, the bearer
+  user's refresh, a pending magic link and a delegated OAuth2 connection dead afterwards while an API key survives, the
+  rail `started` then `success`, an API key on the route 401, the second call 429, the unflagged binary 404; the boot
+  lines and `AUTH_REGISTRATION=bogus` refusing boot; the three registration modes; key lifetime and filters; disable and
+  enable, including concurrent mints racing a disable (0 of 43 keys worked after enable); API keys at the MFA gates
+  with and without the hatch; no response, row or non-mailer log line carrying a key, token or address. Not shown on
+  that binary, covered by tests instead: an external admin at AAL2 (`TestRevokeAllAdmitsExternalAdmins`; shown on the
+  baseline in §3 below) and an existing user's magic link under `invitation_only`
+  (`TestExistingUsersMagicLinkSkipsTheInvitationLookup`). `pockets/authentication` build, vet and `test -race` (24
+  packages); auth-cms tests three runs with `-count=1`.
+- **§2, the store legs** (#216). Live pgx on a fresh native PostgreSQL 17.4: **503/0/1**, bare and with
+  `POSTGRES_TEST_SCHEMA=s4d` (previously 485/0/1; the skip is the known `TestCollationControlsOrdering_NonC`); the
+  storetest `GlobalRevocation`, `ServiceAccountStatus` and `APIKeyFilter` suites now run. turso: untagged **400/0/0**;
+  `-tags=integration` on the local-file driver **824/0/0**. The race leg (200 users, 8 minters racing
+  `RevokeAllBatch(50)`): every user bumped exactly once and no session minted at the old revision survived; pgx 5/5 runs
+  (622–859 old-revision mints per run, 0 survivors). The 10k-user durations above. Boot shapes on PG17 with the
+  baseline ledger through 0034: flag on boots; flag off boots; table dropped + flag on refuses naming
+  `0027_service_account_status.sql`; table dropped + flag off boots, the real baseline binary included. `live-stores`
+  green on the branch and on `main` at `b90a4eee` before tag 2.
+- **§3, from the tags (this PR).** auth-cms and production-baseline built at `GOWORK=off` from the repinned tree with an
+  empty module cache (`all modules verified` in both). `go version -m` on auth-cms reads `pockets/authentication
+  v0.31.0`, `pockets/authentication/views/goth v0.9.0`, `pockets/authorization v0.31.0` and `sdk v0.20.0`; on the
+  baseline `pockets/authentication v0.31.0`, `pockets/authentication/stores/pgx v0.15.0`, `pockets/authorization
+  v0.31.0`, the authorization pgx store v0.21.0 and `sdk v0.20.0`.
+  - **auth-cms, 13/13** (development, `AUTH_DEBUG=1`, the in-memory store, the console mailer, port 8094): revoke-all
+    as a non-admin **403**; as an AAL1 admin **401** with the `insufficient_user_authentication` challenge; after a TOTP
+    step-up **200** `{"users":2,"sessions":2,"grants":0,"batches":1,"revoked_at":"…Z"}`; the victim's next `/auth/me`
+    **401**; a second call within the minute (after a recovery-code step-up) **429** `rate_limited`; the rail holds
+    `started` + `success`; a binary with `AUTH_GLOBAL_SESSION_REVOCATION_ROUTE=false` **404**. With
+    `AUTH_SERVICE_ACCOUNT_STATUS=1`: disable **200** `{changed:true, keys_revoked:2}`; the account's key **401** (200
+    before); a mint **409** `service_account_disabled`; enable **200** `changed:true`, then a mint **201**; both old keys
+    stay **401**.
+  - **production-baseline** on a fresh native PostgreSQL 17.4 cluster, the ledger applied through 0034 by the
+    baseline's migrator, the route on (`AUTH_GLOBAL_SESSION_REVOCATION_ROUTE=true`; the baseline default is off), the development issuer: an external user bootstrapped as the global
+    admin (`cmd/bootstrap`). Revoke-all as a non-admin external user **403**; as the admin with a single-factor token
+    **401** + the challenge; as the admin at **AAL2** (`amr: [pwd, mfa]`) **200**
+    `{"users":2,"sessions":0,"grants":0,"batches":1,…}`, the rail `started` (`batch_size: 500`) then `success`; a second
+    call **429**. **The admin's next request with the same provider token: 200, not the plan's 401** — the as-built
+    contract (row 2 deviation above): an external IdP session survives the revoke. The local kill switch held: the admin
+    deactivated the second external user and that user's next request was **401**. A baseline with
+    `AUTH_GLOBAL_SESSION_REVOCATION_ROUTE=false` (now also the default) answers **404**.
+  - Every example builds, vets and tests at `GOWORK=off` (the auth-cms server package three runs, all green);
+    `pnpm build` in `workshop/documentation` succeeds.
+
+**Owner drill: PENDING — recorded at merge.**
+
+**Owner rulings.** Ratified 2026-10-26 ("ratified"): **R-1 (a)** chunked keyset batches of 500 users per transaction,
+active users only, re-runnable, `started`/`success`/`failure` rows with partial counts; **R-2 (a)** API keys denied at
+every MFA gate (`RequireMFA()`, admin, machine) with 403 `mfa_credential_not_eligible` and the `MFAConfig.APIKeysExempt`
+hatch; **R-3 (a)** `APIKeyMaxTTL` production default 365 days, docs recommend 90; **R-4 (a)** an omitted `expires_at`
+in production is filled with now + max, echoed in the 201, `expires_at_defaulted: true` on the event; **R-5 (a)** the
+service method plus the opt-in route. gps-360-go's registration mode is decided at its adoption. **H1, owner ruling
+2026-10-26 after the #214 review:** the revoke-all route admits external tokens (`Accept(AccessToken, ExternalToken),
+Live()`); delegated tokens are still refused. **The Turso libSQL-server leg, owner ruling 2026-10-26:** waived for this
+release (below).
+
+**Known and deferred.**
+- **The Turso libSQL-server leg was WAIVED by the owner** for this release. The local-file driver run
+  (`-tags=integration`, 824/0/0) is accepted as Turso coverage; CI's `live-stores` skips Turso (its token is empty). The
+  plan's 10k-user measurement on the Turso playground was therefore not taken.
+- **No store-side mint guard.** The stores do not refuse an insert for a disabled account (it would break
+  `APIKeyStore.Create` on a database without 0027); core's M1 re-check after the insert is the guarantee, and the store
+  locking makes it reliable.
+- **An erased user's service-account status row is left behind** as a harmless orphan (account ids are never reused);
+  deleting a service account deletes its row best-effort.
+- **The optional storetest additions** from the #216 review (exact-multiple paging, mixed-case id order) wait for the
+  next core minor.
+- **Follow-ups** (the plan's Notes): a pre-expiry notification for API keys (a maintenance job reading `expires_at`);
+  bounded deadlines and `ErrNotFound`-only mapping for the EXISTING 0025/0026 probes; `requireJSON` on `revokeAPIKey`
+  (pre-existing); a cross-account key listing (a SQL recipe ships instead); the pre-existing JSON-on-navigation for an
+  invalid OAuth state.
+- **Part 2** (M4, M7): `SessionsConfig.IdleTimeout` (`last_rotated_at`, a store train), an `AccessTokenTTL` ceiling,
+  Live-tier defaults on the bundled reads, `ExternalProvider.MaxTokenLifetime` and `RevocationFailOpen`; the key-ring JWT
+  signer with `kid`, `KeyedEncrypter` for the delivery and provider-token keys, `iss`/`aud` on first-party tokens;
+  `aal`/`methods` on delegated tokens. **Part 3** (M8): the breach checker with a production WARN, escalating lockout.
+  **S4c-2** (native `all` + enrollment grace) takes migration 0028.
+- **Owed legs.** Docker Desktop hung on the host, so every PostgreSQL leg ran on a native PostgreSQL 17 instead of a
+  container; no Linux-container `make test-stores` ran (`live-stores` covered `main`).
+- **Residuals.** A stateless access JWT outlives the revoke by at most `AccessTokenTTL`; API keys and IdP sessions are
+  untouched by it (the SLA table; the controls are key revocation, `DisableServiceAccount`, JWT-secret rotation and
+  deactivation). The chunked revoke is not globally atomic: a failure leaves a partial fleet revoked, reported and
+  re-runnable. `invitation_only` answers "an invitation is pending for this address" at `POST /auth/register`, budgeted
+  per IP. Un-wiring `ServiceAccountStatus` resumes mints on disabled accounts (their keys stay revoked). Under
+  `MFAConfig.Required: none` revoke-all is reachable at AAL1 behind the host check.
+
 ## Authorization governance and invitations (SOC 2 slice S7 — published 2026-10-26)
 
 Three annotated tags (not signed) on three modules. Each was cut at its PR's squash-merge commit
