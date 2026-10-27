@@ -1,5 +1,36 @@
 # Releasing gopernicus modules
 
+## Guard P9 reads every host ledger (workshop/gopernicus v0.9.1 — published 2026-10-26)
+
+**PATCH.** Plan: [plans/guard-p9-ledgers.md](plans/guard-p9-ledgers.md) (ratified 2026-10-26).
+The consumer is gps-three-sixty, which keeps authentication and authorization in their own
+`iam` database.
+
+- **P9 reads every ledger:** each directory under `workshop/migrations/` (`_`/`.`-prefixed
+  skipped). With none, it reads `primary` as before.
+- **One store, one ledger.** A store's home is the ledger holding byte-identical copies of its
+  files. Identical copies in a second ledger are one finding per store, and a suffix match
+  alone never makes a home. Missing and edited copies are judged against the home ledger. With
+  more than one ledger, the status line names each store's ledger, e.g.
+  `P9 ok (3 stores; ledgers: authentication→iam, authorization→iam, jobs→primary)`.
+- **No change for single-ledger hosts.** A host with only `primary` prints exactly what v0.9.0
+  printed.
+- **Scaffold pins.** `init` and `new pocket` move sdk v0.18.0 / v0.15.0 → **v0.20.0**. pgxdb
+  v0.14.0 and turso v0.9.0 are unchanged (already the latest). The emitted README runs the
+  guard `@v0.9.1`.
+- **Contract doc.** `examples/README.md` §3b, "P9 in full", is updated.
+
+**Upgrade.** Nothing is required. A host that wants a second ledger moves each store's copies,
+whole, into that ledger and applies it to that database.
+
+| Tag | Commit | PR | Cold verification |
+|---|---|---|---|
+| `workshop/gopernicus/v0.9.1` | `8efa21f8` | #219 | OK, poll 1. A cold `init --db pgx` from `@v0.9.1` (`GOWORK=off`, empty module cache, `proxy.golang.org`) pins sdk v0.20.0 + pgxdb v0.14.0. Its README cites `@v0.9.1`. It tidies, builds, passes `go mod verify`, and `guard --posture` is clean (25 rules, 2 packages). On a host mounting authentication pgx v0.15.0, authorization pgx v0.21.0 and jobs pgx v0.7.0 with an `iam` + `primary` split, P9 is `ok (3 stores; …)`. |
+
+**Known.** `integrations/kvstores/goredis` `TestOpenHonorsDeadlineAfterConnection` failed once
+under a full local `make check` ("i/o timeout, want deadline exceeded") and passed on rerun.
+It looks flaky under load; nothing was tagged for it.
+
 ## Session and machine governance (SOC 2 slice S4d part 1 — published 2026-10-26)
 
 Four annotated tags (not signed) on four modules. Each was cut at its PR's squash-merge commit
