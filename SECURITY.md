@@ -34,8 +34,8 @@ each module receives fixes. Latest tags at the time of writing:
 | `pockets/authentication/stores/turso` | v0.15.0 |
 | `pockets/authentication/views/goth` | v0.9.0 |
 | `pockets/authorization` | v0.31.0 |
-| `pockets/authorization/stores/pgx` | v0.21.0 |
-| `pockets/authorization/stores/turso` | v0.20.0 |
+| `pockets/authorization/stores/pgx` | v0.22.0 |
+| `pockets/authorization/stores/turso` | v0.21.0 |
 | `pockets/authorization/stores/goredis` | v0.6.0 |
 | `pockets/cms` | v0.6.0 |
 | `pockets/cms/stores/pgx` | v0.5.0 |
@@ -49,8 +49,8 @@ each module receives fixes. Latest tags at the time of writing:
 | `integrations/cryptids/go-oidc` | v0.2.0 |
 | `integrations/cryptids/go-webauthn` | v0.1.0 |
 | `integrations/cryptids/golang-jwt` | v0.3.0 |
-| `integrations/datastores/pgxdb` | v0.14.0 |
-| `integrations/datastores/turso` | v0.9.0 |
+| `integrations/datastores/pgxdb` | v0.15.0 |
+| `integrations/datastores/turso` | v0.10.0 |
 | `integrations/email/sendgrid` | v0.5.0 |
 | `integrations/encoding/rsc-qr` | v0.1.0 |
 | `integrations/filestorage/gcs` | v0.3.0 |
@@ -59,7 +59,7 @@ each module receives fixes. Latest tags at the time of writing:
 | `integrations/oauth/github` | v0.3.0 |
 | `integrations/oauth/google` | v0.3.0 |
 | `ui/goth` | v0.2.1 |
-| `workshop/gopernicus` | v0.9.0 |
+| `workshop/gopernicus` | v0.9.2 |
 
 Every module declares `go 1.26.10`; a host that honors the pin builds with a standard
 library carrying the fixes listed in `plans/soc2-s8-toolchain-pgx-repin-handoff.md`.

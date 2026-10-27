@@ -123,6 +123,16 @@ together, without a principal permission callback. Only explicit resource teardo
 bypasses configured minima. A prior permission check, even inside an ambient
 transaction, does not automatically become atomic with a later write.
 
+### Two databases never share a transaction
+
+Ambient transactions are per datastore instance. An instance is the `*DB` one `Open` call returned: one `Open`, one pool, one instance. Identity is the pointer, so wrappers hold or embed it and never copy a `DB` by value. Stores built with `WithSchema` over the same `*DB` share its identity, so one `Transact` spans their schemas in one database. Two `Open` calls are two instances, even against the same database.
+
+A store routes to its own instance's ambient transaction or, when there is none, to its own pool; another instance's transaction in the context is invisible to it. `Transact` (and `TransactSnapshot` on pgx) refuses nesting on the same instance with `ErrNestedTransact`; match it with `errors.Is`. A different instance's `Transact` nests independently: the inner one commits or rolls back on its own when its callback returns, and the outer may still roll back afterwards. The framework provides no cross-database atomicity. Ordering is the host's job: do the write you cannot take back last, make replays idempotent, or put the effect in a durable outbox (`pockets/events`).
+
+Two `*DB` over one database (a runtime role and a migrator role, or a duplicate `Open`) do not join each other's transactions and can block each other. Nested, the inner connection can wait on a row or table lock the outer holds. On PostgreSQL that wait is client-side, the server's deadlock detector cannot see it, and it is unbounded unless `DB_LOCK_TIMEOUT` (and `DB_STATEMENT_TIMEOUT`) are set. On a SQLite file every inner write fails `SQLITE_BUSY` after `busy_timeout`. When you want one transaction, build those stores over one `*DB`. Otherwise set `DB_LOCK_TIMEOUT` and never nest the pair.
+
+A nested request holds one connection from each pool. Nest instances in one fixed order, give requests a deadline, and size the inner pool's `DB_MAX_CONNS` for the outer's concurrency.
+
 ## Prove parity
 
 Hermetic `make check` lets live datastore suites skip loudly. Milestone/release proof runs them against real PostgreSQL and Turso, with race detection where applicable.

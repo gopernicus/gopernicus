@@ -339,8 +339,11 @@ user; deactivate to keep someone out.
 Tenant isolation is host-owned: one database or schema per tenant, never a row-level
 predicate the framework enforces. Offboarding a tenant means dropping its database and
 destroying the vault owner that held its credentials (`Vault.DeleteOwner`), then rotating the
-secrets master ring if backups must be defeated (*Keys and rotation*). The one framework
-hazard for a multi-database host is `pgxdb.QuerierFrom`: it returns the ambient transaction
-to any `*DB`, so a repository bound to one database called inside another database's
-transaction runs against the wrong one. Keep control-plane and tenant work in separate
-transactions until the fix lands.
+secrets master ring if backups must be defeated (*Keys and rotation*). Ambient transactions
+are per `*DB` (pgxdb v0.15.0, datastores/turso v0.10.0): a repository bound to one database,
+called inside another database's transaction, runs on its own database's pool. The two never
+share a transaction, so there is no atomicity between control-plane and tenant work; see
+*Persistence*, "Two databases never share a transaction". Symptom of nesting two `*DB` over
+ONE database: requests stall in pool acquire, or sit `idle in transaction` on the outer
+instance while the inner pool saturates. Build those stores over one `*DB`, or set
+`DB_LOCK_TIMEOUT` and do not nest the pair.

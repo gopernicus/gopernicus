@@ -127,10 +127,14 @@ Exhausting a budget returns `model.ErrEvaluationLimit`, an indeterminate error.
 **Errors fail closed**: there is no partial allow and no truncated result that
 looks complete.
 
-On PostgreSQL an ambient transaction must actually be `REPEATABLE READ` or
-`SERIALIZABLE`; the adapter checks and rejects `READ COMMITTED` before reading.
-`pgxdb.TransactSnapshot` gives you a read-write workflow at the right level.
-SQLite's `BEGIN IMMEDIATE` is fine as is.
+On PostgreSQL an ambient transaction of the store's own `*DB` must actually be
+`REPEATABLE READ` or `SERIALIZABLE`; the adapter checks and rejects `READ
+COMMITTED` before reading. `pgxdb.TransactSnapshot` gives you a read-write
+workflow at the right level. SQLite's `BEGIN IMMEDIATE` is fine as is. Another
+`*DB`'s transaction is invisible to the store: it reads and writes on its own
+pool. Two `*DB` over the same database are still two instances, so a store over
+one, called inside the other's transaction, can wait on the outer's locks; see
+[Persistence](../guides/persistence.md#two-databases-never-share-a-transaction).
 
 ## Guarding routes
 

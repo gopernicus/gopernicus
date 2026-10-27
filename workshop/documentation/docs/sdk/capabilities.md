@@ -311,7 +311,9 @@ Pass the callback context to repositories backed by the same datastore
 instance; only operations using its handle participate. A nil return means the
 transaction committed. An error or panic aborts, and panic values survive
 cleanup; preserve `errors.Is`/`errors.As` matching since cleanup may add a
-cause. Bundled connectors reject nesting. A connector may retry the callback, so
+cause. Bundled connectors reject nesting on the same instance; a different
+instance's `Transact` nests independently and is neither joined nor refused.
+Two databases never share a transaction. A connector may retry the callback, so
 reset captured results per attempt and perform external effects only after
 `Transact` returns nil, using a durable outbox when an effect must survive a
 crash. SQL commit uses the begin context, rollback gets an independent

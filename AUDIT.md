@@ -5778,11 +5778,12 @@ against the live Auth emulator.
 
 ## AUDIT-056: Ambient transactions are per datastore instance; `TxFromContext` removed
 
-- **Status:** implemented, unreleased. Planned tags: `integrations/datastores/pgxdb`
-  v0.15.0 and `integrations/datastores/turso` v0.10.0, then
+- **Status:** released 2026-10-27: `integrations/datastores/pgxdb` v0.15.0 and
+  `integrations/datastores/turso` v0.10.0 (`d5c9f213`, #233), then
   `pockets/authorization/stores/pgx` v0.22.0 and `pockets/authorization/stores/turso`
-  v0.21.0, which repin to them (plan `.claude/plans/querierfrom-instance-scope.md`,
-  ratified 2026-10-27).
+  v0.21.0 (`18bb3f57`, #234), which repin to them. Record: `RELEASING.md`, "Ambient
+  transactions per datastore instance"; executed plan
+  `plans/querierfrom-instance-scope.md`.
 - **Modules:** `integrations/datastores/pgxdb`, `integrations/datastores/turso`,
   `pockets/authorization/stores/pgx`, `pockets/authorization/stores/turso`;
   `sdk/capabilities/transaction` (doc comment only, no tag).
