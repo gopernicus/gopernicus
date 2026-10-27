@@ -3,7 +3,7 @@
 This file is the written security posture of the gopernicus framework repository: how to
 report a vulnerability, which versions are supported, and the controls an auditor can sample
 for change management, vulnerability management and CI credentials. It describes the
-repository as it is on 2026-10-26; host applications built on the framework document their
+repository as it is on 2026-10-27; host applications built on the framework document their
 own posture, starting from the docs site's *Production posture* guide.
 
 A host that turns on the authorization TupleCache brings its Redis into scope: the cache
@@ -29,9 +29,9 @@ each module receives fixes. Latest tags at the time of writing:
 | Module | Latest |
 |---|---|
 | `sdk` | v0.20.0 |
-| `pockets/authentication` | v0.31.0 |
-| `pockets/authentication/stores/pgx` | v0.15.0 |
-| `pockets/authentication/stores/turso` | v0.14.0 |
+| `pockets/authentication` | v0.32.0 |
+| `pockets/authentication/stores/pgx` | v0.16.0 |
+| `pockets/authentication/stores/turso` | v0.15.0 |
 | `pockets/authentication/views/goth` | v0.9.0 |
 | `pockets/authorization` | v0.31.0 |
 | `pockets/authorization/stores/pgx` | v0.21.0 |

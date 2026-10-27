@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gopernicus/gopernicus/examples/production-baseline/integrations/authentication/devissuer"
 	"github.com/gopernicus/gopernicus/pockets/authentication"
@@ -176,16 +177,17 @@ func productionBaseline(t *testing.T) composition {
 		t.Fatalf("newProvider: %v", err)
 	}
 	return composition{
-		mode:                environment.ModeProduction,
-		log:                 log,
-		origin:              srv.Origin(),
-		keys:                keys,
-		sessionCookie:       authenticationhttp.CookieConfig{Secure: true},
-		limiter:             sharedLimiter{},
-		archive:             archive,
-		authenticationRepos: identityRepositories(),
-		authorizationRepos:  authorizationRepositories(true),
-		provider:            provider,
+		mode:                 environment.ModeProduction,
+		log:                  log,
+		origin:               srv.Origin(),
+		keys:                 keys,
+		sessionCookie:        authenticationhttp.CookieConfig{Secure: true},
+		limiter:              sharedLimiter{},
+		archive:              archive,
+		authenticationRepos:  identityRepositories(),
+		authorizationRepos:   authorizationRepositories(true),
+		provider:             provider,
+		maxAuthenticationAge: 12 * time.Hour,
 	}
 }
 
@@ -214,13 +216,8 @@ func TestProductionBaselineConstructs(t *testing.T) {
 	if !strings.Contains(logs.String(), "mfa_required=admins source=config gates=/auth/admin/users*") {
 		t.Errorf("registration lacks the mfa posture line:\n%s", logs.String())
 	}
-	// The one WARN allowed: from core v0.32.0 (SOC 2 S4d part 2) the external
-	// provider has neither a RevocationChecker nor
-	// ExternalProvider.MaxAuthenticationAge, so its sign-in is bounded by token
-	// expiry alone. An older core pin logs none.
-	const unboundedAge = "external_authentication_age=unbounded provider=idp revocation_checker=none"
-	if strings.Count(logs.String(), unboundedAge) > 1 || strings.Count(logs.String(), "level=WARN") != strings.Count(logs.String(), unboundedAge) {
-		t.Errorf("production logs a WARN other than the one %q:\n%s", unboundedAge, logs.String())
+	if strings.Contains(logs.String(), "level=WARN") {
+		t.Errorf("production logs a WARN:\n%s", logs.String())
 	}
 }
 

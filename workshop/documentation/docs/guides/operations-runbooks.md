@@ -87,6 +87,58 @@ Authentication v0.31.0 (SOC 2 S4d). A reversible pause of a machine identity.
   in SQL:
   `select service_account_id, key_prefix, expires_at from api_keys where revoked_at is null and (expires_at is null or expires_at < now() + interval '30 days')`.
 
+## Enable an idle timeout on a live fleet
+
+Authentication v0.32.0, stores pgx v0.16.0 / Turso v0.15.0 (SOC 2 S4d part 2). Ends a
+first-party session nobody has refreshed within `IdleTimeout`.
+
+1. **Repin** core v0.32.0 and the store (pgx v0.16.0 or Turso v0.15.0); a host with its own
+   `SessionRepository` implements `session.ActivityRepository` or leaves idle off.
+2. **Apply migration 0029** (`sessions.last_rotated_at`, nullable; the baseline ledger copy is
+   0035) with `make migrate`, pre-boot. It is required only once idle is set: unset, the
+   column is never read and an unmigrated database boots.
+3. **Set `AUTH_IDLE_TIMEOUT`** (`SessionsConfig.IdleTimeout`) above `AccessTokenTTL` (at or
+   below refuses boot; under twice WARNs `idle_granularity`) and below `RefreshTTL` (at or
+   above WARNs `idle_never_fires`). Set without 0029, the host refuses to boot naming
+   `0029_session_activity.sql`.
+4. **Roll the fleet.** The boot line reads `idle_timeout=<d> idle_source=config`.
+- **Expected logout wave: zero.** Under the grandfather rule a session rotated while idle was
+  off (rotations, no stamp) is not judged until its first refresh after the switch stamps
+  it; only a session never refreshed is judged on `created_at`, and only once it is really
+  that old. `RefreshTTL` still bounds every session.
+- **Recorded:** `session_idle_expired` once per deleted row; the client sees the same generic
+  401 as any refresh denial. Read them with
+  `GET /auth/admin/security-events?event_type=session_idle_expired`.
+- **What it does not cover:** delegated OAuth2 connections (`OAuth2Config.SessionTTL`); an
+  outstanding access JWT, which lives up to `AccessTokenTTL` on `Stateless()` routes and
+  default-tier safe reads; a client that refreshes on a timer, which is never idle.
+- **Turning it off:** unset `AUTH_IDLE_TIMEOUT`; rotation stops stamping and nothing is judged.
+  Before turning it on again, read the next runbook.
+
+## Re-enable an idle timeout after a gap
+
+While idle is off, rotation leaves `last_rotated_at` as it was, so the stamps age. Re-enabling
+judges those old stamps: every session refreshed during the gap is logged out once at its next
+refresh. To avoid that wave, reset the stamps BEFORE setting `AUTH_IDLE_TIMEOUT` again, so the
+grandfather rule applies afresh:
+
+```sql
+UPDATE sessions SET last_rotated_at = NULL WHERE session_profile = 'first_party';
+```
+
+**The NULL reset is the only supported manual write to `last_rotated_at`.** Never set it to a
+time: the column is the idle clock, and the store writes it only through the compare-and-swap
+rotation.
+
+## Migration 0029 lock timeout: re-run
+
+0029 takes an `ACCESS EXCLUSIVE` lock on `sessions`, the busiest authentication table, and on
+pgx opens with `SET LOCAL lock_timeout = '5s'`. Behind a long reader it fails after about 5 s
+(`55P03`, lock not available) and records nothing in the ledger. **Re-run `make migrate`**
+(at a quieter moment if it repeats); the file is idempotent (`ADD COLUMN IF NOT EXISTS`). On
+Turso the `ALTER` briefly holds the database write lock. The only supported manual write to
+the new column is the NULL reset above.
+
 ## An abusive IP
 
 There is no bundled block list. What exists:
