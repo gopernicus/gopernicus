@@ -128,7 +128,7 @@ func TestBundledOverridesCannotAdmitDelegatedCredentials(t *testing.T) {
 		OAuthLinkStart: resource, SessionSecurityReads: resource, SessionHydration: resource,
 		CredentialManagement: resource, MachineLifecycle: resource, UserAdministration: resource,
 		Invitations: resource, BrowserAccount: resource,
-	}).withDefaults(h.svc)
+	}).withDefaults(h.svc, false)
 	for name, mw := range map[string]web.Middleware{
 		"link": a.OAuthLinkStart, "security": a.SessionSecurityReads, "me": a.SessionHydration,
 		"credentials": a.CredentialManagement, "keys": a.MachineLifecycle,

@@ -2078,7 +2078,9 @@ and owns that mapping's staleness.
 The pocket records `external_subject_provisioned`, `external_subject_unknown`,
 `external_subject_collision`, `external_subject_denied` (reason `tenant`,
 `sign_in_method`, `unverified_email`, `no_identifier`, `invalid_identifier`,
-`inactive` or `revoked`), `external_revocation_unavailable` (once per
+`inactive`, `revoked`, `authentication_age_exceeded` or
+`authenticated_at_missing` — [External authentication
+age](#external-authentication-age)), `external_revocation_unavailable` (once per
 provider outage), `external_login` (Details `provider` and `assurance` —
 `aal1` or `aal2`, the assurance the provider asserted; `UserID` the mapped
 user) — the first successful verification of each token, not every request —
@@ -2798,6 +2800,149 @@ keys and requires MFA, is refused from this release. `MFAConfig.APIKeysExempt`
 restores the pass at every gate (production logs
 `posture_waiver=APIKeysExempt`); the revoke-all route refuses keys regardless.
 The MFA boot line gains `api_keys=denied|exempt`.
+
+## Session lifetime (SOC 2 S4d part 2)
+
+Three host opt-ins and one floor: end a native session after inactivity, keep
+the access-token window coherent with the refresh horizon, keep the sensitive
+bundled reads on `Live()` under a host override, and bound how long ago an
+external identity provider's user authenticated. With the defaults (idle off,
+access 15 m, refresh 7 d, floor enforced on the default postures, no
+authentication-age bound) nothing visible changes.
+
+### Idle timeout
+
+`SessionsConfig.IdleTimeout` (`AUTH_IDLE_TIMEOUT`; zero is off) ends a
+first-party session nobody has refreshed for that long. **Inactivity is no
+refresh rotation within `IdleTimeout`**: the activity is the client's
+`POST /auth/refresh`, not the human, and it is judged at refresh only — a
+`Live()` read, the grace lane, step-up and the OAuth2 sites never read or write
+it. An idle refresh deletes the row and answers the same generic 401
+(`ErrInvalidRefreshToken`) as any other refresh denial, so a client cannot tell
+"signed out for inactivity" from a stale token.
+
+**Validation**, on the resolved values in every mode: a negative value or one
+at or below `AccessTokenTTL` refuses (`ErrIdleTimeoutBelowAccessTokenTTL` —
+idle would always fire); under `2 × AccessTokenTTL` WARNs
+`posture_warning=idle_granularity` (expiry lands up to one access lifetime
+late); at or above `RefreshTTL` WARNs `posture_warning=idle_never_fires`.
+
+**Wiring.** Set, it needs `Repositories.Sessions` to implement the optional
+`session.ActivityRepository` (`GetByRefreshHashWithActivity`, `RotateAt`,
+`DeleteIfIdle`, `ProbeSchema`; `session.SessionRepository` is unchanged), else
+`ErrIdleTimeoutRequires` — stores pgx and turso implement it from the minor
+after core v0.32.0. New then probes the schema under a 5 s deadline: only a
+store reporting `sdk.ErrNotFound` is `ErrIdleTimeoutSchemaMissing` (apply
+`0029_session_activity.sql`, which adds the nullable `sessions.last_rotated_at`);
+any other probe failure is `sdk.ErrUnavailable`. Unset, nothing is probed and an
+unmigrated database boots — so setting the env var alone on an unmigrated
+database refuses boot. Wired, a rotation is `RotateAt`: the existing
+compare-and-swap plus `last_rotated_at = now` in one statement, on the store's
+pool path (never a transaction the caller's context carries). Unwired, `Rotate`
+never names the column.
+
+**The grandfather rule.** A session is judged on `last_rotated_at` when it is
+stamped; on `created_at` when it was never rotated (a login nobody refreshed is
+genuinely idle); and NOT judged while it carries rotations but no stamp — a row
+rotated while idle expiry was off — until its first wired refresh stamps it
+(`RefreshTTL` still bounds it). Enabling idle on a live fleet therefore logs
+nobody out at once. Re-enabling after a disabled window re-judges the stamps
+left from before it (at most one forced re-login per session); to avoid that,
+reset them first:
+`UPDATE sessions SET last_rotated_at = NULL WHERE session_profile = 'first_party'`.
+
+**One event per row.** The idle delete is a compare-and-swap
+(`DeleteIfIdle`: the row goes only while its stamp and rotation count are still
+the observed ones); only the call that deleted it records
+`session_idle_expired` (status `blocked`; Details `session_id`,
+`last_activity` (UTC RFC 3339), `idle_seconds`, `idle_timeout_seconds`,
+`surface: "refresh"`; never a token or hash). A lost delete re-resolves like a
+lost rotation: a row already gone answers the generic 401 with no further
+event, a row a concurrent refresh moved goes on to the grace lane. A replayed
+consumed previous slot is reuse first (`refresh_reuse`), never idle, so theft
+detection is not swallowed.
+
+**Scope and residuals.**
+- First-party sessions only: delegated OAuth2 connections keep
+  `OAuth2Config.SessionTTL`.
+- After idle expiry an already-issued access JWT still passes `Stateless()`
+  routes and `LiveOnMutation` safe reads for at most `AccessTokenTTL`; `Live()`
+  routes see the row gone at once.
+- A client that refreshes on a timer is never idle — refresh on demand (on a
+  401), not on a schedule.
+- `GET /auth/sessions` may list sessions that will be refused at their next
+  refresh for idleness: the listing does not judge.
+- Logout by refresh token of an idle session still succeeds (204).
+
+### Access-token ceiling and the session-lifetime boot line
+
+`AccessTokenTTL > RefreshTTL` (after defaults) refuses boot in every mode
+(`ErrAccessTokenTTLExceedsRefreshTTL`, naming both): an access token would
+outlive its session. In production an `AccessTokenTTL` above
+`DefaultAccessTokenTTLCeiling` (1 h) logs one
+`posture_warning=access_token_ttl_long access_token_ttl=<d> ceiling=1h0m0s` —
+a WARN, never a refusal. Every boot logs `auth: session lifetime
+access_token_ttl=<d> refresh_ttl=<d> idle_timeout=off|<d>
+idle_source=config|default activity=refresh_rotation idle_scope=first_party
+live_floor=enforced|relaxed` (an env value and a literal are both `config`: the
+pocket never reads the process environment).
+
+### The liveness floor under the sensitive bundled groups
+
+A `BrowserConfig.BundledRouteAuth` override owns its group's credential set and
+transports; the liveness floor of `SessionHydration` (`/auth/me`),
+`SessionSecurityReads`, `CredentialManagement`, `MachineLifecycle` and
+`UserAdministration` is `Live()`. The default postures already are `Live()` and
+reuse their own read, so they pay nothing; an override lowered to
+`Stateless()` or `LiveOnMutation()` there now does one session read per call
+(a revoked session is a 401 at once) and, for an external token under
+`RevocationFailOpen`, fails closed (503) on those groups during a provider
+outage. `OAuthLinkStart`, `CSRFBootstrap`, `Invitations` and `BrowserAccount`
+keep the `Stateless()` floor, and the delegated-token denial is unchanged.
+`BrowserConfig.BundledRouteAuthLivenessFloorRelaxed` restores the `Stateless()`
+floor on all five (production logs
+`posture_waiver=BundledRouteAuthLivenessFloorRelaxed`; development WARNs); it is
+a literal, never an env var.
+
+### External authentication age
+
+`ExternalProvider.MaxAuthenticationAge` (zero is unbounded; negative refuses)
+bounds how long ago the token's holder authenticated — OIDC `max_age`
+semantics over `Identity.AuthenticatedAt`, which is `auth_time` when the
+provider asserts it and `iat` otherwise. It is checked on every request, never
+through the login-record cache, after the tenant, email and MFA gates and
+before the subject resolves (a denied token never provisions), with a 60 s skew
+leeway: older → `external_subject_denied reason=authentication_age_exceeded`;
+no authentication time at all → `reason=authenticated_at_missing`; both carry
+`provider` and answer the provider's 401.
+
+| Provider | What `MaxAuthenticationAge` bounds |
+|---|---|
+| Firebase (`auth_time` always asserted, the original sign-in) | an absolute cap on the provider session — the control that bounds "an external admin's IdP session survives revoke-all" |
+| go-oidc | `auth_time` when the IdP sends it (request it with `max_age`), else `iat` — then only the token's age, which `exp` already bounds |
+| auth0 | as go-oidc: an `auth_time` cap only when the tenant asserts it |
+| a provider sending neither claim | every token is denied (`authenticated_at_missing`); boot cannot detect it |
+
+The core cannot tell an asserted `auth_time` from the `iat` fallback; the sdk
+field that would (`Identity.AuthTimeAsserted`) is a later slice. In production a
+provider with no `RevocationChecker` and no bound WARNs
+`external_authentication_age=unbounded provider=<name> revocation_checker=none`.
+Each provider logs `auth: external provider lifetime provider=<name>
+max_authentication_age=off|<d> revocation_checker=wired|none
+fail_open=<bool>`, and production `RevocationFailOpen` is now the waiver line
+`auth: production posture requirement waived posture_waiver=RevocationFailOpen
+provider=<name>` (re-key log alerts on the old "external provider revocation
+fails open on the default liveness tier" text).
+
+### Revocation SLA rows
+
+| Credential or proof | After idle expiry / under the bounds |
+|---|---|
+| first-party refresh token past `IdleTimeout` | dead at its next refresh (row deleted, `session_idle_expired`) |
+| first-party access JWT after idle expiry | `Live()` routes and the floored sensitive groups: dead at once; `Stateless()` routes and `LiveOnMutation` safe reads: valid for at most `AccessTokenTTL` |
+| a session rotated before idle was wired | not judged until its first wired refresh stamps it; `RefreshTTL` bounds it |
+| delegated OAuth2 connections | out of scope: `OAuth2Config.SessionTTL` |
+| external IdP token past `MaxAuthenticationAge` | denied on every request (+ 60 s leeway) |
 
 ## Repositories (the ports a host or store adapter satisfies)
 

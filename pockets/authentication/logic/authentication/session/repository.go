@@ -51,6 +51,10 @@ var ErrRotationConflict = errors.New("session: refresh rotation conflict")
 //   - DeleteByUser is bulk and idempotent: it removes every session for the user
 //     and returns nil even when none exist (never sdk.ErrNotFound). It is the
 //     logout-everywhere primitive (a password change revokes all sessions).
+//
+// Idle expiry (SessionsConfig.IdleTimeout) needs the OPTIONAL
+// ActivityRepository on the same value; this interface never changes for it,
+// and an implementation without it keeps working while idle expiry is off.
 type SessionRepository interface {
 	// Create persists a new session and returns the session as persisted; a
 	// store with coarser timestamp precision than the entity returns the

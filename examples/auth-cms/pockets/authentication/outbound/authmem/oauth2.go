@@ -166,7 +166,7 @@ func (r oauth2Repo) RotateRefresh(ctx context.Context, in oauth2.Refresh) (sessi
 }
 
 func (r oauth2Repo) deleteOAuthSession(id string) {
-	delete(r.sessions, id)
+	r.deleteSession(id)
 	for key, grant := range r.authGrants {
 		if grant.SessionID == id {
 			delete(r.authGrants, key)

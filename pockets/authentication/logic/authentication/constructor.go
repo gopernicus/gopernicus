@@ -15,6 +15,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passkey"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -162,6 +163,13 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		return nil, err
 	}
 	if err := validateServiceAccountStatus(d); err != nil {
+		return nil, err
+	}
+	lifetimeLog := d.Logger
+	if lifetimeLog == nil {
+		lifetimeLog = slog.Default()
+	}
+	if err := validateSessionLifetime(d, lifetimeLog); err != nil {
 		return nil, err
 	}
 	if d.APIKeyMaxTTL < 0 {
@@ -349,6 +357,28 @@ func validateServiceAccountStatus(d constructorConfig) error {
 			return fmt.Errorf("%w: %w", ErrServiceAccountStatusSchemaMissing, err)
 		}
 		return fmt.Errorf("authentication: probing the service-account status schema: %w: %w", sdk.ErrUnavailable, err)
+	}
+	return nil
+}
+
+// validateIdleTimeout checks a set SessionsConfig.IdleTimeout against the
+// wiring: Repositories.Sessions must implement session.ActivityRepository,
+// whose schema probe runs under a bounded deadline. Only a probe reporting
+// sdk.ErrNotFound means migration 0029 is absent; any other probe failure is
+// sdk.ErrUnavailable. Without an idle timeout nothing here runs, so an
+// unmigrated store boots.
+func validateIdleTimeout(d constructorConfig) error {
+	activity, ok := d.Sessions.(session.ActivityRepository)
+	if !ok {
+		return ErrIdleTimeoutRequires
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), idleTimeoutProbeTimeout)
+	defer cancel()
+	if err := activity.ProbeSchema(ctx); err != nil {
+		if errors.Is(err, sdk.ErrNotFound) {
+			return fmt.Errorf("%w: %w", ErrIdleTimeoutSchemaMissing, err)
+		}
+		return fmt.Errorf("authentication: probing the session activity schema: %w: %w", sdk.ErrUnavailable, err)
 	}
 	return nil
 }

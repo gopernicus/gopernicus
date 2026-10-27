@@ -235,8 +235,10 @@ func TestStandalonePosture(t *testing.T) {
 		}
 	}
 
+	// The one WARN left is the unbounded-authentication-age line (no checker,
+	// no MaxAuthenticationAge), which is not the MFA posture.
 	logs, err := build(environment.ModeProduction, ExternalConfig{Providers: providers(true, true)})
-	if err != nil || strings.Contains(logs, "level=WARN") {
+	if err != nil || strings.Count(logs, "level=WARN") != strings.Count(logs, "external_authentication_age=unbounded") {
 		t.Fatalf("RequireMFA on every provider: err = %v, logs:\n%s", err, logs)
 	}
 

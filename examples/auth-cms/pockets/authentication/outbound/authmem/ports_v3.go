@@ -225,7 +225,7 @@ func (r passwordResetRepo) Redeem(_ context.Context, in passwordreset.RedeemInpu
 	r.passwords[userID] = in.NewPasswordHash
 	for id, s := range r.sessions {
 		if s.UserID == userID {
-			delete(r.sessions, id)
+			r.deleteSession(id)
 		}
 	}
 	for id, g := range r.authGrants {

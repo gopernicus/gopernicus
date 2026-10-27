@@ -22,6 +22,7 @@ func TestConfigEnvTags(t *testing.T) {
 	t.Setenv("AUTH_REGISTRATION", "invitation_only")
 	t.Setenv("AUTH_SERVICE_ACCOUNT_STATUS", "true")
 	t.Setenv("AUTH_API_KEY_MAX_TTL", "2160h")
+	t.Setenv("AUTH_IDLE_TIMEOUT", "2h")
 
 	var cfg constructorConfig
 	if err := environment.ParseEnvTags("", &cfg); err != nil {
@@ -55,18 +56,25 @@ func TestConfigEnvTags(t *testing.T) {
 	if cfg.APIKeyMaxTTL != 2160*time.Hour {
 		t.Errorf("APIKeyMaxTTL = %v, want 2160h", cfg.APIKeyMaxTTL)
 	}
+	if cfg.IdleTimeout != 2*time.Hour {
+		t.Errorf("IdleTimeout = %v, want 2h", cfg.IdleTimeout)
+	}
 
 	// The group structs carry the same keys, so a host embedding them parses
 	// them alike.
 	var groups struct {
 		IdentityConfig
 		AdministrationConfig
+		SessionsConfig
 	}
 	if err := environment.ParseEnvTags("", &groups); err != nil {
 		t.Fatalf("ParseEnvTags(groups): %v", err)
 	}
 	if groups.Registration != RegistrationInvitationOnly || !groups.ServiceAccountStatus || groups.APIKeyMaxTTL != 2160*time.Hour {
 		t.Errorf("groups = %q %v %v", groups.Registration, groups.ServiceAccountStatus, groups.APIKeyMaxTTL)
+	}
+	if groups.IdleTimeout != 2*time.Hour {
+		t.Errorf("groups.IdleTimeout = %v, want 2h", groups.IdleTimeout)
 	}
 }
 

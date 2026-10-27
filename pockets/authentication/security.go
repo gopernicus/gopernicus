@@ -654,6 +654,19 @@ func checkPosture(repos Repositories, cfg constructorConfig, startTLS []string, 
 	return errors.Join(refusals...)
 }
 
+// logLivenessFloor logs the one WARN for a relaxed liveness floor under the
+// sensitive bundled groups: a posture_waiver line in production, a plain WARN
+// in development. An enforced floor logs nothing here.
+func logLivenessFloor(cfg constructorConfig, log *slog.Logger) {
+	switch {
+	case !cfg.LivenessFloorRelaxed:
+	case cfg.RuntimeMode.IsProduction():
+		log.Warn("auth: production posture requirement waived", "posture_waiver", "BundledRouteAuthLivenessFloorRelaxed", "runtime_mode", cfg.RuntimeMode.String())
+	default:
+		log.Warn("auth: BrowserConfig.BundledRouteAuthLivenessFloorRelaxed lowers the sensitive bundled groups' liveness floor to Stateless(): a BundledRouteAuth override's own tier governs, so a revoked session's access token passes a stateless override until it expires")
+	}
+}
+
 // singleFactorCauses lists the login sources that admit single-factor (AAL1)
 // sign-in: native sources cannot produce AAL2, so they count under any
 // MFAConfig.Required; an external provider counts only while it is not asked

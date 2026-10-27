@@ -54,7 +54,7 @@ func (r globalSessionsRepo) RevokeAllBatch(ctx context.Context, afterUserID stri
 	}
 	for id, s := range r.sessions {
 		if in[s.UserID] {
-			delete(r.sessions, id)
+			r.deleteSession(id)
 			batch.Sessions++
 		}
 	}
@@ -85,7 +85,7 @@ func (r globalSessionsRepo) SweepOrphans(ctx context.Context, _ time.Time) (int,
 	}
 	for id, s := range r.sessions {
 		if inactive(s.UserID) {
-			delete(r.sessions, id)
+			r.deleteSession(id)
 			sessions++
 		}
 	}

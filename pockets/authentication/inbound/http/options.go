@@ -106,6 +106,17 @@ func WithRouteAuthentication(value BundledRouteAuthentication) Option {
 	}
 }
 
+// WithLivenessFloorRelaxed lowers the liveness floor under the sensitive
+// bundled groups (SessionHydration, SessionSecurityReads, CredentialManagement,
+// MachineLifecycle, UserAdministration) from Live() to Stateless(), so a
+// WithRouteAuthentication override's own tier governs. False (the default)
+// keeps the Live() floor.
+func WithLivenessFloorRelaxed(relaxed bool) Option {
+	return func(c *adapterConfig) {
+		c.LivenessFloorRelaxed = relaxed
+	}
+}
+
 // WithInviteCheck sets the invitation create/list policy. With a resource rule it
 // is the optional create-only refinement; without one it is required.
 func WithInviteCheck(check InviteCheck) Option {

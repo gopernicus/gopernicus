@@ -586,7 +586,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	}
 	logicOptions := []authlogic.Option{
 		authlogic.WithPassword(authlogic.PasswordConfig{Hasher: cfg.Hasher, ValidatePassword: cfg.ValidatePassword, Compromised: cfg.CompromisedPasswordChecker, CompromisedFailOpen: cfg.CompromisedPasswordFailOpen, PasswordFlowsDisabled: cfg.PasswordFlowsDisabled, RequireVerifiedEmail: cfg.RequireVerifiedEmail}),
-		authlogic.WithSessions(authlogic.SessionsConfig{AccessTokenTTL: cfg.AccessTokenTTL, RefreshTTL: cfg.RefreshTTL}),
+		authlogic.WithSessions(authlogic.SessionsConfig{AccessTokenTTL: cfg.AccessTokenTTL, RefreshTTL: cfg.RefreshTTL, IdleTimeout: cfg.IdleTimeout}),
 		authlogic.WithIdentity(authlogic.IdentityConfig{Normalizer: cfg.IdentifierNormalizer, IdentifierKeyer: cfg.IdentifierKeyer, CredentialPolicy: cfg.CredentialPolicy, Registration: cfg.Registration}),
 		authlogic.WithMachine(authlogic.MachineConfig{APIKeyMaxTTL: cfg.APIKeyMaxTTL, ServiceAccountStatus: cfg.ServiceAccountStatus}),
 		authlogic.WithDelivery(logicDelivery),
@@ -704,6 +704,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		inbound.WithListStrategy(listStrategy),
 		inbound.WithMachineGate(cfg.MachineRoutesGate),
 		inbound.WithRouteAuthentication(cfg.BundledRouteAuth),
+		inbound.WithLivenessFloorRelaxed(cfg.LivenessFloorRelaxed),
 		inbound.WithUserErasureRoute(cfg.UserErasureRoute),
 		inbound.WithSecurityEventsRoute(cfg.SecurityEventsRoute),
 		inbound.WithGlobalSessionRevocationRoute(cfg.GlobalSessionRevocationRoute),
@@ -728,6 +729,8 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	logMaintenancePosture(cfg, maintenanceService, transportLog)
 	logMFAPosture(cfg, transportLog)
 	logAccountPosture(cfg, repos, transportLog)
+	logSessionLifetime(cfg, authService.SessionPolicy(), transportLog)
+	logLivenessFloor(cfg, transportLog)
 	return &Components{Authentication: authService, External: authService.ExternalAuthenticator(), OAuth2: oauthService, Invitations: invSvc, HTTP: adapter, Delivery: deliveryRuntime, SecurityEvents: securityEvents, Maintenance: maintenanceService}, nil
 
 }

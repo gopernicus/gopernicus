@@ -14,7 +14,7 @@ import (
 func (r *data) revokeCredentialStateLocked(userID string) {
 	for id, s := range r.sessions {
 		if s.UserID == userID {
-			delete(r.sessions, id)
+			r.deleteSession(id)
 		}
 	}
 	for id, g := range r.authGrants {

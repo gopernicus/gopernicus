@@ -68,7 +68,17 @@ type ExternalProvider struct {
 	AllowedTenants []string
 	// RevocationFailOpen lets LivenessOnMutation pass on validity and local status
 	// while the provider cannot answer. LivenessLive always fails closed.
+	// Production logs posture_waiver=RevocationFailOpen for it.
 	RevocationFailOpen bool
+	// MaxAuthenticationAge bounds how long ago the token's holder authenticated
+	// (OIDC max_age semantics), checked on every request before the subject
+	// resolves with a 60-second skew leeway: an older token, or one carrying no
+	// authentication time, is denied (external_subject_denied
+	// authentication_age_exceeded or authenticated_at_missing). The instant is
+	// sdkauth.Identity.AuthenticatedAt — the auth_time claim when the provider
+	// asserts it (an absolute cap on the provider session), else iat (then it
+	// bounds token age only). Zero is unbounded; negative is sdk.ErrInvalidInput.
+	MaxAuthenticationAge time.Duration
 }
 
 // ExternalConfig wires external identity providers. Zero durations and counts
@@ -251,6 +261,9 @@ func validateExternal(cfg ExternalConfig, repos ExternalRepositories, mode envir
 		if slices.Contains(p.AllowedTenants, "") {
 			return cfg, fmt.Errorf("authentication: external provider %q allows a blank tenant: %w", p.Name, sdk.ErrInvalidInput)
 		}
+		if p.MaxAuthenticationAge < 0 {
+			return cfg, fmt.Errorf("authentication: external provider %q MaxAuthenticationAge is negative: %w", p.Name, sdk.ErrInvalidInput)
+		}
 		provisions = provisions || p.ProvisionOnFirstVerification
 	}
 	if mode == environment.ModeProduction && provisions && nilDependency(keyer) {
@@ -277,7 +290,27 @@ func validateExternal(cfg ExternalConfig, repos ExternalRepositories, mode envir
 	if cfg.LoginRecordCacheEntries < 0 {
 		return cfg, fmt.Errorf("authentication: external LoginRecordCacheEntries is negative: %w", sdk.ErrInvalidInput)
 	}
+	for _, p := range cfg.Providers {
+		logExternalLifetime(p, mode, log)
+	}
 	return cfg, nil
+}
+
+// logExternalLifetime logs one provider's lifetime boot line and, in
+// production, the WARN for a provider whose tokens nothing bounds after
+// sign-in: no revocation checker and no MaxAuthenticationAge.
+func logExternalLifetime(p ExternalProvider, mode environment.Mode, log *slog.Logger) {
+	age, checker := "off", "none"
+	if p.MaxAuthenticationAge > 0 {
+		age = p.MaxAuthenticationAge.String()
+	}
+	if p.Revocation != nil {
+		checker = "wired"
+	}
+	log.Info("auth: external provider lifetime", "provider", p.Name, "max_authentication_age", age, "revocation_checker", checker, "fail_open", p.RevocationFailOpen)
+	if mode == environment.ModeProduction && p.Revocation == nil && p.MaxAuthenticationAge == 0 {
+		log.Warn("auth: an external provider's sign-in is bounded by token expiry alone; wire a RevocationChecker or set MaxAuthenticationAge", "external_authentication_age", "unbounded", "provider", p.Name, "revocation_checker", "none")
+	}
 }
 
 // validCookieName reports whether name is an RFC 6265 cookie-name token.

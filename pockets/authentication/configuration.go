@@ -2,12 +2,14 @@ package authentication
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"reflect"
 	"slices"
 	"strings"
 	"time"
 
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
 	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
@@ -163,6 +165,24 @@ func resolveAPIKeyMaxTTL(cfg constructorConfig) (time.Duration, string, error) {
 		return 0, "acknowledged", nil
 	}
 	return DefaultAPIKeyMaxTTL, "default", nil
+}
+
+// logSessionLifetime logs the one boot line naming the resolved session
+// lifetimes: the access and refresh lifetimes, the idle timeout (off when
+// zero) with its source, what counts as activity, which sessions it governs,
+// and whether the liveness floor under the sensitive bundled groups is
+// enforced. An environment value and a literal are both source config: the
+// pocket never reads the process environment.
+func logSessionLifetime(cfg constructorConfig, policy authlogic.SessionsConfig, log *slog.Logger) {
+	idle, source := "off", "default"
+	if policy.IdleTimeout > 0 {
+		idle, source = policy.IdleTimeout.String(), "config"
+	}
+	floor := "enforced"
+	if cfg.LivenessFloorRelaxed {
+		floor = "relaxed"
+	}
+	log.Info("auth: session lifetime", "access_token_ttl", policy.AccessTokenTTL.String(), "refresh_ttl", policy.RefreshTTL.String(), "idle_timeout", idle, "idle_source", source, "activity", "refresh_rotation", "idle_scope", "first_party", "live_floor", floor)
 }
 
 // nativeMFA reports whether a native AAL2 source is wired: a passkey relying

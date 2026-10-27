@@ -224,7 +224,7 @@ func (r passwordlessRepo) adoptLocked(in passwordless.RedeemInput, ident identif
 	delete(r.passwords, u.ID)
 	for sid, sv := range r.sessions {
 		if sv.UserID == u.ID {
-			delete(r.sessions, sid)
+			r.deleteSession(sid)
 		}
 	}
 	for gid, g := range r.authGrants {

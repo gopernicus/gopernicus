@@ -136,6 +136,7 @@ type externalSetup struct {
 	cookies     []string
 	loginPath   string
 	requireMFA  bool
+	failOpen    bool
 }
 
 // newExternalHarness wires a hybrid service: the native user rail and machine
@@ -169,6 +170,7 @@ func newExternalHarness(t *testing.T, setup externalSetup) *externalHarness {
 	if !setup.noProviders {
 		fixture.External = &authlogic.ExternalConfig{Providers: []authlogic.ExternalProvider{{
 			Name: "idp", Provider: provider, Revocation: revocation, CookieName: extCookie, RequireMFA: setup.requireMFA,
+			RevocationFailOpen: setup.failOpen,
 		}}}
 		fixture.ExternalSubjects = subjects
 	}
@@ -743,7 +745,7 @@ func TestBundledEstablishedSessionSurfacesRefuseExternalTokens(t *testing.T) {
 // admitting external tokens works, and delegated tokens stay refused.
 func TestBundledFloorAdmitsExternalBecauseTheDefaultSetDoes(t *testing.T) {
 	h := newExternalHarness(t, externalSetup{})
-	routes := RouteAuthentication{SessionSecurityReads: h.svc.RequireExternalToken()}.withDefaults(h.svc)
+	routes := RouteAuthentication{SessionSecurityReads: h.svc.RequireExternalToken()}.withDefaults(h.svc, false)
 	if rec, _ := h.serve(routes.SessionSecurityReads, extReq{bearer: h.token}); rec.Code != http.StatusOK {
 		t.Errorf("external override through the floor = %d, want 200", rec.Code)
 	}
@@ -757,7 +759,7 @@ func TestBundledFloorAdmitsExternalBecauseTheDefaultSetDoes(t *testing.T) {
 // ONE provider revocation call.
 func TestBundledPOSTRunsOneExternalRecheck(t *testing.T) {
 	h := newExternalHarness(t, externalSetup{})
-	routes := RouteAuthentication{}.withDefaults(h.svc)
+	routes := RouteAuthentication{}.withDefaults(h.svc, false)
 	h.users.mu.Lock()
 	h.users.gets = 0
 	h.users.mu.Unlock()

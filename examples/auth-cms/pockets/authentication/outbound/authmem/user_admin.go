@@ -120,7 +120,7 @@ func (r userAdminRepo) SetStatus(_ context.Context, id string, status user.Statu
 		if s.UserID != id {
 			continue
 		}
-		delete(r.sessions, sid)
+		r.deleteSession(sid)
 		revoked++
 		for gid, g := range r.authGrants {
 			if g.SessionID == sid {

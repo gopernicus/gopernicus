@@ -260,7 +260,8 @@ const (
 	TypeExternalSubjectCollision = "external_subject_collision"
 	// TypeExternalSubjectDenied is a verified subject refused by policy. Details
 	// carry the reason: tenant, sign_in_method, unverified_email, no_identifier,
-	// invalid_identifier, inactive or revoked.
+	// invalid_identifier, inactive, revoked, authentication_age_exceeded or
+	// authenticated_at_missing (ExternalProvider.MaxAuthenticationAge).
 	TypeExternalSubjectDenied = "external_subject_denied"
 	// TypeExternalRevocationUnavailable is recorded once per provider outage
 	// episode, not once per affected request.
@@ -353,6 +354,12 @@ const (
 	// after it carries users, sessions, grants, batches and duration_ms — the
 	// partial counts and error_kind on failure.
 	TypeAllSessionsRevokedGlobal = "all_sessions_revoked_global"
+	// TypeSessionIdleExpired is a first-party session ended at refresh by
+	// SessionsConfig.IdleTimeout (blocked), recorded once per session row.
+	// UserID is the session owner; Details carries session_id, last_activity
+	// (UTC RFC 3339), idle_seconds, idle_timeout_seconds and surface
+	// ("refresh") — never a token or a hash.
+	TypeSessionIdleExpired = "session_idle_expired"
 
 	// TypeUserDirectoryRead is one successful operator-directory read (the page
 	// or one user's summary). Actor is the principal resolved from the request
@@ -591,7 +598,7 @@ var types = []string{
 	TypePasskeyRegistered, TypePasskeyRemoved, TypePasskeysReset, TypePasskeyLogin, TypePasskeyFailed, TypePasskeySignCountRegressed,
 	TypeTOTPEnrolled, TypeTOTPRemoved, TypeTOTPReset, TypeTOTPStepUp, TypeTOTPFailed, TypeTOTPLocked,
 	TypeRecoveryCodesGenerated, TypeRecoveryCodeUsed,
-	TypeSessionRevoked, TypeAllSessionsRevoked, TypeAllSessionsRevokedGlobal, TypeUserDirectoryRead, TypeAuditRead,
+	TypeSessionRevoked, TypeAllSessionsRevoked, TypeAllSessionsRevokedGlobal, TypeSessionIdleExpired, TypeUserDirectoryRead, TypeAuditRead,
 	TypeOAuth2ConsentApproved, TypeOAuth2ConsentDenied, TypeOAuth2ConnectionCreated, TypeOAuth2Refresh,
 	TypeOAuth2RefreshReuse, TypeOAuth2TokenExchanged, TypeOAuth2RevocationRequested, TypeOAuth2GrantFailed,
 	TypeUserErased, TypeServiceAccountDeleted, TypeSecurityEventsPurged, TypeSecurityEventsArchived,

@@ -31,6 +31,16 @@ func PrincipalStrategy(opts ...PrincipalOption) RoutePrincipalStrategy {
 // Every bundled group retains a non-overridable delegated-token denial; resource
 // routes that accept Audience belong on the host's own resource surface.
 //
+// A host override owns the credential set and transports; the liveness floor
+// of a sensitive group — SessionHydration, SessionSecurityReads,
+// CredentialManagement, MachineLifecycle and UserAdministration — is Live()
+// unless relaxed (WithLivenessFloorRelaxed). An override lowered to
+// Stateless() or LiveOnMutation() there still proves a live session on every
+// call (one session read; for an external token, the provider revocation check,
+// which fails closed during a provider outage even under RevocationFailOpen).
+// OAuthLinkStart, CSRFBootstrap, Invitations and BrowserAccount keep a
+// Stateless() floor, so their override owns the tier.
+//
 // An override also owns the inbound context contract of its surface. Handlers
 // that read CurrentUser — and the session-bound credential/step-up handlers that
 // also read CurrentSessionID — still fail closed when the configured strategy

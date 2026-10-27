@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 )
+
+var _ session.ActivityRepository = (*rotateRaceActivity)(nil)
 
 // loginPair registers + logs in a user and returns the minted pair.
 func (h *harness) loginPair(t *testing.T, email, password string) TokenPair {
@@ -100,4 +104,61 @@ func snapshotSessions(h *harness) []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// rotateRaceActivity stages a concurrent rotation just before the service's
+// own RotateAt, so the service loses the compare-and-swap.
+type rotateRaceActivity struct {
+	*fakeActivity
+	before func()
+}
+
+func (r *rotateRaceActivity) RotateAt(ctx context.Context, id, expectedCurrentHash, newHash string, now time.Time) error {
+	if r.before != nil {
+		hook := r.before
+		r.before = nil
+		hook()
+	}
+	return r.fakeActivity.RotateAt(ctx, id, expectedCurrentHash, newHash, now)
+}
+
+// TestRefreshWiredRotationStampsAndReResolveNeverJudges: with idle expiry
+// wired, branch 3 rotates through RotateAt (the stamp lands with the CAS), and
+// a lost RotateAt re-resolves to the grace lane without judging idleness or
+// stamping — even when the concurrent winner left a stamp an idle judgement
+// would refuse.
+func TestRefreshWiredRotationStampsAndReResolveNeverJudges(t *testing.T) {
+	h := newIdleHarness(t)
+	ctx := context.Background()
+	race := &rotateRaceActivity{fakeActivity: h.activity}
+	h.svc.activity = race
+	pair := h.loginPair(t, "race@example.com", "password123456789")
+	hash, err := h.svc.hashSessionToken(pair.RefreshToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleStamp := h.clock.Now().Add(-2 * testIdleTimeout)
+	race.before = func() {
+		id := snapshotSessions(h.harness)[0]
+		if err := h.activity.RotateAt(ctx, id, hash, "concurrent-winner-hash", staleStamp); err != nil {
+			t.Errorf("staged rotation: %v", err)
+		}
+	}
+
+	h.clock.advance(time.Minute)
+	got, err := h.svc.Refresh(ctx, pair.RefreshToken)
+	if err != nil || got.AccessToken == "" || got.RefreshToken != "" {
+		t.Fatalf("Refresh after a lost RotateAt = %+v, %v; want the grace lane's access token only", got, err)
+	}
+	ids := snapshotSessions(h.harness)
+	if len(ids) != 1 || len(h.activity.stamps) != 1 || !h.activity.stamps[ids[0]].Equal(staleStamp) {
+		t.Fatalf("stamps = %v, want only the concurrent winner's %v", h.activity.stamps, staleStamp)
+	}
+	if len(h.idleEvents()) != 0 || h.eventCount(securityevent.TypeRefreshReuse) != 0 {
+		t.Fatalf("idle %d, reuse %d; want neither", len(h.idleEvents()), h.eventCount(securityevent.TypeRefreshReuse))
+	}
+	sess, _, err := h.sess.GetByRefreshHash(ctx, hash)
+	if err != nil || !sess.PreviousUsed {
+		t.Fatalf("previous slot after grace = %+v, %v; want consumed", sess, err)
+	}
 }

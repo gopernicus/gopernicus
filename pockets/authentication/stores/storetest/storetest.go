@@ -129,6 +129,11 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 	runServiceAccountStatus(t, newRepos)
 	runAPIKeyFilter(t, newRepos)
 
+	// Session lifetime (SOC 2 S4d part 2): the idle-timeout activity
+	// capability is OPTIONAL on Repositories.Sessions and skips LOUDLY when
+	// absent. See session_activity.go.
+	runSessionActivity(t, newRepos)
+
 	t.Run("Passwords", func(t *testing.T) {
 		t.Run("SetGetUpsert", func(t *testing.T) { testPasswords(t, newRepos(t)) })
 		t.Run("AbsentNotFound", func(t *testing.T) { testPasswordsAbsent(t, newRepos(t)) })

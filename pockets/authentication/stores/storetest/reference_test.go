@@ -84,6 +84,16 @@ func TestReferenceServiceAccountStatusSchema(t *testing.T) {
 	})
 }
 
+// TestReferenceSessionActivitySchema runs the activity probe contract over a
+// reference store marked without migration 0029.
+func TestReferenceSessionActivitySchema(t *testing.T) {
+	RunSessionActivitySchemaProbe(t, func(t *testing.T) session.ActivityRepository {
+		r := newReference()
+		r.activitySchemaMissing = true
+		return refSessions{r}
+	})
+}
+
 // TestReference runs the conformance suite against the in-package reference
 // implementation. This is what lets pockets/authentication self-verify under guard G2
 // (the core cannot import a driver or a host store, so without an in-package
@@ -145,12 +155,26 @@ type reference struct {
 	accountStatus              map[string]serviceaccount.Status
 	accountStatusSchemaMissing bool
 
+	// sessionStamps is sessions.last_rotated_at (migration 0029), by session
+	// ID; an absent entry is NULL. activitySchemaMissing makes ProbeSchema
+	// report migration 0029 absent.
+	sessionStamps         map[string]time.Time
+	activitySchemaMissing bool
+
 	// resetFailAt/resetFailErr inject an all-or-nothing rollback failure into
 	// refPasswordResets.Redeem (design §5.9): resetFailAt=N fails just after the
 	// Nth composition statement, so a test proves that a mid-transaction failure at
 	// EACH statement boundary leaves NO partial state. Zero = no injection.
 	resetFailAt  int
 	resetFailErr error
+}
+
+// deleteSession removes a session row and its activity stamp together; every
+// session delete goes through it so a stamp never outlives its row. The caller
+// holds the write lock.
+func (r *reference) deleteSession(id string) {
+	delete(r.sessions, id)
+	delete(r.sessionStamps, id)
 }
 
 func newReference() *reference {
@@ -178,6 +202,7 @@ func newReference() *reference {
 		totpCreds:        map[string]totp.Credential{},
 		totpCodes:        map[string][]totp.RecoveryCode{},
 		accountStatus:    map[string]serviceaccount.Status{},
+		sessionStamps:    map[string]time.Time{},
 	}
 }
 
@@ -257,7 +282,7 @@ func (r refGlobalSessions) RevokeAllBatch(ctx context.Context, afterUserID strin
 	}
 	for id, s := range r.sessions {
 		if in[s.UserID] {
-			delete(r.sessions, id)
+			r.deleteSession(id)
 			batch.Sessions++
 		}
 	}
@@ -288,7 +313,7 @@ func (r refGlobalSessions) SweepOrphans(ctx context.Context, _ time.Time) (int, 
 	}
 	for id, s := range r.sessions {
 		if inactive(s.UserID) {
-			delete(r.sessions, id)
+			r.deleteSession(id)
 			sessions++
 		}
 	}
@@ -470,7 +495,7 @@ func (r refUserAdmin) SetStatus(_ context.Context, id string, status user.Status
 		if s.UserID != id {
 			continue
 		}
-		delete(r.sessions, sid)
+		r.deleteSession(sid)
 		revoked++
 		for gid, g := range r.grants {
 			if g.SessionID == sid {
@@ -872,7 +897,65 @@ func (r refSessions) Delete(_ context.Context, id string) error {
 	if _, ok := r.sessions[id]; !ok {
 		return sdk.ErrNotFound
 	}
-	delete(r.sessions, id)
+	r.deleteSession(id)
+	return nil
+}
+
+// --- session.ActivityRepository ---
+
+// GetByRefreshHashWithActivity is GetByRefreshHash plus the row's stamp, read
+// under the same lock.
+func (r refSessions) GetByRefreshHashWithActivity(ctx context.Context, hash string) (session.Session, session.RefreshMatch, session.Activity, error) {
+	sess, match, err := r.GetByRefreshHash(ctx, hash)
+	if err != nil {
+		return session.Session{}, 0, session.Activity{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	stamp, ok := r.sessionStamps[sess.ID]
+	return sess, match, session.Activity{LastRotatedAt: stamp, Stamped: ok}, nil
+}
+
+// RotateAt is Rotate's compare-and-swap plus the stamp, in one critical
+// section.
+func (r refSessions) RotateAt(_ context.Context, id, expectedCurrentHash, newHash string, now time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.sessions[id]
+	if !ok || s.RefreshTokenHash != expectedCurrentHash {
+		return session.ErrRotationConflict
+	}
+	s.PreviousRefreshTokenHash = expectedCurrentHash
+	s.PreviousUsed = false
+	s.RotationCount++
+	s.RefreshTokenHash = newHash
+	r.sessions[id] = s
+	r.sessionStamps[id] = now
+	return nil
+}
+
+// DeleteIfIdle deletes the row only while its stamp (NULL matching NULL) and
+// rotation count are the observed ones.
+func (r refSessions) DeleteIfIdle(_ context.Context, id string, observed session.Activity, observedRotationCount int) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.sessions[id]
+	if !ok || s.RotationCount != observedRotationCount {
+		return false, nil
+	}
+	stamp, stamped := r.sessionStamps[id]
+	if stamped != observed.Stamped || (stamped && !stamp.Equal(observed.LastRotatedAt)) {
+		return false, nil
+	}
+	r.deleteSession(id)
+	return true, nil
+}
+
+// ProbeSchema reports migration 0029 absent on a store marked unmigrated.
+func (r refSessions) ProbeSchema(context.Context) error {
+	if r.activitySchemaMissing {
+		return sdk.ErrNotFound
+	}
 	return nil
 }
 
@@ -881,7 +964,7 @@ func (r refSessions) DeleteByUser(_ context.Context, userID string) error {
 	defer r.mu.Unlock()
 	for id, s := range r.sessions {
 		if s.UserID == userID {
-			delete(r.sessions, id)
+			r.deleteSession(id)
 		}
 	}
 	return nil
@@ -1865,7 +1948,7 @@ func (r refPasswordResets) Redeem(_ context.Context, in passwordreset.RedeemInpu
 	// 3. delete every session.
 	for id, s := range r.sessions {
 		if s.UserID == userID {
-			delete(r.sessions, id)
+			r.deleteSession(id)
 		}
 	}
 	if fail() {
@@ -2285,7 +2368,7 @@ func (r refPasswordless) adoptLocked(in passwordless.RedeemInput, ident identifi
 	delete(r.passwords, u.ID)
 	for sid, sv := range r.sessions {
 		if sv.UserID == u.ID {
-			delete(r.sessions, sid)
+			r.deleteSession(sid)
 		}
 	}
 	for gid, g := range r.grants {
@@ -3063,7 +3146,7 @@ func (r refErasure) Erase(ctx context.Context, in user.EraseInput) (user.Erasure
 	for sid, s := range r.sessions {
 		if s.UserID == id {
 			sessions[sid] = true
-			delete(r.sessions, sid)
+			r.deleteSession(sid)
 			c.Sessions++
 		}
 	}

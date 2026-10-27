@@ -230,3 +230,23 @@ var (
 	// set it is never probed.
 	ErrServiceAccountStatusSchemaMissing = authlogic.ErrServiceAccountStatusSchemaMissing
 )
+
+// The S4d part 2 session-lifetime sentinels, re-exported from the logic
+// package so one errors.Is target serves New and the service.
+var (
+	// ErrIdleTimeoutRequires is returned by New when SessionsConfig.IdleTimeout
+	// is set and Repositories.Sessions does not implement
+	// session.ActivityRepository.
+	ErrIdleTimeoutRequires = authlogic.ErrIdleTimeoutRequires
+	// ErrIdleTimeoutSchemaMissing is returned by New when
+	// SessionsConfig.IdleTimeout is set and the store reports migration
+	// 0029_session_activity.sql absent. A host that does not set it is never
+	// probed.
+	ErrIdleTimeoutSchemaMissing = authlogic.ErrIdleTimeoutSchemaMissing
+	// ErrIdleTimeoutBelowAccessTokenTTL is returned by New in every mode for a
+	// negative SessionsConfig.IdleTimeout or one at or below AccessTokenTTL.
+	ErrIdleTimeoutBelowAccessTokenTTL = authlogic.ErrIdleTimeoutBelowAccessTokenTTL
+	// ErrAccessTokenTTLExceedsRefreshTTL is returned by New in every mode when
+	// SessionsConfig.AccessTokenTTL exceeds RefreshTTL (after defaults).
+	ErrAccessTokenTTLExceedsRefreshTTL = authlogic.ErrAccessTokenTTLExceedsRefreshTTL
+)
