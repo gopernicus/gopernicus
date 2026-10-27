@@ -59,16 +59,40 @@ the single-key `cryptids.NewAESGCM`.
 
 ## Revoking every session at once
 
-There is no bundled operation. Today:
+**Rotating `AUTH_JWT_SECRET` does NOT end sessions.** It invalidates every outstanding access
+JWT at once, but the session rows survive: every client refreshes and carries on. To end
+sessions, use `RevokeAllSessions` (authentication v0.31.0, SOC 2 S4d):
 
-1. `DELETE FROM sessions; DELETE FROM authentication_grants;` on the authentication database
-   ends every refresh immediately. Outstanding access JWTs keep working for up to
-   `AccessTokenTTL` (default 15 minutes) on the default liveness tier, and die at once on
-   routes using the `Live()` tier.
-2. If the signing key itself may be compromised, also rotate `AUTH_JWT_SECRET` on every
-   instance: every outstanding access JWT is invalid immediately. On its own this does not end
-   sessions — clients refresh and continue — so pair it with step 1.
-3. Record what you did: the deletion writes no security event; add the operator's own note.
+1. Call `Service.RevokeAllSessions(ctx, actor)`, or `POST /auth/admin/sessions/revoke-all`
+   on a host that sets `AdministrationConfig.GlobalSessionRevocationRoute` (the runbook is in
+   *Operations runbooks*). It bumps every active user's `auth_revision` and deletes their
+   sessions, step-up grants and `password_reset` challenges, so every refresh, `Live()` route,
+   pending magic link and delegated OAuth2 connection is dead at once. It records
+   `all_sessions_revoked_global` (`started`, then `success` or `failure` with the counts).
+2. Outstanding access JWTs keep working for up to `AccessTokenTTL` (default 15 minutes) on
+   safe reads under the default liveness tier and on `Stateless()` routes. If that window is
+   too long, or the signing key itself may be compromised, ALSO rotate `AUTH_JWT_SECRET` on
+   every instance: together they end everything native at once.
+3. What survives: API keys (revoke them, or disable their service accounts) and external IdP
+   sessions (the provider's own; locally, deactivate the user).
+
+The old manual recipe (`DELETE FROM sessions; DELETE FROM authentication_grants;`) is
+superseded: it never bumped `auth_revision` and wrote no security event.
+
+## API-key lifetime
+
+API keys are not under any of the keys above: each is a random secret stored as a digest, and
+it lives until it expires or is revoked. Since authentication v0.31.0,
+`AdministrationConfig.APIKeyMaxTTL` (`AUTH_API_KEY_MAX_TTL`, a Go duration) bounds the life of
+every newly minted key. A zero value is 365 days in production (`DefaultAPIKeyMaxTTL`) and
+unlimited in development. **90 days (`2160h`) is the recommended setting** for a host whose
+clients can rotate keys. Under a bound, a mint without `expires_at` gets now plus the bound
+(the 201 echoes it and `api_key_minted` records `expires_at_defaulted: true`); one beyond the
+bound is 400 `api_key_ttl_exceeded`. Keys minted before the upgrade keep their expiry, or
+none. Nothing warns before a key expires, so schedule rotation ahead of `expires_at` and use
+the never-expiring-keys query in *Operations runbooks* to find what is left.
+`APIKeyUnlimitedTTLAcknowledged` keeps production unlimited, with a
+`posture_waiver=APIKeyUnlimitedTTLAcknowledged` WARN.
 
 ## Secrets pocket (`pockets/secrets`)
 

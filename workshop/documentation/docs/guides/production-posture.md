@@ -214,6 +214,43 @@ the security-events route:** a `UserAdminCheck` that does not switch on `Action`
 the new `read-audit` action. `guard --posture` gains no rule; the constructor refusals are
 the check.
 
+**Added by S4d** (authentication v0.31.0, stores pgx v0.15.0 / Turso v0.14.0, views/goth
+v0.9.0; SOC 2 slice S4d part 1). Every S4d feature is host opt-in, with two exceptions: API
+keys are refused at the MFA gates, and production bounds API-key lifetimes.
+
+| Module | Refuses | Sentinel | Acknowledgement |
+|---|---|---|---|
+| authentication (all modes) | an `IdentityConfig.Registration` (`AUTH_REGISTRATION`) that is not `open`, `invitation_only` or `closed`; a typo never means `open` | `sdk.ErrInvalidInput` | none — fix the value |
+| authentication (all modes) | `invitation_only` without a Granter | `ErrRegistrationModeRequiresInvitations` | none |
+| authentication (all modes) | `closed` beside an external provider with `ProvisionOnFirstVerification` | `ErrRegistrationClosedWithProvisioning` | none |
+| authentication (all modes) | `AdministrationConfig.GlobalSessionRevocationRoute` without `Repositories.GlobalSessions` or a `UserAdminCheck` | `ErrGlobalSessionRevocationRouteRequires` | none |
+| authentication (all modes) | `AdministrationConfig.ServiceAccountStatus` (`AUTH_SERVICE_ACCOUNT_STATUS`) without `Repositories.ServiceAccountStatus`, `ServiceAccounts` and `APIKeys`; set with migration 0027 absent (probe under a 5 s deadline) | `ErrServiceAccountStatusRequires`; `ErrServiceAccountStatusSchemaMissing`, naming `0027_service_account_status.sql` | none — apply 0027 pre-boot, or leave the flag unset (the table is then never read) |
+
+**The boot lines.** Every `New` logs `auth: registration registration=<mode>
+source=config|default` and `auth: api key lifetime api_key_max_ttl=<duration>|unlimited
+source=config|default|acknowledged`, and the MFA posture line gains
+`api_keys=denied|exempt`. `open` logs no WARN: open sign-up is a legitimate posture.
+
+- **`APIKeyMaxTTL`** (`AUTH_API_KEY_MAX_TTL`). A zero value is `DefaultAPIKeyMaxTTL` (365
+  days) in production and unlimited in development; 90 days is recommended. Under a bound
+  a mint without `expires_at` gets now plus the bound and one beyond it is 400
+  `api_key_ttl_exceeded`. `APIKeyUnlimitedTTLAcknowledged` keeps production unlimited and
+  logs `posture_waiver=APIKeyUnlimitedTTLAcknowledged`. **A production host whose clients
+  mint keys without `expires_at` now gets keys that expire** (`api_key_minted` records
+  `expires_at_defaulted: true`), with no warning before they do.
+- **`MFAConfig.APIKeysExempt`.** API keys are refused at `RequireMFA()`, the admins gate and
+  the machine gate (403 `mfa_credential_not_eligible`, no challenge). The hatch restores the
+  pass at every gate and logs `posture_waiver=APIKeysExempt` in production, or a plain WARN
+  in development. The revoke-all route refuses keys regardless.
+- **Registration mode.** `IdentityConfig.Registration` governs every account-creating path:
+  register, passwordless provisioning, OAuth first sign-in and external first verification.
+  `invitation_only` answers "an invitation is pending for this address" at
+  `POST /auth/register`; the per-IP register budget is the mitigation.
+- **WARN, never a refusal:** `MFAConfig.Required: admins` with no native AAL2 source while the
+  machine routes mount logs that native sessions mint API keys at AAL1 (wire `WithPasskeys` or
+  `WithTOTP`, or override `BundledRouteAuth.MachineLifecycle`). `guard --posture` gains no
+  rule.
+
 ## Retention (S3)
 
 Every row class the pockets write has an owner-set lifetime, each disposal is bounded, and the
@@ -445,4 +482,7 @@ the zero value: safe methods skip the session read for first-party tokens.
 | External identity provider revokes or disables the user | mutations re-check per the provider's revocation checker; providers without one are not re-checked | up to the token's `exp` (the framework imposes no maximum accepted lifetime today) | per route |
 | Local deactivation of an external-provider user | immediate on every request (`users.Get` is never cached) | immediate | immediate |
 
-Nothing bundled revokes every session for every user at once; see *Keys and rotation*.
+`RevokeAllSessions` (authentication v0.31.0) ends every session for every user at once: refresh,
+`Live()` routes, step-up grants and pending links are dead immediately, an outstanding access JWT
+lives up to `AccessTokenTTL` on default-tier reads, and API keys and external IdP sessions are
+untouched; see *Keys and rotation* and *Operations runbooks*.
