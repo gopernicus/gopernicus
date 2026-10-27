@@ -796,9 +796,10 @@ resource teardown can remove a protected scope's final subject. There is one
 principal-free command service, with no transactional principal guard or system
 mutator variant. G29 prevents those retired policy seams returning.
 
-Atomic commands own their transaction and reject ambient transactions. Raw writes
-retain ambient joining and savepoint rollback; a failed integrity check rolls
-back its facts and audit without discarding earlier host work. PostgreSQL locks
+Atomic commands own their transaction and reject ambient transactions of the
+store's own `*DB`; another instance's transaction is neither joined nor refused.
+Raw writes retain ambient joining and savepoint rollback; a failed integrity
+check rolls back its facts and audit without discarding earlier host work. PostgreSQL locks
 post-state rows so stale repeatable-read snapshots fail serialization instead
 of counting deleted owners. SQLite write intent and memory's shared mutex give
 the corresponding serialization boundary. Store configuration is immutable.

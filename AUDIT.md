@@ -3756,8 +3756,9 @@ against the host workload before increasing its concurrency.
 SQL raw operations still join host transactions. They use savepoints so failed
 audit writes cannot leave their fact changes committable if a caller handles the
 error. Return errors from the host callback to roll back the entire application
-workflow. Guarded calls still refuse ambient transactions. Hosts keep authority
-over cross-store workflows. Raw writers still bypass guard and guardian policy;
+workflow. Guarded calls in SQL stores still refuse ambient transactions of
+their own `*DB`; memory and Firestore are unaffected. Hosts keep authority over
+cross-store workflows. Raw writers still bypass guard and guardian policy;
 transaction isolation does not turn them into actor-authorized capabilities.
 
 Ambiguous transport/commit failures are not automatically replayed. Retrying
@@ -5774,3 +5775,61 @@ moved down. The `.github/scripts` unit tests and `make guard` passed, and
 `git ls-files | grep -i firestore` is empty. With `make dev-firebase`, the
 `integrations/authentication/firebase` `-tags=emulator` leg passed all 18 tests
 against the live Auth emulator.
+
+## AUDIT-056: Ambient transactions are per datastore instance; `TxFromContext` removed
+
+- **Status:** implemented, unreleased. Planned tags: `integrations/datastores/pgxdb`
+  v0.15.0 and `integrations/datastores/turso` v0.10.0, then
+  `pockets/authorization/stores/pgx` v0.22.0 and `pockets/authorization/stores/turso`
+  v0.21.0, which repin to them (plan `.claude/plans/querierfrom-instance-scope.md`,
+  ratified 2026-10-27).
+- **Modules:** `integrations/datastores/pgxdb`, `integrations/datastores/turso`,
+  `pockets/authorization/stores/pgx`, `pockets/authorization/stores/turso`;
+  `sdk/capabilities/transaction` (doc comment only, no tag).
+- **Old behavior:** `(*DB).Transact` and `TransactSnapshot` stored the transaction
+  under one context key shared by every `*DB`. The package-level
+  `pgxdb.TxFromContext` / `tursodb.TxFromContext` and `(*DB).QuerierFrom` returned
+  whatever transaction was in the context, whichever `*DB` opened it, and
+  `Transact` refused to nest if any transaction was present. In a process with two
+  databases (for example an auth database and a business database), a store over
+  one database called inside the other's `Transact` ran its SQL on the other
+  database's transaction, and a `Transact` on one inside the other failed with
+  `ErrNestedTransact`.
+- **New behavior:** the context key carries the owning `*DB` (the pointer one
+  `Open` returned; stores built with `WithSchema` over one `*DB` share it).
+  `(*DB).TxFrom(ctx)` and `QuerierFrom` see only their own instance's
+  transaction; another instance's transaction is invisible, so a store runs on its
+  own pool. `Transact`/`TransactSnapshot` return `ErrNestedTransact` only when the
+  same instance already holds a transaction; a transaction on a different
+  instance may open inside it, and each commits or rolls back on its own. The
+  authorization stores' `Apply`/`Fence`/`Expire` (`ErrMutationInsideTransaction`),
+  `CacheableContext` and snapshot reads judge only their own instance's
+  transaction. Two datastores never share a transaction.
+
+**Migration:**
+- Replace `pgxdb.TxFromContext(ctx)` / `tursodb.TxFromContext(ctx)` with
+  `db.TxFrom(ctx)` on the `*DB` whose transaction you mean. The package function
+  is removed; there is no shim.
+- Single-database hosts: no behavior change.
+- Two-database hosts: an authorization or authentication call made inside a
+  business `Transact` now runs on its own database. It is not atomic with the
+  business write, so order the two writes or use an outbox. A grant applied inside
+  a business transaction that later rolls back stays applied.
+- Two `Open` calls over the SAME database are two instances. One nested inside
+  the other's transaction can wait on the outer's locks: PostgreSQL bounds that
+  wait with `DB_LOCK_TIMEOUT`, and a local turso file fails `SQLITE_BUSY` after
+  `BusyTimeout`. Hold one `*DB` per database.
+- Upgrade the connectors and the authorization stores together: authorization
+  pgx ≤ v0.21.0 / turso ≤ v0.20.0 do not compile against pgxdb v0.15.0 /
+  turso v0.10.0 (`undefined: pgxdb.TxFromContext`).
+
+**Verification:**
+- Hermetic two-instance key tests on both connectors.
+- Live pgx two-instance tests over three nesting shapes (plain in plain, plain in
+  snapshot, snapshot in plain) with isolation checks, plus a same-database
+  lock-timeout pin (SQLSTATE 55P03).
+- turso two-file tests and a same-file `SQLITE_BUSY` pin.
+- Per-store foreign-instance tests covering all sixteen authorization store
+  sites: they fail on main 25eadbd0 and pass with the change.
+- `make guard && make check`, the pgx live suites (fresh PG17, bare and
+  schema-scoped) and the local-file turso `-tags=integration` legs.

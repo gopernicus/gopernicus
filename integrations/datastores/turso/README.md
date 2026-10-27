@@ -263,6 +263,20 @@ Callback error causes and panic values survive cleanup. SQL helpers do not
 retry callbacks; portable consumers must allow for connectors that do.
 Cancellation racing a commit cannot undo a commit already accepted by a server.
 
+Ambient transactions are per instance. The identity of an instance is the
+`*DB` one `Open` call returned; wrappers hold or embed that pointer and never
+copy a `DB` by value. `d.TxFrom(ctx)` and `d.QuerierFrom(ctx)` answer only for
+`d`: another instance's transaction in the context is invisible, so a store
+over `d` runs on `d`'s pool beside it. `Transact` refuses nesting on the same
+instance with `ErrNestedTransact` (match it with `errors.Is`, not the message);
+a different instance's transaction nests independently and commits or rolls
+back on its own. Two databases never share a transaction, and the connector
+provides no cross-database atomicity. Two `Open` calls on the same database are
+two instances: on a local file the outer `BEGIN IMMEDIATE` holds the write lock,
+so every `Transact` and every write of a second instance over the same file
+waits `BusyTimeout` and fails `SQLITE_BUSY`; plain reads still succeed under WAL.
+Hold one `*DB` per database when you want one transaction.
+
 A failed manual COMMIT is rolled back before its connection is released. Failed
 rollback or uncertain BEGIN disposes of the physical connection. Empty offset
 pages now serialize `items: []`, matching cursor pages.

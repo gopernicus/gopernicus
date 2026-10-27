@@ -37,7 +37,7 @@ func ExportTupleCacheMigrations(dst string) error {
 func WithTupleCache() Option { return func(c *config) { c.tupleCache = true } }
 
 func prepareTupleSource(ctx context.Context, db *tursodb.DB, cfg *config) (*tupleSource, error) {
-	if _, ambient := tursodb.TxFromContext(ctx); ambient {
+	if _, ambient := db.TxFrom(ctx); ambient {
 		return nil, fmt.Errorf("authorization tuple cache: ambient construction: %w", sdk.ErrInvalidInput)
 	}
 	tx, err := db.BeginRead(ctx)

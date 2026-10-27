@@ -373,7 +373,7 @@ func (s *tupleStore) ReadTupleSnapshot(ctx context.Context, fn func(context.Cont
 	reader := *s
 	var owned *tursodb.Tx
 	if reader.readQuerier == nil {
-		if ambient, ok := tursodb.TxFromContext(ctx); ok {
+		if ambient, ok := s.db.TxFrom(ctx); ok {
 			// The connector begins ambient write transactions with BEGIN IMMEDIATE.
 			reader.readQuerier = ambient
 		} else {

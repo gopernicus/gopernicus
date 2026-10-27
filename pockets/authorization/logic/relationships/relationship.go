@@ -154,7 +154,7 @@ type ResourceRelationshipFilter struct {
 //
 // Ambient transactions. When ctx carries the connector's Transact-owned
 // transaction (sdk/capabilities/transaction.Transactor — the connector stashes the
-// transaction in the context and its own QuerierFrom/TxFromContext retrieve
+// transaction in the context and its own QuerierFrom/TxFrom retrieve
 // it), EVERY method of the store — reads and writes alike — runs ON that
 // transaction and never opens, commits, or rolls back one of its own; the
 // enclosing Transact decides the outcome from its callback's return value. A

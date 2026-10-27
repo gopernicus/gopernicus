@@ -15,7 +15,7 @@ func TestTransactSnapshotCoherentReadsAndPendingWrites(t *testing.T) {
 	defer cancel()
 	var escaped *Tx
 	err := db.TransactSnapshot(ctx, func(ctx context.Context) error {
-		tx, ok := TxFromContext(ctx)
+		tx, ok := db.TxFrom(ctx)
 		if !ok || db.QuerierFrom(ctx) != Querier(tx) {
 			t.Fatal("snapshot transaction did not bind its ambient querier")
 		}
@@ -61,7 +61,7 @@ func TestSnapshotIsolationActualTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := db.Transact(ctx, func(ctx context.Context) error {
-		tx, _ := TxFromContext(ctx)
+		tx, _ := db.TxFrom(ctx)
 		var actual string
 		if err := tx.QueryRow(ctx, "SHOW transaction_isolation").Scan(&actual); err != nil {
 			return err

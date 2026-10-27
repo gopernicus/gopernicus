@@ -68,7 +68,7 @@ func TestSnapshotIsolation(t *testing.T) {
 
 func TestTransactSnapshotNestingRejectedBeforeBegin(t *testing.T) {
 	db := &DB{}
-	ctx := context.WithValue(t.Context(), txCtxKey{}, &Tx{})
+	ctx := context.WithValue(t.Context(), txKey{db}, &Tx{})
 	for _, transact := range []func(context.Context, func(context.Context) error) error{db.Transact, db.TransactSnapshot} {
 		err := transact(ctx, func(context.Context) error {
 			t.Fatal("nested transaction invoked callback")

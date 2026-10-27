@@ -11,11 +11,11 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// TestTxFromContext_Absent needs no database: a context outside any Transact
+// TestTxFrom_Absent needs no database: a context outside any Transact
 // carries no transaction.
-func TestTxFromContext_Absent(t *testing.T) {
-	if tx, ok := TxFromContext(context.Background()); ok || tx != nil {
-		t.Fatalf("TxFromContext on a bare context = (%v, %v), want (nil, false)", tx, ok)
+func TestTxFrom_Absent(t *testing.T) {
+	if tx, ok := (&DB{}).TxFrom(context.Background()); ok || tx != nil {
+		t.Fatalf("TxFrom on a bare context = (%v, %v), want (nil, false)", tx, ok)
 	}
 }
 
@@ -62,9 +62,9 @@ func TestTransact_CommitOnNil(t *testing.T) {
 	ctx := context.Background()
 
 	err := db.Transact(ctx, func(ctx context.Context) error {
-		tx, ok := TxFromContext(ctx)
+		tx, ok := db.TxFrom(ctx)
 		if !ok {
-			t.Fatal("TxFromContext inside Transact returned false")
+			t.Fatal("db.TxFrom inside Transact returned false")
 		}
 		_, err := tx.Exec(ctx, "INSERT INTO "+probeTable(t)+" (id) VALUES ('committed')")
 		return err

@@ -15,8 +15,9 @@ type SemanticValidator func(Command) error
 // every definite outcome until an OperationExpirer expires it; a matching replay
 // writes nothing and skips validation and planning. Mismatched payloads return
 // ErrOperationMismatch. Empty IDs retain state-based behavior. Attribution comes from
-// audit.Source in context. Commands refuse an ambient transaction. Only definite
-// aborted contention may retry, never ambiguous commit failures.
+// audit.Source in context. Commands refuse an ambient transaction of the store's
+// own *DB; another instance's transaction is neither joined nor refused. Only
+// definite aborted contention may retry, never ambiguous commit failures.
 type MutationRepository interface {
 	IntegrityPolicy() IntegrityPolicy
 	Apply(context.Context, Command, SemanticValidator) (*Result, error)
@@ -29,9 +30,9 @@ type OperationLedger interface {
 	// Fence records operationID as fenced under the write lock, so no command can
 	// ever commit under it; an existing record is returned as is. An expired
 	// record is absent, so Fence records the ID as fenced. It writes no tuple or
-	// audit row and needs no audit.Source. It refuses an ambient transaction
-	// (ErrMutationInsideTransaction). Idempotent: safe to retry after an
-	// unknown-outcome commit.
+	// audit row and needs no audit.Source. It refuses an ambient transaction of
+	// the store's own *DB (ErrMutationInsideTransaction). Idempotent: safe to
+	// retry after an unknown-outcome commit.
 	Fence(ctx context.Context, operationID string) (*FenceResult, error)
 	// Recorded reads the outcome recorded under operationID without the write
 	// lock. Unlike Fence it may run inside an ambient transaction, whose view it
@@ -48,9 +49,10 @@ type OperationExpirer interface {
 	// not_found and whose commit time is at or before before, oldest first
 	// (commit time, then operation ID), and returns how many it deleted. It never
 	// deletes a fenced record. It takes no write lock, refuses an ambient
-	// transaction (ErrMutationInsideTransaction) and refuses limit <= 0
-	// (sdk.ErrInvalidInput). An expired operation ID reads as never recorded: a
-	// retried command under it applies again, and Fence records it as fenced.
+	// transaction of the store's own *DB (ErrMutationInsideTransaction) and
+	// refuses limit <= 0 (sdk.ErrInvalidInput). An expired operation ID reads as
+	// never recorded: a retried command under it applies again, and Fence
+	// records it as fenced.
 	Expire(ctx context.Context, before time.Time, limit int) (int, error)
 }
 

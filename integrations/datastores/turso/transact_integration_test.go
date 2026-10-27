@@ -55,9 +55,9 @@ func TestTransact_CommitOnNil(t *testing.T) {
 	ctx := context.Background()
 
 	err := db.Transact(ctx, func(ctx context.Context) error {
-		tx, ok := TxFromContext(ctx)
+		tx, ok := db.TxFrom(ctx)
 		if !ok {
-			t.Fatal("TxFromContext inside Transact returned false")
+			t.Fatal("db.TxFrom inside Transact returned false")
 		}
 		_, err := tx.Exec(ctx, "INSERT INTO "+table+" (id) VALUES ('committed')")
 		return err

@@ -201,7 +201,9 @@ COMMITTED with `tuples.ErrSnapshotIsolation` before evaluation. SQLite's ambient
 BEGIN IMMEDIATE is suitable. Both preserve pending writes and leave commit or
 rollback to the host. No detached transaction or silent isolation upgrade occurs.
 Raw writes continue to join ordinary ambient transactions; atomic mutation commands
-reject ambient transactions because they own their serialized write boundary.
+reject ambient transactions of the store's own `*DB` because they own their
+serialized write boundary. Another `*DB`'s transaction is neither joined nor
+refused: two databases never share a transaction.
 
 ## Production posture
 
@@ -530,7 +532,7 @@ store exposes `OperationExpiry()`) and call
 deletes at most `limit` `applied`, `no_change` and `not_found` records committed
 at or before now minus the retention, oldest first, and returns the count. It
 takes no write lock, so it runs beside `Apply`; it refuses an ambient transaction
-(`ErrMutationInsideTransaction`) and `limit <= 0`. Without the slot it returns
+of the store's own `*DB` (`ErrMutationInsideTransaction`) and `limit <= 0`. Without the slot it returns
 `ErrOperationExpiryNotConfigured`, and `OperationExpiry` without `Mutations` fails
 construction. `WithOperationRetention(d)` sets the retention: 180 days by default,
 refused below 7 days (`ErrOperationRetentionTooShort`) and without
@@ -564,7 +566,7 @@ the `OperationID` rules above.
 `Apply`, so the two are totally ordered: either the fence lands first and no
 command can ever commit under that ID, or a command already committed and the
 fence reports its outcome. It writes no tuple or audit row, needs no
-`audit.WithSource`, refuses an ambient transaction
+`audit.WithSource`, refuses an ambient transaction of the store's own `*DB`
 (`ErrMutationInsideTransaction`), and is idempotent — retry it after an
 unknown-outcome failure.
 
@@ -804,8 +806,8 @@ Unknown commit outcomes are never permission to blindly repeat an external effec
 
 Opening an ambient transaction around middleware does not make admission and a
 later write one permission decision. Atomic mutation commands own their write
-boundary and reject ambient transactions. Raw writers join supported ambient
-transactions and still enforce configured integrity. See
+boundary and reject ambient transactions of the store's own `*DB`. Raw writers
+join supported ambient transactions and still enforce configured integrity. See
 [Writes, integrity and audit](#writes-integrity-and-audit).
 
 ### Host denial responses

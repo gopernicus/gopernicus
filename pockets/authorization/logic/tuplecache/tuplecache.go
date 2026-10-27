@@ -60,9 +60,10 @@ type Snapshot struct {
 type CheckReads = tuples.Reader
 
 // Source owns authoritative facts and atomic mutation capture. Delivery Snapshot
-// and Acknowledge reject ambient transactions. ReadSnapshot borrows a suitable
-// ambient tuple snapshot or rejects insufficient isolation; it never detaches
-// reads from pending writes. Guarded mutations retain their serialized readers.
+// and Acknowledge reject ambient transactions of the store's own *DB.
+// ReadSnapshot borrows a suitable ambient tuple snapshot or rejects insufficient
+// isolation; it never detaches reads from pending writes. Guarded mutations
+// retain their serialized readers.
 type Source interface {
 	Binding() string
 	CacheableContext(context.Context) bool
