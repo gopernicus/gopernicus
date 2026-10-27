@@ -37,7 +37,7 @@ type sessionActivityRow struct {
 }
 
 // SRE9: every ActivityRepository method runs on s.db, the pool, never on a
-// transaction the context carries (pgxdb.QuerierFrom). A refresh reached
+// transaction the context carries (s.db.QuerierFrom). A refresh reached
 // inside a host Transact under forced RLS would otherwise CAS-miss on a
 // connection that cannot see the row and burn the session as reuse.
 

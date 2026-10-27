@@ -2,10 +2,10 @@
 
 ## Transaction-local settings for row-level security (pgxdb v0.16.0)
 
-One annotated tag (not signed) on one module: `integrations/datastores/pgxdb/v0.16.0`,
-**owner-pending**. The owner merges this PR, dispatches `live-stores` on `main`, then cuts and
-pushes the tag at the squash-merge commit, polls the proxy and cold-verifies from a scratch
-consumer. No other module is tagged, no repins are required, and there is no migration. Design
+One annotated tag (not signed) on one module: `integrations/datastores/pgxdb/v0.16.0`, cut at the
+squash-merge commit `8c66ea16` (#237) after a green `live-stores` dispatch on `main` (run
+40598995641), confirmed on origin, polled on the proxy and cold-verified from a scratch consumer
+(published 2026-10-27). No other module is tagged, no repins are required, and there is no migration. Design
 and rulings: `plans/pgxdb-local-settings.md` (ratified 2026-10-27). Under the owner's 2026-10-23
 process ruling this section is the whole record: there is no handoff file and no manifest. The
 operator surface is the docs site's new *Row-level security with pgxdb* guide, linked from
@@ -83,8 +83,9 @@ with why the helper binds through `set_config` rather than `SET LOCAL`.
 - **Pre-tag consumer build:** a `GOWORK=off` scratch consumer calling `TransactWithSettings` and
   `Tx.Setting`, beside authorization pgx v0.22.0, authentication pgx v0.16.0 and jobs pgx v0.7.0,
   with pgxdb replaced onto this tree, tidies, builds and vets (sdk v0.20.0 selected).
-  **Owner-pending:** the same set from the v0.16.0 tag, from an empty module cache over the
-  proxy.
+  **From the tag:** the same set from the v0.16.0 tag (`GOWORK=off`, an empty module cache,
+  `proxy.golang.org` + `sum.golang.org`, a `go 1.26.10` consumer calling both methods) selects
+  pgxdb v0.16.0 and sdk v0.20.0; `go mod verify`, `go build` and `go vet` pass.
 
 **Sequencing.** This record owns pgxdb **v0.16.0**. The database-default-ids plan takes
 **v0.17.0** for its PG18 floor, and its PR-1 branches only after the v0.16.0 tag exists.
