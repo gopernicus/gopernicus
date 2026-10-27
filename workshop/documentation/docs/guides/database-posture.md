@@ -73,7 +73,7 @@ apply unless it runs in the rail's schema as a member of the table's owner.
 
 Ownership is broader than the table's owner. A runtime role counts as an owner when it is a
 member — `NOINHERIT` included — of the role that owns the table, of the role that owns its
-schema (it can drop the table; on PostgreSQL 15+ `public` belongs to `pg_database_owner`, which
+schema (it can drop the table; `public` belongs to `pg_database_owner`, which
 managed providers' default roles reach — hence `ALTER SCHEMA public OWNER TO migrator`), or of
 the role that owns a trigger function (it can replace the body). The immutability triggers exempt
 the owning role by design, so the migrator can backfill and a migrator-owned `SECURITY DEFINER`
@@ -225,7 +225,7 @@ Every S2 pgx store migration begins with `SET LOCAL lock_timeout = '5s'`. The pe
 in one transaction, and `ADD COLUMN` and `CREATE TRIGGER` queue behind a running `pg_dump`; with
 the timeout a blocked file aborts the whole stream — nothing is applied — and you re-run the
 runner, instead of holding locks that stall login inserts for the runner's whole budget. The S2
-pgx files require PostgreSQL 14 or later.
+pgx files require PostgreSQL 18 or later, the pgxdb migration floor.
 
 **Apply the S3 files in their own runner invocation**, before deploying the binaries built
 against them: authentication `0023_retention.sql` (required; its `users.erased_at` `ADD COLUMN`

@@ -1,8 +1,11 @@
 package sdk
 
 import (
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestDefaultIDAlphabet_UniqueAndSized(t *testing.T) {
@@ -134,5 +137,161 @@ func TestDefaultIDDistributionCoverage(t *testing.T) {
 		if !seen[DefaultIDAlphabet[i]] {
 			t.Errorf("alphabet byte %q never appeared across 10k IDs", DefaultIDAlphabet[i])
 		}
+	}
+}
+
+func TestUUIDv7_CanonicalVersionAndVariant(t *testing.T) {
+	gen := UUIDv7()
+	for i := 0; i < 1_000; i++ {
+		id, err := gen()
+		if err != nil {
+			t.Fatalf("UUIDv7: %v", err)
+		}
+		if len(id) != 36 {
+			t.Fatalf("len(%q) = %d, want 36", id, len(id))
+		}
+		for j := 0; j < len(id); j++ {
+			c := id[j]
+			switch j {
+			case 8, 13, 18, 23:
+				if c != '-' {
+					t.Fatalf("%q: byte %d = %q, want '-'", id, j, c)
+				}
+			default:
+				if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+					t.Fatalf("%q: byte %d = %q, want lowercase hex", id, j, c)
+				}
+			}
+		}
+		if id[14] != '7' {
+			t.Fatalf("%q: version nibble = %q, want '7'", id, id[14])
+		}
+		if !strings.ContainsRune("89ab", rune(id[19])) {
+			t.Fatalf("%q: variant nibble = %q, want binary 10xx", id, id[19])
+		}
+	}
+}
+
+func TestUUIDv7_TimestampIsUnixMillis(t *testing.T) {
+	before := time.Now().UnixMilli()
+	id, _ := UUIDv7()()
+	after := time.Now().UnixMilli()
+	ms, err := strconv.ParseInt(strings.ReplaceAll(id[:13], "-", ""), 16, 64)
+	if err != nil {
+		t.Fatalf("parse timestamp of %q: %v", id, err)
+	}
+	if ms < before || ms > after+1 {
+		t.Fatalf("timestamp %d outside [%d, %d]", ms, before, after+1)
+	}
+}
+
+func TestUUIDv7_Unique(t *testing.T) {
+	gen := UUIDv7()
+	seen := make(map[string]struct{}, 100_000)
+	for i := 0; i < 100_000; i++ {
+		id, _ := gen()
+		if _, dup := seen[id]; dup {
+			t.Fatalf("duplicate id %q after %d mints", id, i)
+		}
+		seen[id] = struct{}{}
+	}
+}
+
+func TestUUIDv7_MonotonicWithinGenerator(t *testing.T) {
+	gen := UUIDv7()
+	prev, _ := gen()
+	for i := 0; i < 10_000; i++ {
+		id, _ := gen()
+		if id <= prev {
+			t.Fatalf("mint %d: %q does not sort after %q", i, id, prev)
+		}
+		prev = id
+	}
+}
+
+func TestUUIDv7_EachGeneratorMonotonic(t *testing.T) {
+	a, b := UUIDv7(), UUIDv7()
+	prevA, _ := a()
+	prevB, _ := b()
+	for i := 0; i < 5_000; i++ {
+		idA, _ := a()
+		idB, _ := b()
+		if idA <= prevA {
+			t.Fatalf("generator a, mint %d: %q does not sort after %q", i, idA, prevA)
+		}
+		if idB <= prevB {
+			t.Fatalf("generator b, mint %d: %q does not sort after %q", i, idB, prevB)
+		}
+		prevA, prevB = idA, idB
+	}
+}
+
+func TestUUIDv7_ConcurrentMintsUniqueAndOrderedPerGoroutine(t *testing.T) {
+	gen := UUIDv7()
+	const workers, per = 8, 2_000
+	results := make([][]string, workers)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < per; i++ {
+				id, _ := gen()
+				results[w] = append(results[w], id)
+			}
+		}(w)
+	}
+	wg.Wait()
+	seen := make(map[string]struct{}, workers*per)
+	for w, ids := range results {
+		for i, id := range ids {
+			if _, dup := seen[id]; dup {
+				t.Fatalf("duplicate id %q", id)
+			}
+			seen[id] = struct{}{}
+			if i > 0 && id <= ids[i-1] {
+				t.Fatalf("worker %d mint %d: %q does not sort after %q", w, i, id, ids[i-1])
+			}
+		}
+	}
+}
+
+func TestIDGeneratorOr_ConfiguredWins(t *testing.T) {
+	g := NewIDGenerator(func() (string, error) { return "configured", nil }).Or(func() (string, error) {
+		return "fallback", nil
+	})
+	if id, err := g.Generate(); err != nil || id != "configured" {
+		t.Fatalf("Or on a configured generator = %q, %v; want configured", id, err)
+	}
+}
+
+func TestIDGeneratorOr_ZeroValueTakesFallback(t *testing.T) {
+	g := IDGenerator{}.Or(func() (string, error) { return "fallback", nil })
+	if id, err := g.Generate(); err != nil || id != "fallback" {
+		t.Fatalf("Or on the zero value = %q, %v; want fallback", id, err)
+	}
+	id, err := IDGenerator{}.Or(UUIDv7()).Generate()
+	if err != nil || len(id) != 36 || id[14] != '7' {
+		t.Fatalf("Or(UUIDv7()) on the zero value = %q, %v; want a UUIDv7", id, err)
+	}
+}
+
+func TestIDGeneratorOr_ForcedNanoIDSurvivesClassDefault(t *testing.T) {
+	nano, err := NanoID("", 0)
+	if err != nil {
+		t.Fatalf("NanoID: %v", err)
+	}
+	id, err := NewIDGenerator(nano).Or(UUIDv7()).Generate()
+	if err != nil || len(id) != DefaultIDLength {
+		t.Fatalf("forced NanoID through Or = %q, %v; want a %d-char NanoID", id, err, DefaultIDLength)
+	}
+}
+
+func TestIDGenerator_ZeroValueStillNanoIDAfterOr(t *testing.T) {
+	var g IDGenerator
+	_ = g.Or(UUIDv7())
+	id, err := g.Generate()
+	if err != nil || len(id) != DefaultIDLength {
+		t.Fatalf("zero value after Or = %q, %v; want a NanoID", id, err)
 	}
 }

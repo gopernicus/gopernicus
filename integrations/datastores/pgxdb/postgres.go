@@ -39,6 +39,7 @@ import (
 const (
 	uniqueViolation           = "23505" // unique_violation
 	foreignKeyViolation       = "23503" // foreign_key_violation
+	restrictViolation         = "23001" // restrict_violation: ON DELETE/UPDATE RESTRICT on PostgreSQL 18
 	checkViolation            = "23514" // check_violation
 	notNullViolation          = "23502" // not_null_violation
 	invalidTextRepresentation = "22P02" // invalid_text_representation
@@ -160,8 +161,10 @@ type Config struct {
 	Retry RetryPolicy
 
 	// RuntimeMode is the host's deployment posture. The zero value is
-	// mode-blind: Open behaves exactly as it did before the field existed. A
-	// non-zero mode must be environment.ModeDevelopment or ModeProduction.
+	// mode-blind: Open behaves exactly as it did before the field existed.
+	// Posture refusals are mode-gated; the version advisory (one WARN when the
+	// server is below MinServerVersionNum) logs in every mode. A non-zero mode
+	// must be environment.ModeDevelopment or ModeProduction.
 	// Production refuses, before any connection attempt, a connection target
 	// whose TLS does not verify the server (ErrTLSRequired) and query
 	// logging (ErrQueryLoggingRefused); development logs one WARN per such
@@ -483,7 +486,9 @@ func (cfg Config) poolConfig(dsn string) (*pgxpool.Config, error) {
 // A non-zero RuntimeMode is validated and enforced before the pool exists, so a
 // refused configuration never attempts a connection. A DSN or Password that
 // contains sdk.Redacted is refused first, in every mode, with
-// sdk.ErrRedactedSecret.
+// sdk.ErrRedactedSecret. After the connectivity check Open probes the server
+// version and, below MinServerVersionNum, logs one WARN through Logger; the
+// probe never fails Open (RunMigrations is where the floor refuses).
 func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -532,6 +537,7 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 			pool.Close()
 			return nil, fmt.Errorf("verifying database: %w", err)
 		}
+		adviseServerVersion(ctx, db, cfg.Logger, dsn, poolConfig.ConnConfig.Password)
 		return db, nil
 	}
 
@@ -539,6 +545,7 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 		pool.Close()
 		return nil, fmt.Errorf("pinging database: %w", err)
 	}
+	adviseServerVersion(ctx, db, cfg.Logger, dsn, poolConfig.ConnConfig.Password)
 	return db, nil
 }
 
@@ -569,7 +576,7 @@ func MapError(err error) error {
 		switch pgErr.Code {
 		case uniqueViolation:
 			return sdk.ErrAlreadyExists
-		case foreignKeyViolation:
+		case foreignKeyViolation, restrictViolation:
 			return sdk.ErrInvalidReference
 		case checkViolation, notNullViolation:
 			return sdk.ErrInvalidInput

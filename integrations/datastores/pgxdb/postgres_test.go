@@ -40,6 +40,7 @@ func TestMapError(t *testing.T) {
 		{"nil", nil, nil},
 		{"unique_violation", &pgconn.PgError{Code: "23505"}, sdk.ErrAlreadyExists},
 		{"foreign_key_violation", &pgconn.PgError{Code: "23503"}, sdk.ErrInvalidReference},
+		{"restrict_violation", &pgconn.PgError{Code: "23001"}, sdk.ErrInvalidReference},
 		{"check_violation", &pgconn.PgError{Code: "23514"}, sdk.ErrInvalidInput},
 		{"not_null_violation", &pgconn.PgError{Code: "23502"}, sdk.ErrInvalidInput},
 		{"invalid_text_representation", &pgconn.PgError{Code: "22P02"}, sdk.ErrInvalidInput},

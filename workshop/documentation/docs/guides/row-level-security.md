@@ -128,7 +128,7 @@ See *Production database posture*, "Two roles", for the migrator/runtime split a
 ## Views and functions
 
 - A view runs with its owner's privileges by default, so RLS sees the owner. Create views over
-  tenant-owned tables `WITH (security_invoker = true)` (PostgreSQL 15+).
+  tenant-owned tables `WITH (security_invoker = true)`.
 - A `SECURITY DEFINER` function runs as its owner. If that owner is exempt from the table's
   policies, the function is too. Prefer `SECURITY INVOKER` for anything reading tenant data.
 

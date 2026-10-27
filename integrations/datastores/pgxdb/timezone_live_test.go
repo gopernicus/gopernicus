@@ -37,7 +37,7 @@ type timestampsRow struct {
 // It skips loudly when POSTGRES_TEST_DSN is unset — a silent green here would be
 // a false green. Spin a throwaway database with:
 //
-//	docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+//	docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:18
 //	POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' go test -run TestLive_ ./...
 func TestLive_ScanUTC(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")

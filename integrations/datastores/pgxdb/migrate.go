@@ -58,7 +58,9 @@ func WithSchema(s Schema) MigrateOption {
 // RunMigrations applies the host-owned SQL migration stream at migrationsDir.
 // Migrations are applied in filename order, in one transaction, and recorded in
 // schema_migrations with a checksum guard. Files prefixed with "_" are skipped.
-// A nil option returns an error wrapping sdk.ErrInvalidInput.
+// A nil option returns an error wrapping sdk.ErrInvalidInput. A server below
+// MinServerVersionNum, read on the migrating connection, is refused with an
+// error wrapping ErrServerVersion before the schema or the ledger is touched.
 //
 // One stream per schema. Without WithSchema the stream is the database's
 // default-schema stream: a host exports every pocket's migrations into a
@@ -104,6 +106,13 @@ func RunMigrations(ctx context.Context, db *DB, migrationsFS fs.FS, migrationsDi
 		slog.String("dir", migrationsDir), slog.String("schema", cfg.schema.String()))
 
 	err := db.InTx(ctx, func(tx *Tx) error {
+		num, version, err := readServerVersion(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("read server version: %w", MapError(err))
+		}
+		if err := checkServerVersion(num, version); err != nil {
+			return err
+		}
 		if err := prepareSchema(ctx, tx, cfg.schema); err != nil {
 			return err
 		}

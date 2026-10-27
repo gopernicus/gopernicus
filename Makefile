@@ -85,7 +85,7 @@ test:
 # loudly without TURSO_DATABASE_URL/TURSO_AUTH_TOKEN.
 #
 # Spin a local postgres, then run:
-#   docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+#   docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:18
 #   POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' \
 #     make test-stores
 # The Firebase Auth emulator (integrations/authentication/firebase -tags=emulator)
@@ -109,7 +109,7 @@ endef
 test-stores:
 	@if [ -z "$$POSTGRES_TEST_DSN" ]; then \
 		echo "ERROR: POSTGRES_TEST_DSN not set — postgres store conformance cannot run (make check stays hermetic; this target expects it)"; \
-		echo "  docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17"; \
+		echo "  docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:18"; \
 		echo "  POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' make test-stores"; \
 		exit 1; \
 	fi

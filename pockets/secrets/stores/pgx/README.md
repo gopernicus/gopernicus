@@ -3,8 +3,8 @@
 The secrets pocket's **PostgreSQL** store. Its own module so a host on another
 datastore never pulls pgx into its graph. It owns the SQL and the canonical
 migrations; the host applies them pre-boot through its own runner and the
-store never migrates. The migrations require **PostgreSQL 14 or later**
-(`CREATE OR REPLACE TRIGGER`).
+store never migrates. The migrations require **PostgreSQL 18 or later**
+(the pgxdb migration floor; `RunMigrations` refuses an older server).
 
 ## Surface
 
@@ -89,7 +89,7 @@ trigger-body pin run, and the live suites skip loudly without
 the DSN's user needs `CREATEROLE`; `make test-stores` runs them.
 
 ```sh
-docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:18
 POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' go test -count=1 ./...
 ```
 

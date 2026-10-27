@@ -264,7 +264,7 @@ dialect with identical filename sets: `0001_job_queue`, `0002_job_schedules`,
 retention index `0005_job_queue_terminal_purge` ([Retention](#retention)). A host may instead use `pockets/jobs/stores/memory`
 (public, in-core — `examples/jobs-minimal` is the zero-infra proof) or
 implement the two ports itself. Postgres conformance:
-`docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17`
+`docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:18`
 + `POSTGRES_TEST_DSN=... go test ./...`; turso: `-tags=integration` +
 `TURSO_*`.
 

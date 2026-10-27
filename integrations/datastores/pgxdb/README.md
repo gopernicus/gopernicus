@@ -99,6 +99,30 @@ ALTER ROLE app_runtime SET statement_timeout = '30s';
 ALTER ROLE app_runtime SET lock_timeout = '5s';
 ```
 
+## PostgreSQL 18 floor — `MinServerVersionNum`
+
+pgxdb requires **PostgreSQL 18 or later** (`MinServerVersionNum = 180000`): the
+canonical pgx migrations mint their backstop ids with the built-in `uuidv7()`,
+which first shipped in 18.
+
+- **`RunMigrations` refuses** an older server. It reads `server_version_num` and
+  `server_version` on the migrating connection, inside the migration transaction
+  and before the schema or the ledger is touched, and returns an error wrapping
+  `ErrServerVersion` that names what the server reports and the way out: upgrade
+  the server, or hold pgxdb at v0.16.x and the pgx stores at their previous tags.
+  The text carries no host, user, database or DSN.
+- **`Open` only warns**, in every `RuntimeMode` including the zero value. After the
+  connectivity check (on both the single-ping and the `Retry` path) it logs one
+  `WARN` through `Config.Logger` (or `slog.Default()`), msg
+  `pgxdb: server below the PostgreSQL 18 floor; RunMigrations will refuse`, with
+  the stable attrs `server_version_num`, `required=180000` and `server_version` —
+  alert on the attrs, not the text. A probe that fails (a statement timeout, a
+  PostgreSQL-compatible backend) never fails `Open`: it logs one `WARN` carrying
+  the error, with the connection string and password masked.
+
+A runtime that never migrates keeps working on an older server; nothing in the
+connector's own runtime SQL needs 18.
+
 ## Production posture — `RuntimeMode`
 
 `Config.RuntimeMode` is the host's `environment.Mode`. The composition root reads
@@ -251,7 +275,7 @@ Managed providers — the two-role recipe is
   `neon_superuser`, which no per-table `REVOKE` removes; create the runtime role with SQL.
 - **AWS RDS / Aurora** — `rds_superuser` can set `session_replication_role`, which silences
   triggers that are not `ENABLE ALWAYS`; hence `tgenabled = 'A'`.
-- **Google Cloud SQL** (and Neon or Supabase default roles) — on PostgreSQL 15+ `public` belongs
+- **Google Cloud SQL** (and Neon or Supabase default roles) — `public` belongs
   to `pg_database_owner`, which `cloudsqlsuperuser` and those defaults reach: the probe reports
   `owner=schema` until `ALTER SCHEMA public OWNER TO <migrator>`.
 
@@ -338,13 +362,14 @@ the raw driver error sees the sentinel now.
 | member | shape |
 |---|---|
 | `Config` | `DSN` or split `Host`/`Port`/`User`/`Password`/`Database`/`SSLMode` (`DSN` and `Password` are `sdk.Secret`; see "Secrets"), plus pool settings, `StatementTimeout`/`LockTimeout` (see "Statement and lock timeouts"), `LogQueries`, `LogQueryArgs`, `Logger`, `Tracer`, and `Retry`; env tags are provided for host parsers; pgx also honors standard `PG*` environment defaults during DSN parsing. `RuntimeMode`, `TLSUnverifiedAcknowledged`, `TLSDisabledAcknowledged` and `AppendOnlyWritableAcknowledged` are programmatic (no env tag; see "Production posture" and "Append-only tables") |
+| `ErrServerVersion` / `MinServerVersionNum` | the PostgreSQL 18 floor: `RunMigrations` refuses an older server with an error wrapping `ErrServerVersion`; `Open` logs one WARN (see "PostgreSQL 18 floor") |
 | `ErrTLSRequired` / `ErrQueryLoggingRefused` | production posture refusals from `Open`, matched with `errors.Is` |
 | `ErrAppendOnlyTableWritable` / `ErrAppendOnlyTableUnwritable` / `ErrDefinerFunctionUnsafe` | production append-only refusals from `ProbeAppendOnly`, matched with `errors.Is` |
-| `Open(ctx, cfg) (*DB, error)` | refuses a `DSN`/`Password` containing `sdk.Redacted` (`sdk.ErrRedactedSecret`), then opens a `pgxpool` and pings; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
+| `Open(ctx, cfg) (*DB, error)` | refuses a `DSN`/`Password` containing `sdk.Redacted` (`sdk.ErrRedactedSecret`), then opens a `pgxpool` and pings, then logs the version advisory below the floor; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
 | `DB` | `Exec` / `Query` / `QueryRow` / `InTx` / `Begin` / `Close` / `Ping` / `Underlying() *pgxpool.Pool` / `RuntimeMode()` / `ProbeAppendOnly(ctx, tables…)` |
 | `Setting` / `(*DB).TransactWithSettings(ctx, settings, fn)` / `(*Tx).Setting(name)` | `Transact` whose first statement applies transaction-local settings (`set_config(name, value, true)`, all bound); validation before `Begin` refuses with `ErrInvalidInput`; `Tx.Setting` reports, from memory, what was applied to that transaction (see "Transaction-local settings for row-level security") |
 | `Querier` | interface intersection of `*DB` and `*Tx` (`Exec`/`Query`/`QueryRow`) — lets a store accept pool-or-tx |
-| `MapError(err) error` | SQLSTATE-based: `23505`→`ErrAlreadyExists`, `23503`→`ErrInvalidReference`, `23514`/`23502`→`ErrInvalidInput`, `22P02` (malformed uuid/integer literal)→`ErrInvalidInput` keeping the server message as the sentence before the sentinel, `42501`→`ErrForbidden` keeping the `*pgconn.PgError` in the chain, `pgx.ErrNoRows`→`ErrNotFound`; unknown errors pass through |
+| `MapError(err) error` | SQLSTATE-based: `23505`→`ErrAlreadyExists`, `23503`/`23001` (PostgreSQL 18 reports an `ON DELETE RESTRICT` refusal as `restrict_violation`)→`ErrInvalidReference`, `23514`/`23502`→`ErrInvalidInput`, `22P02` (malformed uuid/integer literal)→`ErrInvalidInput` keeping the server message as the sentence before the sentinel, `42501`→`ErrForbidden` keeping the `*pgconn.PgError` in the chain, `pgx.ErrNoRows`→`ErrNotFound`; unknown errors pass through |
 | `RedactDSN(dsn) string` | masks URL userinfo, `password` and `sslpassword`; keyword DSNs and malformed inputs return the literal `"REDACTED"` |
 | `StatusCheck(ctx, db)` | 1s-deadline ping |
 | `ProbeTable(ctx, q, table) error` | boot-time existence probe for a store's table (`to_regclass`, name bound as a parameter, bare or schema-qualified): absent → wraps `ErrNotFound` naming the relation; a query failure maps through `MapError` and is never misreported as missing. Run it in a store constructor so a host aimed at the wrong database fails before serving |
@@ -505,8 +530,8 @@ Inside the transaction the runner sets `search_path` to the schema alone —
 **no `public` fallback**, because with `public` on the path an
 `ALTER TABLE users` whose `"auth".users` is missing would silently alter the
 host's `public.users`. `pg_catalog` stays implicitly searched, so
-`gen_random_uuid()`, `hashtext`/`hashtextextended`, and `pg_advisory_xact_lock`
-resolve; **migrations calling extension functions installed in `public` must
+`gen_random_uuid()`, `uuidv7()`, `hashtext`/`hashtextextended`, and
+`pg_advisory_xact_lock` resolve; **migrations calling extension functions installed in `public` must
 qualify them** (`public.uuid_generate_v4()`).
 
 The four ledger statements are explicitly qualified through `Schema.Table`,
@@ -1032,7 +1057,7 @@ for the test's own 40 goroutines; the atomicity proof is the exact-K assertion
 itself, not the race detector:
 
 ```sh
-docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:18
 POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' \
   go test -race ./...
 ```

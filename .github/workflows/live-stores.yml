@@ -1,6 +1,6 @@
 # Live-store conformance — service-container + secret-gated, NEVER a merge
 # requirement. Runs the datastore/kv conformance suites against real backends
-# that make check (hermetic) only skips: postgres:17 + redis:7 as GitHub Actions
+# that make check (hermetic) only skips: postgres:18 + redis:7 as GitHub Actions
 # service containers, and the turso legs against the playground DB via repo
 # secrets.
 #
@@ -49,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: postgres
         # Published to the runner's localhost:5432 (job runs on the runner).
@@ -72,7 +72,7 @@ jobs:
       - name: make test-stores (pgx live + turso -tags=integration)
         env:
           # pgx legs (cms/auth/jobs) connect here; matches the canonical
-          # local-dev DSN. postgres:17 defaults db=postgres user=postgres.
+          # local-dev DSN. postgres:18 defaults db=postgres user=postgres.
           POSTGRES_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
           # Turso legs. Secrets PENDING UPLOAD (2026-07-07) ⇒ empty ⇒ the three
           # turso legs skip loudly, which is correct until jrazmi uploads them.
@@ -102,12 +102,26 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: postgres
         # Published to the runner's localhost:5432.
         ports:
           - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      # The negative leg of pgxdb's PostgreSQL 18 floor: a server one major
+      # below it, so the refusal is exercised on every run instead of rotting.
+      postgres17:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        # Published to the runner's localhost:5433.
+        ports:
+          - 5433:5432
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -142,4 +156,7 @@ jobs:
           # atomicity proof is the live exact-K assertion itself: 40 concurrent
           # callers at a ceiling of 8 must yield exactly 8 admissions.
           POSTGRES_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+          # The below-floor server: Open must warn and RunMigrations must refuse
+          # with ErrServerVersion (TestLive_BelowFloor_RunMigrationsRefuses).
+          POSTGRES_BELOW_FLOOR_TEST_DSN: postgres://postgres:postgres@localhost:5433/postgres?sslmode=disable
         run: go test -race ./...
