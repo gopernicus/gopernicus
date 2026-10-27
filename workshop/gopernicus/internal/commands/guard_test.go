@@ -920,6 +920,87 @@ func TestGuardP9Declined(t *testing.T) {
 	}
 }
 
+// p9HostLedgers renders p9Host with its ledger files spread over named
+// ledgers instead of primary alone.
+func p9HostLedgers(ledgers map[string]map[string]string) map[string]string {
+	files := p9Host(true, nil)
+	for ledger, names := range ledgers {
+		for name, src := range names {
+			files["workshop/migrations/"+ledger+"/"+name] = src
+		}
+	}
+	return files
+}
+
+// TestGuardP9Ledgers proves P9 reads every ledger under workshop/migrations:
+// a store complete in one ledger is clean and the status line names its
+// ledger, a store split across ledgers is a finding, a copy missing from every
+// ledger or edited in the home ledger is a finding, a decline works outside
+// primary, and a host file sharing a store file's name never makes a home.
+func TestGuardP9Ledgers(t *testing.T) {
+	storeCopies := func(edits map[string]string) map[string]string {
+		out := p9Ledger(edits)
+		delete(out, "0001_host_notes.sql")
+		return out
+	}
+	notes := map[string]string{"0001_host_notes.sql": p9LedgerFiles["0001_host_notes.sql"]}
+
+	clean := []struct {
+		name    string
+		ledgers map[string]map[string]string
+		line    string
+	}{
+		{"a store complete in a second ledger",
+			map[string]map[string]string{"primary": notes, "iam": storeCopies(nil)},
+			"\nP9   ok        (1 store; ledgers: acme→iam)\n"},
+		{"a declined trigger file outside primary",
+			map[string]map[string]string{"primary": notes, "iam": storeCopies(map[string]string{"0009_widgets_immutable.sql": ""})},
+			"\nP9   ok        (1 store; ledgers: acme→iam; declined: 0003_widgets_immutable.sql)\n"},
+		{"a host file sharing a store file's name in another ledger",
+			map[string]map[string]string{"primary": {"0001_widgets_idx.sql": "CREATE INDEX host_widgets ON host_widgets (id);\n"}, "iam": storeCopies(nil)},
+			"\nP9   ok        (1 store; ledgers: acme→iam)\n"},
+	}
+	for _, c := range clean {
+		t.Run(c.name, func(t *testing.T) {
+			var code int
+			root := writeFixture(t, guardFixture{files: p9HostLedgers(c.ledgers)})
+			out := captureStdout(t, func() int { code = Run([]string{"guard", "--posture", root}); return code })
+			if code != 0 || !strings.Contains(out, c.line) {
+				t.Fatalf("exit %d, want 0 with %q:\n%s", code, c.line, out)
+			}
+		})
+	}
+
+	split := storeCopies(nil)
+	delete(split, "0008_widgets_idx.sql")
+	violating := []struct {
+		name    string
+		ledgers map[string]map[string]string
+		want    guardFinding
+	}{
+		{"a store split across two ledgers",
+			map[string]map[string]string{"primary": {"0008_widgets_idx.sql": p9LedgerFiles["0008_widgets_idx.sql"]}, "iam": split},
+			guardFinding{where: p9Store, msg: "copies split across workshop/migrations/iam, workshop/migrations/primary (one store, one ledger: its migrations apply to one database)"}},
+		{"a copy missing from every ledger",
+			map[string]map[string]string{"primary": notes, "jobs": {"0001_jobs.sql": "CREATE TABLE jobs (id TEXT);\n"}},
+			guardFinding{where: p9Store + "/migrations/0001_widgets.sql", msg: "ledger copy missing from workshop/migrations/* (" + ledgerReexport + ")"}},
+		{"an edited copy in the home ledger",
+			map[string]map[string]string{"primary": notes, "iam": storeCopies(map[string]string{"0008_widgets_idx.sql": "CREATE INDEX widgets_id ON widgets (id DESC);\n"})},
+			guardFinding{where: p9Store + "/migrations/0002_widgets_idx.sql", msg: "ledger copy workshop/migrations/iam/0008_widgets_idx.sql is not byte-identical (" + ledgerReexport + ")"}},
+	}
+	for _, c := range violating {
+		t.Run(c.name, func(t *testing.T) {
+			res := evalFixture(t, guardFixture{rule: "P9", files: p9HostLedgers(c.ledgers)})
+			for _, f := range res.findings {
+				if f == c.want {
+					return
+				}
+			}
+			t.Fatalf("P9 findings %+v; want one %+v", res.findings, c.want)
+		})
+	}
+}
+
 // TestGuardP7QueryLogging pins the query-logging clause's finding: one per
 // uncommented line set true, at that line, naming the key as written.
 func TestGuardP7QueryLogging(t *testing.T) {

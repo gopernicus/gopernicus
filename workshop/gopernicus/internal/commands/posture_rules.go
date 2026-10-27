@@ -1312,20 +1312,19 @@ func evalP9(h *guardHost) guardResult {
 	}
 	r.noScope = "no mounted store ships " + storeMigrationsDir + "/"
 
-	ledgerRel, ledgerPath := "workshop/migrations/"+defaultLedger, ledgerDir(h.root, defaultLedger)
-	ledger, err := ledgerFiles(ledgerPath)
+	ledgers, err := hostLedgers(h.root)
 	if err != nil {
-		r.add(ledgerRel, "cannot be read: "+err.Error())
+		r.add("workshop/migrations", "cannot be read: "+err.Error())
 		return r
 	}
-	bySuffix := map[string][]string{}
-	for _, name := range ledger {
-		if suffix, ok := migrationSuffix(name); ok {
-			bySuffix[suffix] = append(bySuffix[suffix], name)
+	for _, l := range ledgers {
+		if l.err != nil {
+			r.add(l.rel, "cannot be read: "+l.err.Error())
+			return r
 		}
 	}
 
-	var declined []string
+	var declined, homes []string
 	for _, module := range mounted {
 		dir, err := moduleDir(h.root, module)
 		if err != nil {
@@ -1342,45 +1341,148 @@ func evalP9(h *guardHost) guardResult {
 			r.add(module+"/"+storeMigrationsDir, "cannot be read: "+err.Error())
 			continue
 		}
+		want := map[string][]byte{}
 		for _, name := range files {
-			suffix, ok := migrationSuffix(name)
+			if _, ok := migrationSuffix(name); !ok {
+				continue
+			}
+			src, err := os.ReadFile(filepath.Join(migrations, name))
+			if err != nil {
+				r.add(module+"/"+storeMigrationsDir+"/"+name, "cannot be read: "+err.Error())
+				continue
+			}
+			want[name] = src
+		}
+
+		// A store's migrations apply to one database: its home is the ledger
+		// holding byte-identical copies, and identical copies in a second
+		// ledger split it. A suffix match alone never makes a home (a host
+		// may keep its own users.sql).
+		var held []hostLedger
+		for _, l := range ledgers {
+			for name, src := range want {
+				if l.identical(name, src) {
+					held = append(held, l)
+					break
+				}
+			}
+		}
+		if len(held) > 1 {
+			rels := make([]string, len(held))
+			for i, l := range held {
+				rels[i] = l.rel
+			}
+			r.add(module, "copies split across "+strings.Join(rels, ", ")+" (one store, one ledger: its migrations apply to one database)")
+			continue
+		}
+		judged, label := ledgers, "workshop/migrations/*"
+		if len(held) == 1 {
+			judged, label = held, held[0].rel
+			homes = append(homes, storePocket(module)+"→"+held[0].name)
+		} else if len(ledgers) == 1 {
+			label = ledgers[0].rel
+		}
+
+		for _, name := range files {
+			src, ok := want[name]
 			if !ok {
 				continue
 			}
+			suffix, _ := migrationSuffix(name)
 			where := module + "/" + storeMigrationsDir + "/" + name
-			want, err := os.ReadFile(filepath.Join(migrations, name))
-			if err != nil {
-				r.add(where, "cannot be read: "+err.Error())
-				continue
-			}
-			copies := bySuffix[suffix]
-			if len(copies) == 0 && strings.HasSuffix(name, immutableSuffix) {
-				declined = append(declined, name)
-				continue
-			}
-			if len(copies) == 0 {
-				r.add(where, "ledger copy missing from "+ledgerRel+" ("+ledgerReexport+")")
-				continue
-			}
+			var copies []string
 			identical := false
-			var edited []string
-			for _, c := range copies {
-				got, err := os.ReadFile(filepath.Join(ledgerPath, c))
-				if err == nil && bytes.Equal(got, want) {
-					identical = true
-					break
+			for _, l := range judged {
+				for _, c := range l.bySuffix[suffix] {
+					copies = append(copies, l.rel+"/"+c)
 				}
-				edited = append(edited, ledgerRel+"/"+c)
+				identical = identical || l.identical(name, src)
 			}
-			if !identical {
-				r.add(where, "ledger copy "+strings.Join(edited, ", ")+" is not byte-identical ("+ledgerReexport+")")
+			switch {
+			case identical:
+			case len(copies) == 0 && strings.HasSuffix(name, immutableSuffix):
+				declined = append(declined, name)
+			case len(copies) == 0:
+				r.add(where, "ledger copy missing from "+label+" ("+ledgerReexport+")")
+			default:
+				r.add(where, "ledger copy "+strings.Join(copies, ", ")+" is not byte-identical ("+ledgerReexport+")")
 			}
 		}
 	}
-	if len(declined) > 0 {
-		r.detail = "declined: " + strings.Join(declined, ", ")
+	var details []string
+	if len(ledgers) > 1 && len(homes) > 0 {
+		details = append(details, "ledgers: "+strings.Join(homes, ", "))
 	}
+	if len(declined) > 0 {
+		details = append(details, "declined: "+strings.Join(declined, ", "))
+	}
+	r.detail = strings.Join(details, "; ")
 	return r
+}
+
+// hostLedger is one ledger directory under workshop/migrations, its
+// applicable files indexed by the name after the numeric prefix.
+type hostLedger struct {
+	name, rel, path string
+	bySuffix        map[string][]string
+	err             error
+}
+
+// identical reports whether the ledger holds a copy of the store file name
+// with exactly the bytes src.
+func (l hostLedger) identical(name string, src []byte) bool {
+	suffix, ok := migrationSuffix(name)
+	if !ok {
+		return false
+	}
+	for _, c := range l.bySuffix[suffix] {
+		got, err := os.ReadFile(filepath.Join(l.path, c))
+		if err == nil && bytes.Equal(got, src) {
+			return true
+		}
+	}
+	return false
+}
+
+// hostLedgers returns every ledger directory under workshop/migrations
+// ("_"- and "."-prefixed directories skipped), sorted by name. With none
+// present it returns the default ledger alone, so an absent ledger still
+// reads as primary.
+func hostLedgers(root string) ([]hostLedger, error) {
+	base := filepath.Join(root, "workshop", "migrations")
+	entries, err := os.ReadDir(base)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), "_") && !strings.HasPrefix(e.Name(), ".") {
+			names = append(names, e.Name())
+		}
+	}
+	if len(names) == 0 {
+		names = []string{defaultLedger}
+	}
+	sort.Strings(names)
+	out := make([]hostLedger, 0, len(names))
+	for _, name := range names {
+		l := hostLedger{name: name, rel: "workshop/migrations/" + name, path: ledgerDir(root, name), bySuffix: map[string][]string{}}
+		files, err := ledgerFiles(l.path)
+		l.err = err
+		for _, f := range files {
+			if suffix, ok := migrationSuffix(f); ok {
+				l.bySuffix[suffix] = append(l.bySuffix[suffix], f)
+			}
+		}
+		out = append(out, l)
+	}
+	return out, nil
+}
+
+// storePocket names a framework store module by its pocket.
+func storePocket(module string) string {
+	pocket, _, _ := strings.Cut(strings.TrimPrefix(module, fwPockets+"/"), "/")
+	return pocket
 }
 
 // readRequires returns the module path of every require directive in
