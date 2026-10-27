@@ -131,8 +131,9 @@ func (s *Service) Recorded(ctx context.Context, operationID string) (Outcome, bo
 // ExpireOperations deletes at most limit operation records committed at or
 // before now minus the configured retention, oldest first, and returns how many
 // it deleted. Fenced records never expire. It takes no write lock, so it runs
-// beside Apply; it refuses an ambient transaction and limit <= 0. An expired
-// operation ID reads as never recorded. The host's schedule owns the cadence.
+// beside Apply; it refuses an ambient transaction of the store's own *DB and
+// limit <= 0. An expired operation ID reads as never recorded. The host's
+// schedule owns the cadence.
 func (s *Service) ExpireOperations(ctx context.Context, limit int) (int, error) {
 	if s == nil || s.expirer == nil {
 		return 0, ErrOperationExpiryNotConfigured

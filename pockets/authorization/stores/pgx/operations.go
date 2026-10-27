@@ -65,7 +65,7 @@ func (m *mutationStore) Fence(ctx context.Context, operationID string) (*mutatio
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if _, ok := pgxdb.TxFromContext(ctx); ok {
+	if _, ok := m.db.TxFrom(ctx); ok {
 		return nil, mutations.ErrMutationInsideTransaction
 	}
 	if err := tuples.ValidateRefField("operation id", operationID); err != nil {
@@ -118,12 +118,12 @@ func (m *mutationStore) Fence(ctx context.Context, operationID string) (*mutatio
 // committed at or before before, oldest first, in one statement on the pool. It
 // takes no authorization lock: the lock guards iam_tuples, and a record's
 // outcome never changes. The outcome filter keeps fenced records, which the 0006
-// trigger also refuses to delete. It refuses an ambient transaction.
+// trigger also refuses to delete. It refuses an ambient transaction of m.db.
 func (m *mutationStore) Expire(ctx context.Context, before time.Time, limit int) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	if _, ok := pgxdb.TxFromContext(ctx); ok {
+	if _, ok := m.db.TxFrom(ctx); ok {
 		return 0, mutations.ErrMutationInsideTransaction
 	}
 	if limit <= 0 {

@@ -734,8 +734,9 @@ func specReadsJoinTransaction(t *testing.T, newRepos func(t *testing.T) (Reposit
 }
 
 // specMutationRefusesAmbientTransaction: Apply, called inside
-// Transact, return mutation.ErrMutationInsideTransaction (wrapping
-// sdk.ErrInvalidInput) with a nil result, do not run the
+// Transact of the store's own *DB, return
+// mutation.ErrMutationInsideTransaction (wrapping sdk.ErrInvalidInput) with a
+// nil result, do not run the
 // semantic validator, and change no mutation state — checked while the outer
 // transaction is still OPEN (so the assertion does not rely on the rollback to
 // hide effects) and again after it. Returning the refusal from the callback
@@ -804,7 +805,8 @@ func specMutationRefusesAmbientTransaction(t *testing.T, newRepos func(t *testin
 	})
 }
 
-// specFenceRefusesAmbientTransaction: Fence inside Transact returns
+// specFenceRefusesAmbientTransaction: Fence inside Transact of the store's own
+// *DB returns
 // ErrMutationInsideTransaction with a nil result and records nothing, so the same
 // ID can still be fenced afterwards. An in-transaction fence would wait on its own
 // write lock. Fails when Mutations is wired without Operations.
@@ -839,7 +841,8 @@ func specFenceRefusesAmbientTransaction(t *testing.T, newRepos func(t *testing.T
 	}
 }
 
-// specExpireRefusesAmbientTransaction: Expire inside Transact returns
+// specExpireRefusesAmbientTransaction: Expire inside Transact of the store's own
+// *DB returns
 // ErrMutationInsideTransaction with a zero count and deletes nothing; outside it
 // the same record expires.
 func specExpireRefusesAmbientTransaction(t *testing.T, newRepos func(t *testing.T) (Repositories, transaction.Transactor)) {

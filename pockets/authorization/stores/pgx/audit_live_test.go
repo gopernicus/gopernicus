@@ -8,7 +8,6 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
-	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -158,7 +157,7 @@ func TestAuditFailureRollsBackOwnedAndAmbientWrites(t *testing.T) {
 				}
 				if ambient {
 					err := db.Transact(ctx, func(ctx context.Context) error {
-						tx, _ := pgxdb.TxFromContext(ctx)
+						tx, _ := db.TxFrom(ctx)
 						if _, err := tx.Exec(ctx, `INSERT INTO `+qualify(t, "iam_tuples")+` (scope_kind,resource_type,resource_id,relation,subject_type,subject_id,subject_relation) VALUES (1,'','','reader','user','host-marker','')`); err != nil {
 							return err
 						}

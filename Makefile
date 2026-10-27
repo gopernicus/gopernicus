@@ -12,11 +12,12 @@ MODULES = sdk pockets integrations/authentication/auth0 integrations/authenticat
 STORE_MODULES = pockets/cms/stores/pgx pockets/cms/stores/turso pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/jobs/stores/pgx pockets/jobs/stores/turso pockets/events/stores/pgx pockets/events/stores/turso pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/secrets/stores/pgx
 
 # INTEGRATION_TAG_MODULES carry `-tags=integration` sources `make check` must keep
-# COMPILING: the Turso external-store suites and authorization's SQL-to-Redis
-# suite (local SQLite plus env-gated PostgreSQL). The Redis module is named
-# explicitly because it is not in STORE_MODULES. Execution of these tagged suites
+# COMPILING: the Turso external-store suites, the turso connector's own live
+# suite, and authorization's SQL-to-Redis suite (local SQLite plus env-gated
+# PostgreSQL). The connector and Redis modules are named explicitly because they
+# are not in STORE_MODULES. Execution of these tagged suites
 # is a separate verification leg.
-INTEGRATION_TAG_MODULES = $(filter %/turso,$(STORE_MODULES)) pockets/authorization/stores/goredis
+INTEGRATION_TAG_MODULES = $(filter %/turso,$(STORE_MODULES)) integrations/datastores/turso pockets/authorization/stores/goredis
 # PROVIDER_LIVE_TAG_MODULES carry a bare `-tags=live` leg against a real identity
 # provider tenant (owner-minted tokens; env-gated, never run by CI).
 # EMULATOR_TAG_MODULES carry a `-tags=emulator` leg against the Firebase Auth

@@ -381,7 +381,7 @@ func (s *tupleStore) ReadTupleSnapshot(ctx context.Context, fn func(context.Cont
 	reader := *s
 	var owned *pgxdb.Tx
 	if reader.readQuerier == nil {
-		if ambient, ok := pgxdb.TxFromContext(ctx); ok {
+		if ambient, ok := s.db.TxFrom(ctx); ok {
 			suitable, e := ambient.SnapshotIsolation(ctx)
 			if e != nil {
 				return e

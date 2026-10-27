@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
@@ -70,7 +69,7 @@ func TestIntegrityIgnoresTemporaryTupleShadow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := db.Transact(t.Context(), func(ctx context.Context) error {
-		tx, ok := tursodb.TxFromContext(ctx)
+		tx, ok := db.TxFrom(ctx)
 		if !ok {
 			t.Fatal("missing ambient transaction")
 		}

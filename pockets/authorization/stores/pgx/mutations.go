@@ -78,7 +78,7 @@ func (m *mutationStore) Apply(ctx context.Context, cmd mutations.Command, valida
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if _, ok := pgxdb.TxFromContext(ctx); ok {
+	if _, ok := m.db.TxFrom(ctx); ok {
 		return nil, mutations.ErrMutationInsideTransaction
 	}
 	if err := cmd.Validate(); err != nil {

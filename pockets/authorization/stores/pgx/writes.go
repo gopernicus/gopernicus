@@ -94,7 +94,7 @@ func runWrite(ctx context.Context, db *pgxdb.DB, cfg config, fn func(*writeTx) e
 		}
 		return appendAudit(ctx, w, cfg)
 	}
-	if tx, ok := pgxdb.TxFromContext(ctx); ok {
+	if tx, ok := db.TxFrom(ctx); ok {
 		return mapMutationError(withSavepoint(ctx, tx, func() error { return apply(tx) }))
 	}
 	return retryMutation(ctx, func() (error, bool) {

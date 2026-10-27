@@ -30,7 +30,7 @@ func ExportTupleCacheMigrations(dst string) error {
 func WithTupleCache() Option { return func(c *config) { c.tupleCache = true } }
 
 func prepareTupleSource(ctx context.Context, db *pgxdb.DB, cfg *config) (*tupleSource, error) {
-	if _, ambient := pgxdb.TxFromContext(ctx); ambient {
+	if _, ambient := db.TxFrom(ctx); ambient {
 		return nil, fmt.Errorf("authorization cache: ambient construction: %w", sdk.ErrInvalidInput)
 	}
 	tx, err := db.BeginRead(ctx)

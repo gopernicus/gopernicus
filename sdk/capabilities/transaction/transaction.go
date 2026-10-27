@@ -12,7 +12,13 @@ import "context"
 // A nil result means the transaction committed. An error or panic aborts an
 // uncommitted attempt; implementations preserve panic values and domain error
 // matching through errors.Is/errors.As. Cleanup can add an error cause.
-// Bundled connectors reject nested Transact calls with a connector error.
+// Bundled connectors reject a nested Transact on the same instance with a
+// connector error.
+//
+// fn's context may carry transactions of other datastore instances; an
+// implementation neither joins nor refuses another instance's transaction; it
+// may reject nesting on its own instance, never because another instance holds
+// one — two datastores never share a transaction.
 //
 // An implementation may retry fn. Reset captured results at the start of each
 // attempt, and perform external effects only after Transact returns nil. Use a

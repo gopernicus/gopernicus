@@ -64,7 +64,7 @@ func (m *mutationStore) Fence(ctx context.Context, operationID string) (*mutatio
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if _, ok := tursodb.TxFromContext(ctx); ok {
+	if _, ok := m.db.TxFrom(ctx); ok {
 		return nil, mutations.ErrMutationInsideTransaction
 	}
 	if err := tuples.ValidateRefField("operation id", operationID); err != nil {
@@ -109,12 +109,12 @@ func (m *mutationStore) Fence(ctx context.Context, operationID string) (*mutatio
 // committed at or before before, oldest first, in one statement. The outcome
 // filter keeps fenced records, which the 0006 trigger also refuses to delete.
 // SQLite's single writer orders it against Fence and Apply. It refuses an
-// ambient transaction, whose write lock it would wait on.
+// ambient transaction of m.db, whose write lock it would wait on.
 func (m *mutationStore) Expire(ctx context.Context, before time.Time, limit int) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	if _, ok := tursodb.TxFromContext(ctx); ok {
+	if _, ok := m.db.TxFrom(ctx); ok {
 		return 0, mutations.ErrMutationInsideTransaction
 	}
 	if limit <= 0 {

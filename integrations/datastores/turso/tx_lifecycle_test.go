@@ -15,7 +15,7 @@ func runTransaction(t *testing.T, db *DB, mode string, ctx context.Context, fn f
 		return db.InTx(ctx, fn)
 	}
 	return db.Transact(ctx, func(txctx context.Context) error {
-		tx, ok := TxFromContext(txctx)
+		tx, ok := db.TxFrom(txctx)
 		if !ok || db.QuerierFrom(txctx) != tx {
 			t.Fatal("transaction not available through callback context")
 		}

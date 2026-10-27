@@ -16,7 +16,7 @@ type tupleSource struct {
 
 func (s *tupleSource) Binding() string { return s.cfg.tupleBinding }
 func (s *tupleSource) CacheableContext(ctx context.Context) bool {
-	_, ambient := tursodb.TxFromContext(ctx)
+	_, ambient := s.db.TxFrom(ctx)
 	return !ambient
 }
 func (s *tupleSource) ReadSnapshot(ctx context.Context, fn func(context.Context, tuplecache.CheckReads) error) error {

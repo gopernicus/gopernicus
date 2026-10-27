@@ -160,7 +160,7 @@ func TestAuditFailureRollsBackOwnedAndAmbientWrites(t *testing.T) {
 				}
 				if ambient {
 					err := db.Transact(ctx, func(ctx context.Context) error {
-						tx, _ := tursodb.TxFromContext(ctx)
+						tx, _ := db.TxFrom(ctx)
 						if _, err := tx.Exec(ctx, `INSERT INTO main.iam_tuples VALUES(1,'','','reader','user','host-marker','')`); err != nil {
 							return err
 						}

@@ -1063,6 +1063,23 @@ Callback error causes and panic values survive cleanup. SQL helpers do not
 retry callbacks; portable consumers must allow for connectors that do.
 Cancellation racing a commit cannot undo a commit already accepted by a server.
 
+Ambient transactions are per instance. The identity of an instance is the
+`*DB` one `Open` call returned; wrappers hold or embed that pointer and never
+copy a `DB` by value. `d.TxFrom(ctx)` and `d.QuerierFrom(ctx)` answer only for
+`d`: another instance's transaction in the context is invisible, so a store
+over `d` runs on `d`'s pool beside it. `Transact` and `TransactSnapshot` refuse
+nesting on the same instance with `ErrNestedTransact` (match it with
+`errors.Is`, not the message); a different instance's transaction nests
+independently and commits or rolls back on its own. Two databases never share a
+transaction, and the connector provides no cross-database atomicity. Stores
+built with `WithSchema` over one `*DB` share its identity, so one `Transact`
+spans their schemas. Two `Open` calls against the same database are two
+instances: nesting them can wait on a lock the outer holds, and the server
+cannot detect that client-side wait, so set `LockTimeout` (`DB_LOCK_TIMEOUT`)
+and `StatementTimeout` on such a pair and do not nest it. A nested request holds
+one connection from each pool; nest instances in one fixed order and give
+requests a deadline.
+
 Limiter options configure private construction settings in order; the last prefix
 and schema win, and the internal `v2:` suffix is appended afterward, including to
 an empty prefix. They cannot change a live limiter. `NewLimiter` panics on a nil option.
@@ -1082,9 +1099,9 @@ connection, not a lagging read replica.
 `Transact`, with explicit read-write REPEATABLE READ isolation. Use it when a
 workflow needs multiple reads from one snapshot together with its own pending
 writes. It commits on success and retains the same error, panic and cancellation
-cleanup rules as `Transact`. Both methods reject nesting, including nesting one
-inside the other. Neither retries a callback; serialization failures return to
-the caller.
+cleanup rules as `Transact`. Both methods reject nesting on the same instance,
+including nesting one inside the other. Neither retries a callback;
+serialization failures return to the caller.
 
 `Tx.SnapshotIsolation(ctx)` queries `transaction_isolation` on that transaction.
 It returns true for REPEATABLE READ or SERIALIZABLE, false for weaker isolation,

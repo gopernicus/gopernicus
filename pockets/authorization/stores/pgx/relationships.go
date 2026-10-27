@@ -615,7 +615,7 @@ func (s *relationshipStore) write(ctx context.Context, fn func(*writeTx) error) 
 // transaction's isolation. Decision snapshots retain their stricter requirements.
 func (s *relationshipStore) rawView(ctx context.Context) (relationships.Components, error) {
 	facts := s.tuples()
-	if tx, ok := pgxdb.TxFromContext(ctx); ok {
+	if tx, ok := s.db.TxFrom(ctx); ok {
 		facts.readQuerier = tx
 	}
 	return relationships.NewService(facts)

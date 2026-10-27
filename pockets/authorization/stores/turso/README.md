@@ -58,8 +58,12 @@ subjects together when establishing a protected scope. Only the explicit
 `TeardownResourceAuthorization` command may remove the final protected facts;
 ordinary purge and `DeleteScope` return a conflict instead.
 
-Raw writes join supported ambient transactions. Atomic mutation commands own
-their boundary and reject ambient contexts. Rejected operations return an error
+Raw writes join supported ambient transactions of the store's own `*DB`. Atomic
+mutation commands own their boundary and reject ambient contexts of the store's
+own `*DB`. Another `*DB`'s transaction is invisible: the store runs on its own
+pool beside it. Two `Open` calls on the same database are two instances; on a
+local file a store over one called inside the other's transaction fails busy
+after `BusyTimeout`, so hold one `*DB` per database. Rejected operations return an error
 and nil result; successful results contain only the current `Outcome`. There are
 no principal-guard callbacks, replay tokens, revisions or durable operation receipts.
 A permission revoked after inbound admission does not retract an admitted command.
@@ -83,8 +87,9 @@ Ambient writes retain their write intent until the host commits. Only definite
 busy/locked errors acquiring the transaction are retried; a started callback or
 uncertain commit is never replayed. A 503 is not proof of an aborted transaction.
 
-The connector's ordinary `db.Transact(ctx, fn)` provides the required ambient
-snapshot and preserves its pending writes. Outside a host transaction, canonical
+The connector's ordinary `db.Transact(ctx, fn)`, on the store's own `*DB`,
+provides the required ambient snapshot and preserves its pending writes; another
+instance's transaction is not a snapshot for this store. Outside a host transaction, canonical
 reads open a deferred read transaction. Production reads explicitly qualify
 `main`; temporary objects cannot shadow facts, audit or cache metadata.
 
@@ -178,7 +183,8 @@ publication, acknowledgement compares the old receipt and deletes only captured
 IDs. Sequence maxima are never commit watermarks. Later commits survive.
 
 Ambient contexts bypass Redis and use canonical durable snapshots with pending
-writes. Delivery `Snapshot` and `Acknowledge` reject ambient transactions. Relay
+writes. Delivery `Snapshot` and `Acknowledge` reject ambient transactions of the
+store's own `*DB`. Relay
 lifecycle, primary routing, freshness policy and client lifecycle remain host-owned.
 A new protocol requires a fresh Redis namespace; protocol1 bytes cannot be used.
 

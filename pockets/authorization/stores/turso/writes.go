@@ -91,7 +91,7 @@ func runWrite(ctx context.Context, db *tursodb.DB, cfg config, fn func(*writeTx)
 		}
 		return appendAudit(ctx, w, cfg)
 	}
-	if tx, ok := tursodb.TxFromContext(ctx); ok {
+	if tx, ok := db.TxFrom(ctx); ok {
 		return withSavepoint(ctx, tx, func() error { return apply(tx) })
 	}
 	return ownedTransaction(ctx, db, apply)
