@@ -140,3 +140,83 @@ func TestExternalLifetimePosture(t *testing.T) {
 		t.Fatalf("development logged the fail-open waiver:\n%s", logs)
 	}
 }
+
+// TestExternalAuthenticationAgeDenialRecordedOncePerToken pins the
+// per-token dedupe of the authentication-age denial event: every request is
+// still a 401, but external_subject_denied is recorded once per token (keyed
+// by its SHA-256, so the cache never holds it); a cache fault records the row
+// anyway; the other denial reasons are not deduped.
+func TestExternalAuthenticationAgeDenialRecordedOncePerToken(t *testing.T) {
+	const n = 4
+	bound := func(c *ExternalConfig) { c.Providers[0].MaxAuthenticationAge = 10 * time.Minute }
+	overAge := func(h *extHarness, subject string) string {
+		return h.token(h.providerA, sdkauth.Identity{Subject: subject, Email: subject + "@example.test", EmailVerified: true,
+			AuthenticatedAt: h.clock.Now().Add(-time.Hour), ExpiresAt: h.clock.Now().Add(30 * time.Minute)})
+	}
+	verifyN := func(t *testing.T, h *extHarness, raw string) {
+		t.Helper()
+		for i := range n {
+			if _, _, err := h.engine.Verify(context.Background(), raw, TransportHeader); !errors.Is(err, ErrExternalSubjectDenied) || !errors.Is(err, sdk.ErrUnauthorized) {
+				t.Fatalf("Verify #%d = %v, want the 401 denial every time", i+1, err)
+			}
+		}
+	}
+	reasons := func(h *extHarness) []any {
+		var out []any
+		for _, e := range h.eventsOf(securityevent.TypeExternalSubjectDenied) {
+			out = append(out, e.Details["reason"])
+		}
+		return out
+	}
+
+	t.Run("same token, then a second token", func(t *testing.T) {
+		logins := newClockedStore(func() time.Time { return time.Now() })
+		h := newExtHarness(t, func(c *ExternalConfig) { bound(c); c.LoginRecordCache = logins })
+		first := overAge(h, "s1")
+		verifyN(t, h, first)
+		if got := reasons(h); len(got) != 1 || got[0] != externalReasonAgeExceeded {
+			t.Fatalf("denials after %d requests = %v, want one %s", n, got, externalReasonAgeExceeded)
+		}
+		if logins.lastTTL != 30*time.Minute {
+			t.Errorf("dedupe TTL = %v, want the token's remaining 30m", logins.lastTTL)
+		}
+		verifyN(t, h, overAge(h, "s2"))
+		if got := reasons(h); len(got) != 2 {
+			t.Fatalf("denials after a second token = %v, want two", got)
+		}
+		if h.store.provisionCalls.Load() != 0 {
+			t.Fatal("an over-age token provisioned a user")
+		}
+	})
+
+	t.Run("missing authentication time, no known expiry", func(t *testing.T) {
+		logins := newClockedStore(func() time.Time { return time.Now() })
+		h := newExtHarness(t, func(c *ExternalConfig) { bound(c); c.LoginRecordCache = logins })
+		raw := extToken(h.providerA.issuer, "s1")
+		h.providerA.identities[raw] = sdkauth.Identity{Issuer: h.providerA.issuer, Subject: "s1"}
+		verifyN(t, h, raw)
+		if got := reasons(h); len(got) != 1 || got[0] != externalReasonAuthTimeMissing {
+			t.Fatalf("denials = %v, want one %s", got, externalReasonAuthTimeMissing)
+		}
+		if logins.lastTTL != maxLoginRecordTTL {
+			t.Errorf("dedupe TTL with no known expiry = %v, want %v", logins.lastTTL, maxLoginRecordTTL)
+		}
+	})
+
+	t.Run("cache failure still records", func(t *testing.T) {
+		h := newExtHarness(t, func(c *ExternalConfig) { bound(c); c.LoginRecordCache = failingCache{} })
+		verifyN(t, h, overAge(h, "s1"))
+		if got := reasons(h); len(got) != n {
+			t.Fatalf("denials with the cache down = %v, want %d (fail toward evidence)", got, n)
+		}
+	})
+
+	t.Run("other reasons are not deduped", func(t *testing.T) {
+		h := newExtHarness(t, func(c *ExternalConfig) { bound(c); c.Providers[0].AllowedTenants = []string{"org-1"} })
+		raw := h.token(h.providerA, sdkauth.Identity{Subject: "s1", Tenant: "org-2", Email: "a@example.test", EmailVerified: true})
+		verifyN(t, h, raw)
+		if got := reasons(h); len(got) != n || got[0] != externalReasonTenant {
+			t.Fatalf("tenant denials = %v, want %d", got, n)
+		}
+	})
+}

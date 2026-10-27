@@ -2914,7 +2914,10 @@ through the login-record cache, after the tenant, email and MFA gates and
 before the subject resolves (a denied token never provisions), with a 60 s skew
 leeway: older → `external_subject_denied reason=authentication_age_exceeded`;
 no authentication time at all → `reason=authenticated_at_missing`; both carry
-`provider` and answer the provider's 401.
+`provider` and answer the provider's 401. Every request is denied, but the
+denial event is recorded once per token (keyed by its SHA-256 in the
+`LoginRecordCache` store, until the token expires; a cache fault records it
+again).
 
 | Provider | What `MaxAuthenticationAge` bounds |
 |---|---|
