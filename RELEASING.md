@@ -1,5 +1,99 @@
 # Releasing gopernicus modules
 
+## Transaction-local settings for row-level security (pgxdb v0.16.0)
+
+One annotated tag (not signed) on one module: `integrations/datastores/pgxdb/v0.16.0`,
+**owner-pending**. The owner merges this PR, dispatches `live-stores` on `main`, then cuts and
+pushes the tag at the squash-merge commit, polls the proxy and cold-verifies from a scratch
+consumer. No other module is tagged, no repins are required, and there is no migration. Design
+and rulings: `plans/pgxdb-local-settings.md` (ratified 2026-10-27). Under the owner's 2026-10-23
+process ruling this section is the whole record: there is no handoff file and no manifest. The
+operator surface is the docs site's new *Row-level security with pgxdb* guide, linked from
+*Persistence* and *Database posture*; the reference is the pgxdb README's "Transaction-local
+settings for row-level security" section.
+
+**What was added.** Generic primitives, and no tenant concept: no tenancy pocket, no policy
+generation, nothing tenant-named in sdk or pgxdb.
+- `pgxdb.Setting{Name, Value}`: one transaction-local configuration parameter.
+- `(*DB).TransactWithSettings(ctx, settings, fn)`: `Transact` whose first statement is one
+  `SELECT set_config($1, $2, true), …` with every name and value bound. It is implemented by
+  wrapping `d.Transact`, so nesting (`ErrNestedTransact` on the same instance), the
+  per-instance ambient context, cleanup, panic handling and `MapError` are inherited. A failure
+  of the first statement is wrapped as `pgxdb: applying transaction settings: %w`, keeping the
+  mapped error. Validation runs before `Begin` (no pool acquisition) and refuses with
+  `sdk.ErrInvalidInput`: no settings; a name outside `^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$`; a
+  duplicate name; an empty value, a NUL byte or invalid UTF-8.
+- `(*Tx).Setting(name) (string, bool)`: what `TransactWithSettings` applied to this transaction,
+  from memory. It is `("", false)` on a `Transact` or `TransactSnapshot` transaction.
+
+The sdk `Transactor`, turso, and every store and pocket are unchanged.
+
+**Upgrade note.** Additive; nothing to do unless you adopt it. A host adopting it (battleboard,
+then Segovia) replaces its own `set_config` first statement with `TransactWithSettings` and its
+own context marker with `d.TxFrom(ctx)` + `tx.Setting(name)`; the guide shows battleboard's
+`Scope` against v0.16.0. That port happens in the host's repo.
+
+**The review record.** The plan passed a two-reviewer gate before ratification; both returned
+ratify-with-edits, and every finding was folded ("Decided by gate").
+- **lead-backend-engineer** (HIGH-1, MED-1..4, LOW-1..4) and **data-integration-reviewer**
+  (HIGH-1..2, MED-1..5, LOW-1..4).
+- **HIGH-1 / DI HIGH-2:** a drafted `RequireTx` proved "in a transaction", not "scoped". It and
+  `ErrNoTransaction` were dropped, with R-3 (turso parity); `(*Tx).Setting` replaced them (the
+  data-integration reviewer's proposal; the lead-backend reviewer preferred no primitive, owner
+  call R-5).
+- **DI HIGH-1:** the RLS test enters its role with `SET LOCAL ROLE` only, with a post-commit
+  `current_user` check.
+- **MED-1 (both):** the name rule is a guardrail; extension parameters are not blocked and
+  `plpgsql.x` is pinned as accepted; no denylist. **DI MED-2:** the case-insensitivity note.
+  **DI MED-3:** NUL and invalid UTF-8 refused before `Begin`. **LB MED-2:** implemented by
+  wrapping `d.Transact`. **LB MED-3:** the version split (v0.16.0 here, v0.17.0 for
+  default-ids). **LB MED-4 / DI MED-5:** the RLS test's unique role, grants, superuser gate,
+  cleanup order and FORCE owner leg; one test. **DI MED-4:** the guide's composite keys and
+  uniques, `NOSUPERUSER`, `security_invoker`, `SECURITY DEFINER`, 0-row vs 42501, the
+  not-an-injection-boundary line, the `''` reason for `NULLIF`, "do not ENABLE RLS on pocket
+  tables" and PgBouncer.
+- **DI LOW-1:** the "bound" wording, and simple protocol tested. **DI LOW-2:** the
+  `pg_backend_pid` check and the deadlock comment. **LB LOW-1:** the `Example` uses
+  `app.actor_id`. **LB LOW-2 / DI LOW-4:** battleboard's shape against v0.16.0. **LB LOW-3:**
+  the statement shape is one multi-column `SELECT set_config(…)`. **LB LOW-4:** the guide's note
+  on translating a missing tenant before the call.
+
+**Owner rulings.** Ratified 2026-10-27 ("all recs"): **R-1 (a)** no snapshot variant;
+**R-2 (a)** refuse empty values, NUL and invalid UTF-8; **R-4 (a)** lowercase dotted custom
+names, with the guardrail wording; **R-5 (a)** `(*Tx).Setting`. Plus: the guide gains the
+cross-tenant shapes and the `ALTER ROLE … SET` warning. During the build the coordinator added
+two guide facts: superusers and `BYPASSRLS` roles bypass RLS even under FORCE (FORCE binds only
+the owner), and `SET LOCAL` outside a transaction block only warns and has no lasting effect,
+with why the helper binds through `set_config` rather than `SET LOCAL`.
+
+**Verification record.**
+- pgxdb: `go build ./...`, `go vet ./...`, `go test -race ./...` pass; gofmt and goimports clean.
+- **Live, Homebrew PostgreSQL 17.4**, a fresh `initdb` (trust auth, superuser `postgres`), each
+  run on a FRESH database, `go test -race -count=1`: bare **544/0/0** (176 top-level tests),
+  and with `POSTGRES_TEST_SCHEMA=gopernicus_schema_test` **544/0/0**. The RLS test RAN (did not
+  skip) in both, all five cases passing; its schemas and roles were gone afterwards.
+- New tests: `TestTransactWithSettings_Refusals` (16 refusals, zero queries: a pool-less `*DB`
+  would panic on `Begin`), `TestValidateSettings_AcceptedNames`, `TestTxSetting_Absent`,
+  `TestSetConfigStatement`, `TestLive_TransactWithSettings_DoesNotLeak` (MaxConns 1,
+  `pg_backend_pid` equal inside and after; commit, error rollback, recovered panic; nesting;
+  `Transact` records nothing), `TestLive_TransactWithSettings_BoundValues` (default and simple
+  protocol), `TestLive_TransactWithSettings_RowLevelSecurity`, and
+  `ExampleDB_TransactWithSettings` (compiled, not run).
+- `make guard` and `make check` pass. `make docs-build` succeeds.
+- **Pre-tag consumer build:** a `GOWORK=off` scratch consumer calling `TransactWithSettings` and
+  `Tx.Setting`, beside authorization pgx v0.22.0, authentication pgx v0.16.0 and jobs pgx v0.7.0,
+  with pgxdb replaced onto this tree, tidies, builds and vets (sdk v0.20.0 selected).
+  **Owner-pending:** the same set from the v0.16.0 tag, from an empty module cache over the
+  proxy.
+
+**Sequencing.** This record owns pgxdb **v0.16.0**. The database-default-ids plan takes
+**v0.17.0** for its PG18 floor, and its PR-1 branches only after the v0.16.0 tag exists.
+
+**Known and deferred.**
+- **pgxdb `live_test.go:68`** (`TestLive_OpenAndMigrate`) still counts every `default`-source
+  ledger row; run the pgxdb live suite on a fresh database.
+- Battleboard's and Segovia's ports are in their own repos.
+
 ## Ambient transactions per datastore instance (published 2026-10-27)
 
 Four annotated tags (not signed) on four modules, plus `workshop/gopernicus/v0.9.2` for the

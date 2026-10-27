@@ -17,6 +17,9 @@ const rollbackTimeout = 5 * time.Second
 type Tx struct {
 	tx  jackpgx.Tx
 	ctx context.Context
+
+	// settings holds what TransactWithSettings applied; nil otherwise.
+	settings map[string]string
 }
 
 // Begin starts a new transaction.

@@ -49,7 +49,7 @@ each module receives fixes. Latest tags at the time of writing:
 | `integrations/cryptids/go-oidc` | v0.2.0 |
 | `integrations/cryptids/go-webauthn` | v0.1.0 |
 | `integrations/cryptids/golang-jwt` | v0.3.0 |
-| `integrations/datastores/pgxdb` | v0.15.0 |
+| `integrations/datastores/pgxdb` | v0.16.0 |
 | `integrations/datastores/turso` | v0.10.0 |
 | `integrations/email/sendgrid` | v0.5.0 |
 | `integrations/encoding/rsc-qr` | v0.1.0 |
