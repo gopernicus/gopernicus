@@ -6,8 +6,7 @@ Four annotated tags (not signed) on four modules. Each was cut at its PR's squas
 on `main`, pushed, THEN polled on the proxy, and cold-verified from a scratch consumer
 (`GOWORK=off`, an empty module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`,
 `go build <module>/...`). No sdk tag; one migration (0027, conditional). Design and rulings:
-`plans/s4d-session-machine-governance.md` (ratified 2026-10-26; the executed copy is added
-after the owner drill). Under the owner's 2026-10-23 process ruling this section is the whole
+`plans/s4d-session-machine-governance.md` (ratified 2026-10-26; executed copy in `plans/`). Under the owner's 2026-10-23 process ruling this section is the whole
 record: there is no handoff file and no manifest. The handoff notes below say what a host does
 on upgrade, and hosts adopt them once, at the roadmap's end. The operator surface is the docs
 site: the authentication page's *Added by S4d*, *Production posture* ("Added by S4d" and the
@@ -262,7 +261,7 @@ commits on the PR.
   - Every example builds, vets and tests at `GOWORK=off` (the auth-cms server package three runs, all green);
     `pnpm build` in `workshop/documentation` succeeds.
 
-**Owner drill: PENDING — recorded at merge.**
+**Owner drill: WAIVED 2026-10-26** by the owner. The owner booted the auth-cms build from `main` (development, port 8094, `AUTH_SERVICE_ACCOUNT_STATUS=1`) and the boot posture lines held (`mfa_required=admins … api_keys=denied`, `registration=open source=default`, `api_key_max_ttl=unlimited source=default`); no drill requests were run. Verification §3 from the tags (auth-cms 13/13; production-baseline on PostgreSQL 17 with ledger 0034) is the acceptance evidence. Executed plan: `plans/s4d-session-machine-governance.md`.
 
 **Owner rulings.** Ratified 2026-10-26 ("ratified"): **R-1 (a)** chunked keyset batches of 500 users per transaction,
 active users only, re-runnable, `started`/`success`/`failure` rows with partial counts; **R-2 (a)** API keys denied at
