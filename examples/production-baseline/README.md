@@ -47,7 +47,10 @@ runner) and `workshop/`. There is no `internal/`.
 8. `authentication.New` with the security-event rail wired,
    `PasswordFlowsDisabled`, delivery `off`, the pgxdb limiter, the identifier
    keyer from the keys, `Secure` session cookies, `AllowedOrigins` from
-   `PUBLIC_BASE_URL`, the one external provider, and
+   `PUBLIC_BASE_URL`, the one external provider with `MaxAuthenticationAge`
+   from `IDP_MAX_AUTHENTICATION_AGE` (default 12 h: a token whose holder signed
+   in at the provider longer ago is 401 on every request; this host wires no
+   native sessions, so `AUTH_IDLE_TIMEOUT` is not read), and
    `WithAuditWriteObserver` logging lost security-event rows at ERROR,
    throttled to one line a minute; `WithAdministration` with a
    `UserAdminCheck` admitting the global `admin` role and
@@ -120,7 +123,7 @@ never migrates. Its files are the host's:
 | `0032_passkey_credentials.sql` | `pockets/authentication/stores/pgx/migrations` `0025`, renumbered; required only when `WithPasskeys` is wired (applied here ahead of time, so passkeys can be toggled on later) |
 | `0033_totp.sql` | `pockets/authentication/stores/pgx/migrations` `0026`, renumbered; required only when `WithTOTP` is wired (applied here ahead of time, so TOTP can be toggled on later) |
 | `0034_service_account_status.sql` | `pockets/authentication/stores/pgx/migrations` `0027`, renumbered; required only when `AdministrationConfig.ServiceAccountStatus` is set (applied here ahead of time, so the service-account status can be turned on later) |
-| `0035_session_activity.sql` | `pockets/authentication/stores/pgx/migrations` `0029`, renumbered; required only when `SessionsConfig.IdleTimeout` is set (applied here ahead of time, so idle expiry can be turned on later; on lock timeout, re-run `make migrate`) |
+| `0035_session_activity.sql` | `pockets/authentication/stores/pgx/migrations` `0029`, renumbered; required only when `SessionsConfig.IdleTimeout` is wired (this host wires none: it signs users in at the provider and mints no native sessions, so `AUTH_IDLE_TIMEOUT` is not read; the copy keeps the ledger whole for a host that does; on lock timeout, re-run `make migrate`) |
 
 When a store ships a new migration, copy it in as the next number. Never
 renumber a file once it is applied: the filename is its ledger identity.

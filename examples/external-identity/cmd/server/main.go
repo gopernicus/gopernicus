@@ -104,6 +104,9 @@ func newHandler(ctx context.Context, origin string, trustedProxyCount int, mode 
 	// RequireMFA on every provider is this host's MFA posture: a token whose
 	// provider asserted no second factor is refused on every route before it
 	// provisions a user, and production boots without an acknowledgement.
+	// MaxAuthenticationAge is left zero (unbounded) here; a real provider
+	// would set it, e.g. MaxAuthenticationAge: 12 * time.Hour, to cap how long
+	// ago the token's holder signed in at the provider (auth_time, else iat).
 	store := memstore.New(log)
 	engine, err := authlogic.NewExternalAuthenticator(store.Repositories(), authlogic.ExternalConfig{
 		Providers: []authlogic.ExternalProvider{

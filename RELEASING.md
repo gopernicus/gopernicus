@@ -31,6 +31,285 @@ whole, into that ledger and applies it to that database.
 under a full local `make check` ("i/o timeout, want deadline exceeded") and passed on rerun.
 It looks flaky under load; nothing was tagged for it.
 
+## Session lifetime (SOC 2 slice S4d part 2 — published 2026-10-27)
+
+Three annotated tags (not signed) on three modules. Each was cut at its PR's squash-merge commit
+on `main` after a green `live-stores` dispatch there, pushed, THEN polled on the proxy, and
+cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache, `proxy.golang.org`,
+`sum.golang.org`, `go mod verify`, `go build <module>/...`, a consumer pinning `go 1.26.10`). No
+sdk tag and no views tag; one migration (0029, conditional). Design and rulings:
+`plans/s4d2-session-lifetime.md` (ratified 2026-10-26; executed copy in `plans/`). Under the
+owner's 2026-10-23 process ruling this section is the whole record: there is no handoff file and
+no manifest. The operator surface is the docs site: the authentication page's *Added by S4d part
+2*, *Production posture* ("Added by S4d part 2" and the Revocation SLA rows), *Keys and rotation*
+("Revoking every session at once", idle beside it) and *Operations runbooks* ("Enable an idle
+timeout on a live fleet", "Re-enable an idle timeout after a gap", "Migration 0029 lock timeout:
+re-run"). The reference is the authentication README's "Session lifetime (SOC 2 S4d part 2)" and
+the two store READMEs' 0029 sections.
+
+| Step | Tag | Commit | PR | Cold verification |
+|---|---|---|---|---|
+| 1 | `pockets/authentication/v0.32.0` | `345ef68d` | #221 + #222 (PR-1) | OK; set A |
+| 2 | `pockets/authentication/stores/pgx/v0.16.0` | `1b56c5c4` | #223 (PR-2) | OK; set B, gps-three-sixty shape, set C |
+| 2 | `pockets/authentication/stores/turso/v0.15.0` | `1b56c5c4` | #223 (PR-2) | OK; set B, set C |
+
+Order: #221 merged at `fb659449` without the M2 dedupe, which followed as #222 (`345ef68d`) BEFORE
+the tag; `live-stores` went green on `main` (run 40540225155) and tag 1 was cut at `345ef68d`.
+PR-2 then repinned both stores to core v0.32.0 (explicit `GOWORK=off go get`, then tidy; sdk stays
+v0.20.0); #223 merged at `1b56c5c4`, `live-stores` went green on `main` (run 40554986831), and
+both store tags were cut there. Every module ships MINOR under the v0 convention. Both stores
+require authentication v0.32.0 and sdk v0.20.0; core requires sdk v0.20.0. The tag messages name
+rows 2, 4, 8 and 9 (below).
+
+**The MVS sets.** Each tag was cold-verified when it was cut; every set selected sdk v0.20.0.
+- **Set A** (step 1): authentication v0.32.0 + the RELEASED stores pgx v0.15.0 / turso v0.14.0 + views/goth v0.9.0
+  built. No lockstep: no existing port gained or changed a method. The released pgx v0.15.0 `SessionStore` does NOT
+  implement `session.ActivityRepository`, so `IdleTimeout` on it refuses with `ErrIdleTimeoutRequires`.
+- **Set B** (step 2): authentication v0.32.0 + pgx v0.16.0 + turso v0.15.0 + pgxdb v0.14.0 + datastores/turso v0.9.0
+  built.
+- **gps-three-sixty shape** (step 2): authentication v0.32.0 + pgx v0.16.0 + the authorization goredis store v0.6.0
+  built.
+- **Set C** (step 2): views/goth v0.9.0 + ui/goth v0.2.1 + rsc-qr v0.1.0 + go-webauthn v0.1.0 + set B (an
+  auth-cms-shaped consumer) built.
+- **This PR (from the tags):** auth-cms, production-baseline and external-identity at `GOWORK=off` from an EMPTY module
+  cache over `proxy.golang.org` + `sum.golang.org`: `all modules verified` in each, and each server binary built (see the
+  verification record).
+
+**Not tagged.** sdk, views/goth (the page model is untouched; MVS lifts its core), `pockets`,
+`workshop/gopernicus` (no new P-rule: the constructor refusals and WARNs are the check), ui/goth,
+pgxdb (R-1 (b) is its own train), the examples, and every other module. Nothing retracts.
+
+**Upgrade notes.** Eleven rows. Two breaks (row 2, an `AccessTokenTTL` above `RefreshTTL` refuses
+boot; row 4, the `Live()` floor under an overridden sensitive group); one conditional boot failure
+(rows 1/8: `AUTH_IDLE_TIMEOUT` set without migration 0029); everything else opt-in, additive or a
+WARN. The "Read first" box, rows 2–5, 7, 9 and 11 and the paragraph under the table are the
+plan's, verbatim; rows 1, 6, 8 and 10 are amended for the as-built #221–#223 and this PR (the
+plan's text is quoted under the table). The pin bullet in the box is appended.
+
+> **Read first:** `grep -rnE 'AccessTokenTTL|AUTH_ACCESS_TOKEN_TTL|RefreshTTL|AUTH_REFRESH_TTL|BundledRouteAuth|
+> WithRouteAuthentication|PrincipalStrategy\(|RevocationFailOpen|ExternalProvider\{|session\.SessionRepository' --include='*.go'`.
+> **By host shape:** every host → rows 2, 3, 7; hosts overriding `BundledRouteAuth` → row 4 (the break); external-engine (IdP)
+> hosts → rows 5, 6; store hosts wanting idle → rows 1, 8, 9, 11; hosts with their own `SessionRepository` → row 1 (implement
+> the interface or leave idle off).
+> - **Pins (appended):** pin **authentication v0.32.0**; a store host pins **stores pgx v0.16.0** or **turso v0.15.0**
+>   (both require core v0.32.0 and sdk v0.20.0). views/goth stays **v0.9.0**; sdk, ui/goth and every other module are
+>   unchanged.
+
+| # | Flip | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | **(amended)** `SessionsConfig.IdleTimeout` (`AUTH_IDLE_TIMEOUT`); `session.ActivityRepository`; `session_idle_expired` | opt-in; wired + 0029 absent → BOOT FAILURE naming `0029_session_activity.sql` (`ErrIdleTimeoutSchemaMissing`; 5 s probe, `sdk.ErrNotFound` only, anything else `sdk.ErrUnavailable`; setting the env alone flips it); wired on a store without the interface → `ErrIdleTimeoutRequires`; `<= AccessTokenTTL` refuses (`ErrIdleTimeoutBelowAccessTokenTTL`), `< 2 × AccessTokenTTL` WARNs `idle_granularity`, `>= RefreshTTL` WARNs `idle_never_fires`; grandfathered rows are never judged until stamped; first-party only; the idle 401 is the generic refresh 401 | leave zero | authentication@v0.32.0 |
+| 2 | **BREAKING:** `AccessTokenTTL > RefreshTTL` refuses boot in every mode | an incoherent pair that booted on v0.31.0 stops; the error names both fields | fix the pair | authentication@v0.32.0 |
+| 3 | production `AccessTokenTTL > 1 h` → `posture_warning=access_token_ttl_long`; the `auth: session lifetime` boot line | one WARN line; no behaviour change | — | authentication@v0.32.0 |
+| 4 | **BREAKING (R-2):** the `Live()` floor under `SessionHydration`, `SessionSecurityReads`, `UserAdministration`, `MachineLifecycle`, `CredentialManagement` | an override lowered to `Stateless()`/`LiveOnMutation()` now does one session read per call (DB QPS rises) and, for external tokens under `RevocationFailOpen`, fails closed on those groups during an IdP outage; default postures unchanged | `BundledRouteAuthLivenessFloorRelaxed` (production WARN) | authentication@v0.32.0 |
+| 5 | `ExternalProvider.MaxAuthenticationAge`; `external_subject_denied reason=authentication_age_exceeded\|authenticated_at_missing`; production WARN when no checker and no bound | opt-in; a bound denies tokens whose `auth_time`/`iat` is older than it — `iat`-only providers get a token-age bound | leave zero | authentication@v0.32.0 |
+| 6 | **(amended)** the production `RevocationFailOpen` WARN becomes a `posture_waiver` line; per-provider `auth: external provider lifetime` boot line; the age-denial event is recorded **once per token** (M2), the denial itself on every request | log alerts keyed on "external provider revocation fails open on the default liveness tier" stop matching; an alert counting `external_subject_denied` rows counts tokens, not requests | re-key on `posture_waiver=RevocationFailOpen` | authentication@v0.32.0 |
+| 7 | `IdleTimeout`/`MaxAuthenticationAge` mirrors in `.env.example`; `config_env_test.go` rows | none | — | authentication@v0.32.0 |
+| 8 | **(amended)** **migration 0029** (`sessions.last_rotated_at`, nullable, `lock_timeout 5s` on pgx, excluded from the blanket probe), ledger copy **0035** (byte-identical, G34); `ActivityRepository` filled on both `SessionStore`s (pool path; pgx `ProbeSchema` reads `pg_attribute` through `to_regclass`, decoy-safe) | apply 0029 before setting row 1's env; otherwise optional; on lock timeout re-run `make migrate`; turso holds the write lock briefly | — | stores pgx@v0.16.0, turso@v0.15.0 |
+| 9 | stores repin core v0.31.0 → v0.32.0 | MVS lifts a store host's core (rows 2–6 arrive with it) | — | stores pgx@next minor, turso@next minor |
+| 10 | **(amended)** auth-cms `authmem` implements `ActivityRepository` and passes `AUTH_IDLE_TIMEOUT` through (commented in its `.env.example`, #221); the baseline ledger copy 0035 (#223); **the baseline sets `MaxAuthenticationAge` on its provider** (`IDP_MAX_AUTHENTICATION_AGE`, default 12 h; E4 = (a), this PR) and names `AUTH_IDLE_TIMEOUT` / `AUTH_ACCESS_TOKEN_TTL` as not read (it is external-only: no native sessions); external-identity carries `MaxAuthenticationAge` commented in `cmd/server/main.go` and `.env.example` | example behaviour | — | examples (untagged) |
+| 11 | re-enabling idle after a disabled window re-judges stale stamps | at most one forced re-login per session; the runbook's NULL reset avoids it | run the reset first | docs |
+
+Row 2 and row 4 are the breaks; row 1/8 is the conditional boot failure. Every module ships MINOR under v0; tag messages
+name rows 2, 4, 8, 9. **Not touched:** sdk, views/goth, `pockets`, workshop (no P-rule; the constructor checks are the
+posture), ui/goth, any existing port's method set, `sessionColumns`.
+
+The plan's text for the amended rows was:
+- **Row 1:** "`SessionsConfig.IdleTimeout` (`AUTH_IDLE_TIMEOUT`); `session.ActivityRepository`; `session_idle_expired` |
+  opt-in; wired + 0029 absent → BOOT FAILURE naming 0029 (setting the env alone flips it); wired on a store without the
+  interface → `ErrIdleTimeoutRequires`; `<= AccessTokenTTL` refuses; grandfathered rows are never judged until stamped;
+  first-party only | leave zero | authentication@v0.32.0".
+- **Row 6:** "the production `RevocationFailOpen` WARN becomes a `posture_waiver` line; per-provider `auth: external
+  provider lifetime` boot line | log alerts keyed on "external provider revocation fails open on the default liveness
+  tier" stop matching | re-key on `posture_waiver=RevocationFailOpen` | authentication@v0.32.0". M2 (owner ruling (a),
+  #222) added the per-token event.
+- **Row 8:** "**migration 0029** (`sessions.last_rotated_at`, nullable, `lock_timeout 5s`, excluded from the blanket
+  probe), ledger copy at the next free number; `ActivityRepository` filled on both `SessionStore`s (pool path) | apply 0029
+  before setting row 1's env; otherwise optional; on lock timeout re-run `make migrate`; turso holds the write lock
+  briefly | — | stores pgx@next minor, turso@next minor".
+- **Row 10:** "auth-cms `authmem` implements `ActivityRepository`; both examples' `.env.example` carry `AUTH_IDLE_TIMEOUT`
+  commented; the baseline ledger copy; external-identity gets `MaxAuthenticationAge` commented | example behaviour | — |
+  examples (untagged)". E4 = (a) made the baseline SET the bound rather than comment it; the baseline wires no
+  `SessionsConfig`, so its `.env.example` lists `AUTH_IDLE_TIMEOUT` as not read.
+
+**The 0029 rule.** `sessions.last_rotated_at` is required ONLY when `AUTH_IDLE_TIMEOUT`
+(`SessionsConfig.IdleTimeout`) is wired. Unwired and unmigrated, the host boots and the column is
+never read (`Rotate` never names it); wired and unmigrated, it refuses boot naming
+`0029_session_activity.sql` (`ErrIdleTimeoutSchemaMissing`; the probe runs under a 5 s deadline
+and maps only `sdk.ErrNotFound`, anything else to `sdk.ErrUnavailable`). A host may apply 0029
+ahead of time; an old binary (core v0.31.0 on stores pgx v0.15.0 / turso v0.14.0) keeps working on
+a migrated table, because every column list is explicit. On pgx 0029 opens with `SET LOCAL
+lock_timeout = '5s'` (the `ALTER` takes `ACCESS EXCLUSIVE` on `sessions`): **on lock timeout,
+re-run `make migrate`** — the failed file records nothing and the re-run applies it. On turso the
+`ALTER` briefly holds the database write lock. The baseline ledger carries it as
+`0035_session_activity.sql` (byte-identical, G34); the baseline ledger now ends at 0035. S4c-2
+still holds core migration 0028 (unclaimed in the ledger).
+
+**The grandfather rule.** A session is judged on `last_rotated_at` when it is stamped; on
+`created_at` when it was never rotated (`rotation_count = 0`: a login nobody refreshed is
+genuinely idle); and NOT judged while it carries rotations but no stamp — a row rotated while idle
+was off — until its first wired refresh stamps it (`RefreshTTL` still bounds it). Enabling idle on
+a live fleet therefore logs nobody out at once. Re-enabling after a disabled window re-judges the
+stamps left from before it (at most one forced re-login per session); to avoid that, reset them
+BEFORE setting the env again:
+
+```sql
+UPDATE sessions SET last_rotated_at = NULL WHERE session_profile = 'first_party';
+```
+
+The NULL reset is the only supported manual write to `last_rotated_at`.
+
+**Handoff notes — what a host does on upgrade, by host shape** (applied at the roadmap's end).
+Pins: sdk v0.20.0 (unchanged); authentication **v0.32.0**; stores pgx **v0.16.0** / turso
+**v0.15.0** for a store host; views/goth stays **v0.9.0**. Repin with explicit `GOWORK=off go get
+<module>@<tag>`, then `GOWORK=off go mod tidy`. With the defaults (idle off, access 15 m, refresh
+7 d, floor enforced on the default postures, no age bound) nothing visible changes.
+- **Every host** (rows 2, 3, 7). Run the Read-first grep. Check `AccessTokenTTL` ≤ `RefreshTTL`
+  (else boot refuses); read the `auth: session lifetime` boot line; production above 1 h WARNs.
+- **Hosts overriding `BundledRouteAuth`** (row 4, the break). An override lowered below `Live()`
+  on `/auth/me`, the session security reads, credential management, the machine lifecycle or user
+  administration now pays one session read per call, and fails closed (503) for an external token
+  under `RevocationFailOpen` during an IdP outage. Accept it, or set
+  `BundledRouteAuthLivenessFloorRelaxed` (production logs the waiver).
+- **External-engine (IdP) hosts** (rows 5, 6). Set `MaxAuthenticationAge` on each provider
+  (Firebase asserts `auth_time`: an absolute cap on the provider session; go-oidc/auth0: an
+  `auth_time` cap only when the IdP asserts it, request it with `max_age`, else a token-age bound).
+  Re-key alerts on `posture_waiver=RevocationFailOpen`. Idle does not apply (no native sessions).
+- **Store hosts wanting idle** (rows 1, 8, 9, 11). Repin the store (MVS lifts core), apply 0029
+  pre-boot, then set `AUTH_IDLE_TIMEOUT` above `AccessTokenTTL`; the expected logout wave is zero.
+  Refresh on demand (on a 401), not on a timer: a timer-driven SPA is never idle.
+- **gps-three-sixty** (native Google OAuth, bearer SPA, pgx + goredis): rows 2, 3, 8, 9 at repin;
+  recommended `AUTH_IDLE_TIMEOUT` between 1 h and 12 h with `AUTH_REFRESH_TTL` 24 h (apply 0029
+  first); the shape built in step 2. Rows 4–6 do not apply.
+- **battleboard**: as gps-three-sixty; `RotateAt`/`DeleteIfIdle` run on the pool path exactly as
+  `Rotate` does today (its RLS scope is an open question, `NEXT.md`).
+- **Hosts with their own `SessionRepository`** (row 1): implement `session.ActivityRepository` and
+  run `storetest` (the `SessionActivity` sub-suite skips when the interface is absent), or leave
+  idle off.
+- **React/SPA hosts** (the JSON contracts). An idle refresh is the generic 401
+  `{"message":"unauthorized","code":"unauthenticated"}`, the same body as a garbage token: a client
+  cannot show "signed out for inactivity". An over-age external token is the provider's 401 on
+  every request.
+- **Examples (this PR).** Every example builds, vets and tests at `GOWORK=off` on the S4d part 2
+  tags. Pins moved (explicit `GOWORK=off go get`, then `GOWORK=off go mod tidy`): `auth-cms`
+  authentication v0.31.0→v0.32.0 (views/goth stays v0.9.0); `production-baseline` authentication
+  v0.31.0→v0.32.0 and authentication stores/pgx v0.15.0→v0.16.0; `external-identity`
+  authentication v0.31.0→v0.32.0. `cms`, `goth-showcase`, `jobs-minimal` and `minimal` pin no
+  moved module. The baseline sets `MaxAuthenticationAge` (E4 = (a)), so its production test is
+  back to the strict zero-WARN assertion PR-1 had loosened.
+
+**The review record.** Every PR passed a code review before merge; the fixes were folded as
+follow-up commits on the PR.
+- **#221 (PR-1), lead-backend, ship-with-edits.** Folded: **E1** storetest activity-read
+  equivalence (`GetByRefreshHashWithActivity` answers exactly what `GetByRefreshHash` does, plus
+  the stamp); **E2** a single-read `reResolveFrom`, and the CAS-mismatch WARN + 500 for a
+  `DeleteIfIdle` that lost on a row that did not move; **L3**, **L4**, **L6**. **L5** skipped.
+  **M2**: owner ruled (a), one age-denial event per token — shipped as #222 before the tag.
+  Deviations upheld by the review: (a) `reResolveIdle`; (b) `idle_source=config|default`.
+- **#223 (PR-2), data-integration, ship.** **LOW-1** (the mapper field-copy test) and **LOW-3**
+  (the never-backfill README note) folded. **LOW-2** (pgx `Rotate`/`RotateAt`/`ConsumeGrace` lack
+  turso's `session_profile IN ('', 'first_party')` filter) and **LOW-4** (the migration-set rule
+  wording, ruled below) are carried in `NEXT.md` / ruled.
+
+**Verification record.**
+- `make guard` and `make check` pass on this PR's repinned tree. S4d part 2 adds no guard and no
+  P-rule. `live-stores` green on `main` before each tag (runs 40540225155 and 40554986831).
+- **Cold verification:** every tag above; sets A, B, the gps-three-sixty shape and C as listed.
+- **§1, the real auth-cms binary over HTTP** (#221, development, access 1 m, idle 90 s):
+  `AUTH_IDLE_TIMEOUT=30s` and `AUTH_ACCESS_TOKEN_TTL=200h` both refuse boot; the boot line appears with the `idle_granularity` WARN; a
+  session refreshed every 50 s stays **200**; an idle session gets **401** at 100 s with the same
+  body as a garbage token; a never-refreshed session is judged on `created_at` → **401**. No
+  reuse, theft or CAS-mismatch WARN; no token in the logs.
+- **§2, the store legs** (#223). Live pgx on a fresh native PostgreSQL 17: **520/0/1**, bare and
+  with `POSTGRES_TEST_SCHEMA=s4d2`, against the v0.32.0 tag; the 17 `SessionActivity` storetest
+  cases run and pass. turso `-tags=integration` on the local-file driver **850/0/0**; the
+  libSQL-server leg is WAIVED, as in part 1. 0029 under a held `ACCESS SHARE` lock fails after
+  ~5.0 s (`55P03`) and records nothing; the re-run applies it. An old binary (core v0.31.0 + pgx
+  v0.15.0 / turso v0.14.0) on a migrated schema: login + 2 refreshes OK, the stamp stays NULL.
+  production-baseline on a fresh PG17: the ledger applies through 0035 and the server boots with
+  the session-lifetime line.
+- **§3, from the tags (this PR).** Both binaries built at `GOWORK=off` from the repinned tree (and again from an empty
+  module cache, above).
+  `go version -m` on auth-cms reads `pockets/authentication v0.32.0`,
+  `pockets/authentication/views/goth v0.9.0`, `pockets/authorization v0.31.0`, `sdk v0.20.0`; on
+  the baseline `pockets/authentication v0.32.0`, `pockets/authentication/stores/pgx v0.16.0`,
+  `sdk v0.20.0`.
+  - **auth-cms** (development, the in-memory store, the console mailer, port 8096,
+    `AUTH_ACCESS_TOKEN_TTL=1m AUTH_IDLE_TIMEOUT=90s`): boot line `idle_timeout=1m30s
+    idle_source=config … live_floor=enforced` plus the `idle_granularity` WARN. Register **201**,
+    verify with the console-mailer code **200**, cookie login **200**, `/auth/me` **200**; a
+    cookie refresh 53 s after login **200**; then idle 95 s, the next refresh **401**
+    `{"message":"unauthorized","code":"unauthenticated"}` — byte-identical to a garbage refresh
+    token's 401. No reuse/theft/CAS-mismatch WARN, no ERROR, no JWT in the log.
+  - **production-baseline** on a fresh native PostgreSQL 17.4 cluster (port 55444), the ledger
+    applied through `0035_session_activity.sql` by the baseline's migrator, the development
+    issuer. Default boot: `auth: external provider lifetime provider=idp
+    max_authentication_age=12h0m0s revocation_checker=none fail_open=false` and `auth: session
+    lifetime … idle_timeout=off idle_source=default …`. Then with `IDP_MAX_AUTHENTICATION_AGE=1s`:
+    a fresh single-factor token on `/auth/me` **200** (provisioned); the same token 83 s later
+    (past the bound + the 60 s leeway) **401**, twice; the admin route
+    `GET /auth/admin/security-events?event_type=external_subject_denied`, called by an external
+    admin (bootstrapped with `cmd/bootstrap`) on a fresh AAL2 token, **200** with exactly ONE row,
+    `external_subject_denied` `blocked` `{"provider":"idp","reason":"authentication_age_exceeded"}`
+    — two denied requests, one event (M2). This is the bound the part-1 record promised for "an
+    external admin's IdP session survives revoke-all".
+  - The plan's baseline `$P` idle legs were not run: the baseline is external-only and wires no
+    `SessionsConfig` (as-built, below). The refusal on a wired + unmigrated store is covered by
+    the pgx live pocket test (§2).
+  - Every example builds, vets and tests at `GOWORK=off`; `pnpm build` in
+    `workshop/documentation` succeeds.
+
+**Owner rulings.** Ratified 2026-10-26 ("ratified"): **R-1 (b)** the `QuerierFrom` fix is a
+separate small PR outside this slice (inventory in `NEXT.md`); **R-2 (a)** the `Live()` floor plus
+`BundledRouteAuthLivenessFloorRelaxed`; **R-3 (a)** production WARN above 1 h, `AccessTokenTTL >
+RefreshTTL` refuses; **R-4 (a)** delegated `aal`/`methods` carried to part 3; **R-5 (a)** the
+per-provider `MaxAuthenticationAge` semantics documented. Idle expiry on refresh keeps the pinned
+generic 401 (lead default; the owner did not rule). During the build (2026-10-27): **M2 = (a)**,
+one age-denial event per token (#222); **the CAS-mismatch sentinel stays unexported**; **E4 = (a)**,
+the baseline sets `MaxAuthenticationAge`; **the migration-set rule:** shipped sets are additive-only
+defaults — `ADD COLUMN` is fine for opt-in features, never destructive — and hosts own their schema.
+
+**As-built deviations a host can see.**
+- **`reResolveIdle`.** A lost `DeleteIfIdle` re-reads once: a row already gone answers the generic
+  401 with no further event; an unchanged row (the CAS mismatched on a row that did not move) logs
+  the CAS-mismatch WARN and answers 500; a row a concurrent refresh moved goes on to the grace lane.
+- **`idle_source` has no `env` value** (G33): the pocket never reads the process environment, so
+  an env value and a literal are both `config`; the plan's §2 `config|env|default` is
+  `config|default`.
+- **The age-denial event is deduped per token** (M2): every request with an over-age token is
+  denied, but `external_subject_denied` for `authentication_age_exceeded` /
+  `authenticated_at_missing` is recorded once per token (keyed by its SHA-256 in the
+  `LoginRecordCache` store, until the token expires, clamped to [1 m, 24 h]; a cache fault records
+  it again).
+- **pgx `ProbeSchema` reads `pg_attribute` through `to_regclass`**, so a `last_rotated_at` column
+  in a decoy schema on the search path never satisfies it.
+- **turso `sessionActivityRow` duplicates `sessionRow`'s fields**: `ScanStruct` does not flatten
+  embedded structs.
+- **Ledger 0035**, not 0029's own number: the baseline ledger was at 0034, and S4c-2 still holds
+  core 0028 unclaimed.
+- **The baseline idle legs were dropped**: production-baseline is external-only (no native
+  sessions, no `SessionsConfig`), so Verification §2/§3's `$P` idle legs became the
+  `MaxAuthenticationAge` denial above.
+
+**Known and deferred.**
+- **The Turso libSQL-server leg was WAIVED**, as in part 1; the local-file driver run
+  (`-tags=integration`, 850/0/0) is accepted as Turso coverage; CI's `live-stores` skips Turso.
+- **R-1, the `QuerierFrom` cross-instance defect,** is its own PR (`NEXT.md` carries the
+  fifteen-site inventory and the instance-blind nested check).
+- **LOW-2:** pgx `Rotate`/`RotateAt`/`ConsumeGrace` lack turso's `session_profile` filter
+  (recommendation: pgx gains it plus a storetest case).
+- **Part 3:** the key-ring JWT signer with `kid`, `KeyedEncrypter`, `iss`/`aud` (M7); the breach
+  checker and escalating lockout (M8); `aal`/`methods` on delegated tokens (R-4);
+  `Identity.AuthTimeAsserted` (R-5, an sdk minor). **S4c-2** takes migration 0028.
+- **Follow-ups** (the plan's Notes): bounded deadlines and `ErrNotFound`-only mapping for the
+  EXISTING 0025/0026 probes; an `/auth/sessions` idle marker; a distinct idle refresh code; a
+  pre-expiry idle signal. The battleboard RLS question stays open.
+- **Residuals.** After idle expiry an issued access JWT passes `Stateless()` routes and
+  `LiveOnMutation` safe reads for at most `AccessTokenTTL`; a client that refreshes on a timer is
+  never idle; `GET /auth/sessions` may list idle-dead rows; logout by refresh token of an idle
+  session still answers 204; delegated OAuth2 connections keep `OAuth2Config.SessionTTL`;
+  `MaxAuthenticationAge` on an `iat`-only provider bounds token age only, and on a provider
+  sending neither claim denies every token (boot cannot detect it).
+
 ## Session and machine governance (SOC 2 slice S4d part 1 — published 2026-10-26)
 
 Four annotated tags (not signed) on four modules. Each was cut at its PR's squash-merge commit

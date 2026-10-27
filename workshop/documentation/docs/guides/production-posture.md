@@ -251,6 +251,48 @@ source=config|default|acknowledged`, and the MFA posture line gains
   `WithTOTP`, or override `BundledRouteAuth.MachineLifecycle`). `guard --posture` gains no
   rule.
 
+**Added by S4d part 2** (authentication v0.32.0, stores pgx v0.16.0 / Turso v0.15.0; SOC 2
+slice S4d part 2). Session lifetime: every control is host opt-in, with two exceptions: an
+`AccessTokenTTL` longer than `RefreshTTL` now refuses boot, and a `BundledRouteAuth` override
+lowered below `Live()` on a sensitive group is raised back to it.
+
+| Module | Refuses | Sentinel | Acknowledgement |
+|---|---|---|---|
+| authentication (all modes) | `AccessTokenTTL > RefreshTTL` after defaults (an access token would outlive its session) | `ErrAccessTokenTTLExceedsRefreshTTL`, naming both | none — fix the pair |
+| authentication (all modes) | `SessionsConfig.IdleTimeout` (`AUTH_IDLE_TIMEOUT`) negative or at or below `AccessTokenTTL` (idle would always fire) | `ErrIdleTimeoutBelowAccessTokenTTL` | none |
+| authentication (all modes) | `IdleTimeout` set on a `Repositories.Sessions` without `session.ActivityRepository`; set with migration 0029 absent (probe under a 5 s deadline) | `ErrIdleTimeoutRequires`; `ErrIdleTimeoutSchemaMissing`, naming `0029_session_activity.sql` | none — repin the store (pgx v0.16.0 / Turso v0.15.0) and apply 0029 pre-boot, or leave it unset (the column is then never read) |
+| authentication (all modes) | a negative `ExternalProvider.MaxAuthenticationAge` | `sdk.ErrInvalidInput` | none |
+
+**The boot lines.** Every `New` logs `auth: session lifetime access_token_ttl=<d>
+refresh_ttl=<d> idle_timeout=off|<d> idle_source=config|default activity=refresh_rotation
+idle_scope=first_party live_floor=enforced|relaxed`, and each external provider logs `auth:
+external provider lifetime provider=<name> max_authentication_age=off|<d>
+revocation_checker=wired|none fail_open=<bool>`.
+
+- **Idle expiry.** `IdleTimeout` ends a first-party session with no refresh rotation within
+  it, judged at refresh only (a generic 401, `session_idle_expired`). Under twice
+  `AccessTokenTTL` it WARNs `idle_granularity`; at or above `RefreshTTL` it WARNs
+  `idle_never_fires`. Enabling it on a live fleet logs nobody out at once (the grandfather
+  rule); a client that refreshes on a timer is never idle. *Operations runbooks*, "Enable an
+  idle timeout on a live fleet".
+- **The access-token ceiling.** In production an `AccessTokenTTL` above 1 h
+  (`DefaultAccessTokenTTLCeiling`) logs `posture_warning=access_token_ttl_long` — a WARN,
+  never a refusal.
+- **The liveness floor.** `SessionHydration`, `SessionSecurityReads`, `CredentialManagement`,
+  `MachineLifecycle` and `UserAdministration` keep a `Live()` floor under an override; a
+  lowered override does one session read per call and, for an external token under
+  `RevocationFailOpen`, answers 503 on those groups during a provider outage.
+  `BrowserConfig.BundledRouteAuthLivenessFloorRelaxed` restores the `Stateless()` floor and
+  logs `posture_waiver=BundledRouteAuthLivenessFloorRelaxed` in production.
+- **Authentication age.** `ExternalProvider.MaxAuthenticationAge` denies, on every request, a
+  token whose holder authenticated longer ago (`auth_time`, else `iat`; 60 s leeway):
+  `external_subject_denied reason=authentication_age_exceeded`, or
+  `authenticated_at_missing`. On a provider asserting `auth_time` it caps the provider's
+  session; on an `iat`-only provider it bounds token age only. Production with no
+  `RevocationChecker` and no bound WARNs `external_authentication_age=unbounded`; production
+  `RevocationFailOpen` now logs `posture_waiver=RevocationFailOpen` (re-key alerts on the old
+  WARN text). `guard --posture` gains no rule.
+
 ## Retention (S3)
 
 Every row class the pockets write has an owner-set lifetime, each disposal is bounded, and the
@@ -479,8 +521,12 @@ the zero value: safe methods skip the session read for first-party tokens.
 | Password change, reset, set or remove (revokes every session and grant) | immediate | up to `AccessTokenTTL` | immediate |
 | Refresh-token reuse detected | the session is burned at once; unconditional WARN even with no audit rail | — | — |
 | API key revoked | immediate (every API-key authentication reads the row) | immediate | immediate |
-| External identity provider revokes or disables the user | mutations re-check per the provider's revocation checker; providers without one are not re-checked | up to the token's `exp` (the framework imposes no maximum accepted lifetime today) | per route |
+| External identity provider revokes or disables the user | mutations re-check per the provider's revocation checker; providers without one are not re-checked | up to the token's `exp`, or `MaxAuthenticationAge` past the holder's `auth_time` when the provider sets one | per route |
 | Local deactivation of an external-provider user | immediate on every request (`users.Get` is never cached) | immediate | immediate |
+| Idle expiry (`SessionsConfig.IdleTimeout`, first-party sessions; authentication v0.32.0) | the refresh token is dead at its next refresh (row deleted, `session_idle_expired`); a session rotated before idle was wired is not judged until its first wired refresh stamps it | up to `AccessTokenTTL` for an outstanding access JWT | immediate (the floored sensitive groups included) |
+| Access-token window (`AccessTokenTTL`) | bounded by `RefreshTTL` (a longer value refuses boot); production WARNs above 1 h | — | — |
+| A `BundledRouteAuth` override lowered to `Stateless()` / `LiveOnMutation()` on a sensitive group | — | — | the `Live()` floor holds: immediate, unless `BundledRouteAuthLivenessFloorRelaxed` |
+| External token past `ExternalProvider.MaxAuthenticationAge` | denied on every request (+ 60 s leeway) | denied | denied |
 
 `RevokeAllSessions` (authentication v0.31.0) ends every session for every user at once: refresh,
 `Live()` routes, step-up grants and pending links are dead immediately, an outstanding access JWT

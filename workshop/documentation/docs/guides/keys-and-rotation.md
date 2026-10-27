@@ -76,6 +76,15 @@ sessions, use `RevokeAllSessions` (authentication v0.31.0, SOC 2 S4d):
 3. What survives: API keys (revoke them, or disable their service accounts) and external IdP
    sessions (the provider's own; locally, deactivate the user).
 
+**Idle expiry is the standing control beside it** (authentication v0.32.0, SOC 2 S4d part 2).
+Revoke-all ends every session once, on demand; `SessionsConfig.IdleTimeout`
+(`AUTH_IDLE_TIMEOUT`, zero is off) ends each first-party session nobody has refreshed within
+the timeout, at its next refresh, with `session_idle_expired`. It needs migration 0029 and a
+store implementing `session.ActivityRepository` (pgx v0.16.0 / Turso v0.15.0). Neither control
+ends an external IdP session; for that, set `ExternalProvider.MaxAuthenticationAge` on a provider
+that asserts `auth_time` (Firebase), which caps how long ago its user signed in. *Operations
+runbooks*, "Enable an idle timeout on a live fleet".
+
 The old manual recipe (`DELETE FROM sessions; DELETE FROM authentication_grants;`) is
 superseded: it never bumped `auth_revision` and wrote no security event.
 

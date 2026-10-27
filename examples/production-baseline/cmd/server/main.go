@@ -88,21 +88,30 @@ type sessionRevocationConfig struct {
 	Route bool `env:"AUTH_GLOBAL_SESSION_REVOCATION_ROUTE" default:"false"`
 }
 
+// authenticationAgeConfig bounds how long ago a provider token's holder
+// signed in at the provider (ExternalProvider.MaxAuthenticationAge, checked on
+// every request): the provider's own session survives a local revoke, so this
+// is the cap on it. Zero is unbounded (production then WARNs).
+type authenticationAgeConfig struct {
+	MaxAuthenticationAge time.Duration `env:"IDP_MAX_AUTHENTICATION_AGE" default:"12h"`
+}
+
 // composition is what the pockets are built from once the keys, the server
 // settings, the archive, the stores and the provider are resolved: run fills
 // it over PostgreSQL, the tests over in-memory stores.
 type composition struct {
-	mode                environment.Mode
-	log                 *slog.Logger
-	origin              string
-	keys                authentication.Keys
-	sessionCookie       authenticationhttp.CookieConfig
-	limiter             ratelimiter.Limiter
-	archive             auditArchive
-	authenticationRepos authentication.Repositories
-	authorizationRepos  authorization.Repositories
-	provider            sdkauth.Provider
-	globalRevokeRoute   bool
+	mode                 environment.Mode
+	log                  *slog.Logger
+	origin               string
+	keys                 authentication.Keys
+	sessionCookie        authenticationhttp.CookieConfig
+	limiter              ratelimiter.Limiter
+	archive              auditArchive
+	authenticationRepos  authentication.Repositories
+	authorizationRepos   authorization.Repositories
+	provider             sdkauth.Provider
+	globalRevokeRoute    bool
+	maxAuthenticationAge time.Duration
 }
 
 // auditArchive is the sink the maintenance pass archives each security-event
@@ -193,6 +202,10 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 	if err := environment.ParseEnvTags("", &revocation); err != nil {
 		return err
 	}
+	var age authenticationAgeConfig
+	if err := environment.ParseEnvTags("", &age); err != nil {
+		return err
+	}
 
 	router := newRouter(srv.TrustedProxyCount, log)
 	provider, err := newProvider(ctx, router, srv.Origin(), mode, log)
@@ -200,17 +213,18 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 		return err
 	}
 	hosted, err := mount(router, composition{
-		mode:                mode,
-		log:                 log,
-		origin:              srv.Origin(),
-		keys:                keys,
-		sessionCookie:       authenticationhttp.CookieConfig{Secure: true},
-		limiter:             limiter,
-		archive:             archive,
-		authenticationRepos: authenticationRepos,
-		authorizationRepos:  authorizationRepos,
-		provider:            provider,
-		globalRevokeRoute:   revocation.Route,
+		mode:                 mode,
+		log:                  log,
+		origin:               srv.Origin(),
+		keys:                 keys,
+		sessionCookie:        authenticationhttp.CookieConfig{Secure: true},
+		limiter:              limiter,
+		archive:              archive,
+		authenticationRepos:  authenticationRepos,
+		authorizationRepos:   authorizationRepos,
+		provider:             provider,
+		globalRevokeRoute:    revocation.Route,
+		maxAuthenticationAge: age.MaxAuthenticationAge,
 	})
 	if err != nil {
 		return err
@@ -370,6 +384,7 @@ func mount(router *web.WebHandler, c composition) (mounted, error) {
 			Provider:                     c.provider,
 			ProvisionOnFirstVerification: true,
 			RequireVerifiedEmail:         true,
+			MaxAuthenticationAge:         c.maxAuthenticationAge,
 		}}}),
 		authentication.WithAdministration(authentication.AdministrationConfig{UserAdminCheck: admins.check, UserErasureRoute: true, SecurityEventsRoute: true, GlobalSessionRevocationRoute: c.globalRevokeRoute}),
 		authentication.WithMFA(authentication.MFAConfig{Required: authentication.MFARequiredAdmins}),

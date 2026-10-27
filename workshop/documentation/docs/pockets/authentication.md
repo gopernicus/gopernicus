@@ -624,6 +624,61 @@ The pocket README's "Session and machine governance (SOC 2 S4d)" section is the 
 including the revocation table and a CLI recipe for when the admin path is the thing that
 is compromised.
 
+## Added by S4d part 2 (session lifetime)
+
+Authentication v0.32.0 (SOC 2 slice S4d part 2), with stores pgx v0.16.0 / Turso v0.15.0
+(both require core v0.32.0 and sdk v0.20.0; views/goth is unchanged). Each control is a host
+opt-in except two breaks: an incoherent `AccessTokenTTL`/`RefreshTTL` pair, and the liveness
+floor under an overridden sensitive group. With the defaults (idle off, access 15 m, refresh
+7 d, no authentication-age bound) nothing visible changes.
+
+- **Idle timeout.** `SessionsConfig.IdleTimeout` (`AUTH_IDLE_TIMEOUT`; zero is off) ends a
+  first-party session nobody has refreshed for that long. **Inactivity is no refresh rotation
+  within `IdleTimeout`**: it is judged at `POST /auth/refresh` only, and an idle refresh deletes
+  the row and answers the same generic 401 as any other refresh denial. It needs
+  `Repositories.Sessions` to implement `session.ActivityRepository` (the bundled stores do from
+  pgx v0.16.0 / Turso v0.15.0; otherwise `ErrIdleTimeoutRequires`) and migration 0029
+  (`sessions.last_rotated_at`) — only when it is set: wired and unmigrated refuses boot naming
+  `0029_session_activity.sql`. A value at or below `AccessTokenTTL` refuses; under twice it
+  WARNs `idle_granularity`; at or above `RefreshTTL` it WARNs `idle_never_fires`. Delegated
+  OAuth2 connections keep `OAuth2Config.SessionTTL`.
+- **The grandfather rule.** A session is judged on its `last_rotated_at` stamp; a session never
+  refreshed is judged on `created_at`; a session rotated while idle was off (rotations, no
+  stamp) is not judged until its first refresh after the switch stamps it. Turning idle on
+  across a live fleet logs nobody out at once. Re-enabling after a disabled window re-judges
+  the old stamps; the NULL reset in *Operations runbooks* avoids that.
+- **`session_idle_expired`.** Recorded once per deleted row (status `blocked`; `session_id`,
+  `last_activity`, `idle_seconds`, `idle_timeout_seconds`, `surface: "refresh"`). A replayed
+  consumed refresh slot is still `refresh_reuse`, never idle.
+- **Access-token ceiling (BREAKING for an incoherent pair).** `AccessTokenTTL > RefreshTTL`
+  refuses boot in every mode (`ErrAccessTokenTTLExceedsRefreshTTL`). In production an
+  `AccessTokenTTL` above 1 h logs `posture_warning=access_token_ttl_long`, a WARN only.
+- **The liveness floor (BREAKING for a lowered override).** `SessionHydration` (`/auth/me`),
+  `SessionSecurityReads`, `CredentialManagement`, `MachineLifecycle` and `UserAdministration`
+  keep a `Live()` floor under a `BundledRouteAuth` override. The default postures already are
+  `Live()` and pay nothing; an override lowered to `Stateless()` or `LiveOnMutation()` now does
+  one session read per call, and for an external token under `RevocationFailOpen` fails closed
+  (503) on those groups during a provider outage.
+  `BrowserConfig.BundledRouteAuthLivenessFloorRelaxed` restores the `Stateless()` floor
+  (production logs `posture_waiver=BundledRouteAuthLivenessFloorRelaxed`).
+- **External authentication age.** `ExternalProvider.MaxAuthenticationAge` (zero is unbounded)
+  denies a token whose holder authenticated longer ago (`auth_time`, else `iat`; a 60 s
+  leeway), on every request and before the subject resolves:
+  `external_subject_denied reason=authentication_age_exceeded`, or
+  `reason=authenticated_at_missing` when the token carries neither claim. The event is
+  recorded once per token. On a provider that asserts `auth_time` (Firebase) it caps the
+  provider's session; on an `iat`-only provider it bounds token age only. In production a
+  provider with no `RevocationChecker` and no bound WARNs `external_authentication_age=unbounded`.
+- **Boot lines.** `auth: session lifetime access_token_ttl=… refresh_ttl=… idle_timeout=off|<d>
+  idle_source=config|default activity=refresh_rotation idle_scope=first_party
+  live_floor=enforced|relaxed`; per provider, `auth: external provider lifetime provider=…
+  max_authentication_age=off|<d> revocation_checker=wired|none fail_open=<bool>`. The
+  production `RevocationFailOpen` line is now `posture_waiver=RevocationFailOpen`: re-key log
+  alerts on the old text.
+
+The pocket README's "Session lifetime (SOC 2 S4d part 2)" section is the reference, with the
+per-provider authentication-age table and the residuals.
+
 ## Production posture
 
 Production has no implicit mode and fails closed on incomplete security wiring. Among other requirements:
