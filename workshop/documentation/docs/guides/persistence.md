@@ -133,6 +133,10 @@ Two `*DB` over one database (a runtime role and a migrator role, or a duplicate 
 
 A nested request holds one connection from each pool. Nest instances in one fixed order, give requests a deadline, and size the inner pool's `DB_MAX_CONNS` for the outer's concurrency.
 
+### Row-level security
+
+A PostgreSQL host that isolates tenants with row-level security scopes each transaction with `pgxdb.DB.TransactWithSettings`, which applies transaction-local settings such as `app.tenant_id` as its first statement, and has tenant-owned stores check `tx.Setting` on `db.TxFrom(ctx)` instead of falling back to the pool. See [Row-level security with pgxdb](./row-level-security.md).
+
 ## Prove parity
 
 Hermetic `make check` lets live datastore suites skip loudly. Milestone/release proof runs them against real PostgreSQL and Turso, with race detection where applicable.

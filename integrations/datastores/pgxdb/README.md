@@ -342,6 +342,7 @@ the raw driver error sees the sentinel now.
 | `ErrAppendOnlyTableWritable` / `ErrAppendOnlyTableUnwritable` / `ErrDefinerFunctionUnsafe` | production append-only refusals from `ProbeAppendOnly`, matched with `errors.Is` |
 | `Open(ctx, cfg) (*DB, error)` | refuses a `DSN`/`Password` containing `sdk.Redacted` (`sdk.ErrRedactedSecret`), then opens a `pgxpool` and pings; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
 | `DB` | `Exec` / `Query` / `QueryRow` / `InTx` / `Begin` / `Close` / `Ping` / `Underlying() *pgxpool.Pool` / `RuntimeMode()` / `ProbeAppendOnly(ctx, tables…)` |
+| `Setting` / `(*DB).TransactWithSettings(ctx, settings, fn)` / `(*Tx).Setting(name)` | `Transact` whose first statement applies transaction-local settings (`set_config(name, value, true)`, all bound); validation before `Begin` refuses with `ErrInvalidInput`; `Tx.Setting` reports, from memory, what was applied to that transaction (see "Transaction-local settings for row-level security") |
 | `Querier` | interface intersection of `*DB` and `*Tx` (`Exec`/`Query`/`QueryRow`) — lets a store accept pool-or-tx |
 | `MapError(err) error` | SQLSTATE-based: `23505`→`ErrAlreadyExists`, `23503`→`ErrInvalidReference`, `23514`/`23502`→`ErrInvalidInput`, `22P02` (malformed uuid/integer literal)→`ErrInvalidInput` keeping the server message as the sentence before the sentinel, `42501`→`ErrForbidden` keeping the `*pgconn.PgError` in the chain, `pgx.ErrNoRows`→`ErrNotFound`; unknown errors pass through |
 | `RedactDSN(dsn) string` | masks URL userinfo, `password` and `sslpassword`; keyword DSNs and malformed inputs return the literal `"REDACTED"` |
@@ -1005,7 +1006,11 @@ run-unique fixture roles, each case decided both by `InspectTablePrivileges` fro
 owner's connection and by `ProbeAppendOnly` as the role), and `TestLive_DefinerFunctionProbe`
 (definer functions the fixture migrator creates through the recipe above in a schema whose
 name needs quotes: clean, each unsafe and inoperative state, a decoy earlier on the path, a
-bare-schema host resolved before the pin, a missing function, EXECUTE granted and revoked).
+bare-schema host resolved before the pin, a missing function, EXECUTE granted and revoked), and the
+`TestLive_TransactWithSettings_*` legs (no leak on a one-connection pool after commit, rollback
+and a recovered panic; bound values under the default exec mode and simple protocol; and, on a
+superuser DSN only, a FORCE RLS table read and written as a run-unique `NOBYPASSRLS` role
+entered with `SET LOCAL ROLE`, dropped with its schema in cleanup).
 Unset, they skip loudly
 (`POSTGRES_TEST_DSN not set — postgres conformance NOT verified`, plus a
 banner on stderr and the controlling terminal for the limiter legs, because
@@ -1019,7 +1024,8 @@ The schema legs create and `DROP SCHEMA … CASCADE` their own disposable schema
 and `CREATE ROLE`/`DROP ROLE` disposable login roles, and delete only the
 `public.schema_migrations` rows they wrote. The append-only legs `CREATE ROLE` login roles
 (one `SUPERUSER`) and a NOLOGIN owner, and drop every table, function and schema they created
-before `DROP OWNED BY`/`DROP ROLE`.
+before `DROP OWNED BY`/`DROP ROLE`. The row-level-security leg creates a run-unique schema and a NOLOGIN role, and
+drops them (`DROP SCHEMA … CASCADE`, `DROP OWNED BY`, `DROP ROLE`) in cleanup.
 
 Spin a local database and run the live leg with `-race` — Go-level race hygiene
 for the test's own 40 goroutines; the atomicity proof is the exact-K assertion
@@ -1110,3 +1116,26 @@ pool configuration or alter a transaction after work has begun. A repository
 that requires a coherent multi-read result can use this check before reading
 from an ambient transaction. Ordinary `Transact` continues using the server's
 default isolation; callers opt into `TransactSnapshot` explicitly.
+
+## Transaction-local settings for row-level security
+
+`TransactWithSettings(ctx, settings, fn)` is `Transact` whose first statement is
+`SELECT set_config($1, $2, true), …` with every name and value bound (pgx-escaped under simple
+protocol). The settings end with the transaction, on commit, rollback or panic, and never reach
+another pool borrower. It is implemented by wrapping `Transact`, so nesting (`ErrNestedTransact`
+on the same instance), cleanup and the per-instance ambient context are `Transact`'s. A failure of
+the first statement is wrapped as `pgxdb: applying transaction settings: …`, keeping the mapped
+error. There is no snapshot variant; `TransactSnapshot` applies no settings.
+
+Validation runs before `Begin`, so a refusal acquires no connection. Each refusal wraps
+`sdk.ErrInvalidInput`: no settings; a name that is not a lowercase, dotted custom parameter
+(`^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$`); a duplicate name; an empty value, a NUL byte or invalid
+UTF-8. Core parameters (`role`, `search_path`, …) are undotted, so they are unreachable; extension
+parameters (`plpgsql.*`) are dotted and are not blocked, so use a prefix you own. The name rule is a
+guardrail, not a security boundary.
+
+`d.TxFrom(ctx)` inside `fn` returns a `*Tx` whose `Setting(name)` reports what was applied, from
+memory. It is `("", false)` on a `Transact` or `TransactSnapshot` transaction. A store over a
+FORCE row-level-security table checks both, `d.TxFrom` and `tx.Setting`, and refuses otherwise,
+instead of `QuerierFrom`'s pool fallback that RLS answers with a silent empty result. The docs
+site's *Row-level security with pgxdb* guide covers policies, schema, roles and the host shape.

@@ -23,6 +23,9 @@ on locks the outer holds on the other, unbounded without `DB_LOCK_TIMEOUT`. Neve
 migrator inside a runtime transaction; migrations already run pre-boot. See *Persistence*, "Two
 databases never share a transaction".
 
+A host that uses row-level security also keeps the runtime role `NOBYPASSRLS` and owning no
+table: see [Row-level security with pgxdb](./row-level-security.md), "Roles".
+
 Create the runtime role with SQL, not the provider console: Neon console and API roles carry
 `pg_write_all_data` (through `neon_superuser`), which no per-table `REVOKE` removes, and a role
 holding `rds_superuser` can set `session_replication_role`.
