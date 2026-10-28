@@ -59,13 +59,14 @@ type relationshipStore struct {
 	tupleBinding string
 	readQuerier  pgxdb.Querier
 	audit        bool
+	ids          sdk.IDGenerator
 	model        *relationships.ReadModel
 	db           *pgxdb.DB
 	schema       pgxdb.Schema
 }
 
 func newRelationshipStore(db *pgxdb.DB, cfg config) *relationshipStore {
-	return &relationshipStore{db: db, tupleBinding: cfg.tupleBinding, schema: cfg.schema, audit: cfg.audit, integrity: cfg.integrity}
+	return &relationshipStore{db: db, tupleBinding: cfg.tupleBinding, schema: cfg.schema, audit: cfg.audit, ids: cfg.ids, integrity: cfg.integrity}
 }
 
 // table renders name under the store's schema — the one chokepoint every
@@ -393,7 +394,7 @@ WHERE resource_type = @resource_type AND relation = @relation AND resource_id = 
 }
 
 func (s *relationshipStore) tuples() *tupleStore {
-	return newTupleStore(s.db, config{schema: s.schema, audit: s.audit, integrity: s.integrity, tupleBinding: s.tupleBinding})
+	return newTupleStore(s.db, config{schema: s.schema, audit: s.audit, ids: s.ids, integrity: s.integrity, tupleBinding: s.tupleBinding})
 }
 func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relationships.CreateRelationship) error {
 	changes := tuples.Changes{Add: make([]tuples.Tuple, len(in))}
@@ -607,7 +608,7 @@ func queryStrings(ctx context.Context, q rowQuerier, query string, args pgx.Name
 }
 
 func (s *relationshipStore) write(ctx context.Context, fn func(*writeTx) error) error {
-	return runWrite(ctx, s.db, config{audit: s.audit, integrity: s.integrity, schema: s.schema}, fn)
+	return runWrite(ctx, s.db, config{audit: s.audit, ids: s.ids, integrity: s.integrity, schema: s.schema}, fn)
 }
 
 // rawView shares canonical projections while preserving the raw facade's ambient

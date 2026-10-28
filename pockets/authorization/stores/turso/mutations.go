@@ -7,16 +7,18 @@ import (
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 type mutationStore struct {
 	db        *tursodb.DB
 	integrity mutations.IntegrityPolicy
 	audit     bool
+	ids       sdk.IDGenerator
 }
 
 func newMutationStore(db *tursodb.DB, cfg config) *mutationStore {
-	return &mutationStore{db: db, integrity: cfg.integrity, audit: cfg.audit}
+	return &mutationStore{db: db, integrity: cfg.integrity, audit: cfg.audit, ids: cfg.ids}
 }
 
 var (
@@ -71,7 +73,7 @@ func (m *mutationStore) Apply(ctx context.Context, cmd mutations.Command, valida
 		if err != nil {
 			return err
 		}
-		if err := appendAudit(ctx, w, config{audit: m.audit}); err != nil {
+		if err := appendAudit(ctx, w, config{audit: m.audit, ids: m.ids}); err != nil {
 			return err
 		}
 		if cmd.OperationID != "" {

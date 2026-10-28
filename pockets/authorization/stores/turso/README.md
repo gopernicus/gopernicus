@@ -75,6 +75,12 @@ one call; UTC microsecond timestamps are not commit-order watermarks. Atomic swa
 record both removal and addition. No-ops, refusals and rollbacks record nothing.
 Ambient failures roll back an operation savepoint, preserving unrelated host work.
 
+`WithIDs(ids sdk.IDGenerator)` sets the generator for each audited write's
+`event_id`; it has no effect without `WithAudit()`. Row ids stay
+`<event_id>:<20-digit ordinal>`. The zero value keeps the UUIDv7 default. A
+generator that mints an empty id fails the write with `sdk.ErrInvalidInput`,
+publishing neither facts nor audit. Use a generator that never repeats.
+
 `repos.Audit.List` reads canonical `tuple/v2` records. Recording defaults off;
 existing canonical history remains readable. Hosts own audit access, retention
 and export. Raw SQL outside these adapters is outside integrity and audit coverage.

@@ -45,7 +45,7 @@ func appendAudit(ctx context.Context, tx *writeTx, cfg config) error {
 	if !cfg.audit {
 		return nil
 	}
-	records, err := audit.NewRecords(ctx, tx.changes, time.Now())
+	records, err := audit.NewRecordsWith(ctx, tx.changes, time.Now(), cfg.ids)
 	if err != nil {
 		return err
 	}
