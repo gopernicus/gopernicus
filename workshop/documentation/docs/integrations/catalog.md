@@ -38,13 +38,21 @@ Query logging is opt-in, logs arguments verbatim, and is development-only.
 
 | Module | Implements | Notes |
 |---|---|---|
-| `integrations/cryptids/bcrypt` | authentication's password-hasher shape | rejects passwords over bcrypt's 72-byte boundary instead of truncating |
+| `integrations/cryptids/bcrypt` | authentication's password-hasher shape | default cost 12 since v0.3.0 (`WithCost(10)` restores the library default; existing hashes verify at their stored cost); `Cost()` feeds authentication's low-cost posture warning; rejects passwords over bcrypt's 72-byte boundary instead of truncating |
 | `integrations/cryptids/go-oidc` | `cryptids.JWTVerifier` | external OIDC issuer tokens: pinned iss/aud, asymmetric allow-list, hardened JWKS cache; `oidctest` dev issuer ([details](go-oidc.md)) |
 | `integrations/cryptids/go-webauthn` | `webauthn.RelyingParty` | passkey ceremonies over go-webauthn v0.18.2: `Validate` at `New` in every mode, per-ceremony origin admission, ceremony-kind marked state, flags read from this ceremony's authenticator data; passes `webauthntest.Run` |
 | `integrations/cryptids/golang-jwt` | `cryptids.JWTSigner` | HMAC JWTs with method pinning and minimum secret length |
 | `integrations/cryptids/google-uuid` | `sdk.IDGenerateFunc` | UUID v4 or time-ordered v7 entity IDs; the stdlib `sdk.UUIDv7()` is the pockets' record default, so pick this when the host already links google/uuid or wants its v7 semantics |
 
 Password policy stays in authentication; bcrypt owns hashing mechanics. Entity ID choice is made once in pocket config and never controls secret/token generation.
+
+## Passwords
+
+| Module | Implements | Notes |
+|---|---|---|
+| `integrations/passwords/hibp` | authentication's `CompromisedPasswordChecker` shape | Have I Been Pwned Pwned Passwords range API (vendor contract, stdlib + sdk only): k-anonymity, so only the first five SHA-1 hex characters are sent; `Add-Padding: true`; the suffix is matched locally against every line. 3 s timeout, 1 MiB body cap, redirects refused, no retries, cache or logging. Every failure is a fresh `sdk.ErrUnavailable` error that never carries the URL, the prefix or the password; authentication's fail-closed default then refuses the password (`CompromisedPasswordFailOpen` is the host's hatch) |
+
+The host chooses whether a password flow calls out to HIBP; development hosts usually leave it unwired so nothing reaches the network.
 
 ## Authentication providers
 

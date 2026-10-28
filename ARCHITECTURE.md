@@ -25,6 +25,7 @@ worked example `examples/cms`.
     kvstores/goredis/     module …/integrations/kvstores/goredis        — a connector (redis/go-redis v9; multi-port: events bus + cacher + ratelimiter)
     oauth/github/         module …/integrations/oauth/github            — a connector (GitHub's OAuth API contract; zero external libs)
     oauth/google/         module …/integrations/oauth/google            — a connector (coreos/go-oidc v3)
+    passwords/hibp/       module …/integrations/passwords/hibp          — a connector (Have I Been Pwned's Pwned Passwords range API contract; zero external libs; authentication's CompromisedPasswordChecker shape)
     scheduling/robfig-cron/ module …/integrations/scheduling/robfig-cron — a connector (robfig/cron v3)
     tracing/otel/         module …/integrations/tracing/otel            — a connector (OpenTelemetry family; stdout/OTLP exporters, R-KV1)
   pockets/               module github.com/gopernicus/gopernicus/pockets — shared host contract; concrete child modules: focused public logic/ services and owned contracts, optional public inbound/http, in-module stores/storetest and optional stores/memory, separate driver/view modules
@@ -62,7 +63,7 @@ worked example `examples/cms`.
       cmd/  integrations/authentication/devissuer  workshop/migrations
 ```
 
-**Forty-seven modules today.** `sdk` is the kernel; `integrations/*` are reusable
+**Fifty modules today.** `sdk` is the kernel; `integrations/*` are reusable
 third-party connectors (one external dependency each, each its own module);
 `pockets/<name>` is a datastore-free pocket core with its driver adapters as
 sibling modules. Memory and store conformance are packages in the core module

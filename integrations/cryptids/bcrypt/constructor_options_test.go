@@ -13,7 +13,7 @@ func TestWithCostConcurrentReuse(t *testing.T) {
 	for range 32 {
 		wg.Go(func() {
 			for range 100 {
-				if h := New(opt); h.cost != vendor.DefaultCost {
+				if h := New(opt); h.cost != DefaultCost {
 					t.Errorf("cost = %d", h.cost)
 				}
 			}
@@ -26,7 +26,7 @@ func TestWithCostConcurrentReuse(t *testing.T) {
 		t.Fatal(err)
 	}
 	cost, err := vendor.Cost([]byte(hash))
-	if err != nil || cost != vendor.DefaultCost {
+	if err != nil || cost != DefaultCost {
 		t.Fatalf("hash cost = %d, %v", cost, err)
 	}
 }

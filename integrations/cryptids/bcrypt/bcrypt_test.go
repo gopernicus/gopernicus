@@ -98,8 +98,38 @@ func TestDefaultCost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading cost: %v", err)
 	}
-	if got != xbcrypt.DefaultCost {
-		t.Fatalf("default cost = %d, want %d", got, xbcrypt.DefaultCost)
+	if got != bcrypt.DefaultCost || bcrypt.DefaultCost != 12 {
+		t.Fatalf("default cost = %d, want 12", got)
+	}
+	if h.Cost() != 12 {
+		t.Fatalf("Cost() = %d, want 12", h.Cost())
+	}
+	var zero bcrypt.Hasher
+	if zero.Cost() != 12 {
+		t.Fatalf("zero-value Cost() = %d, want 12", zero.Cost())
+	}
+}
+
+func TestCostReportsConfiguredCost(t *testing.T) {
+	if got := bcrypt.New(bcrypt.WithCost(10)).Cost(); got != 10 {
+		t.Fatalf("WithCost(10).Cost() = %d, want 10", got)
+	}
+	if got := bcrypt.New(bcrypt.WithCost(xbcrypt.MaxCost + 1)).Cost(); got != 12 {
+		t.Fatalf("out-of-range Cost() = %d, want the default 12", got)
+	}
+}
+
+func TestCostTenHashVerifiesUnderDefaultHasher(t *testing.T) {
+	hash, err := xbcrypt.GenerateFromPassword([]byte("existing password"), 10)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword: %v", err)
+	}
+	h := bcrypt.New()
+	if err := h.VerifyPassword(string(hash), "existing password"); err != nil {
+		t.Fatalf("cost-10 hash should verify at its stored cost: %v", err)
+	}
+	if err := h.VerifyPassword(string(hash), "other password"); err == nil {
+		t.Fatal("cost-10 hash should reject a wrong password")
 	}
 }
 
