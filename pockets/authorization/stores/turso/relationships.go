@@ -55,12 +55,13 @@ type relationshipStore struct {
 	tupleBinding string
 	readQuerier  tursodb.Querier
 	audit        bool
+	ids          sdk.IDGenerator
 	model        *relationships.ReadModel
 	db           *tursodb.DB
 }
 
 func newRelationshipStore(db *tursodb.DB, cfg config) *relationshipStore {
-	return &relationshipStore{db: db, tupleBinding: cfg.tupleBinding, audit: cfg.audit, integrity: cfg.integrity}
+	return &relationshipStore{db: db, tupleBinding: cfg.tupleBinding, audit: cfg.audit, ids: cfg.ids, integrity: cfg.integrity}
 }
 
 var _ relationships.Storer = (*relationshipStore)(nil)
@@ -398,7 +399,7 @@ WHERE resource_type = ? AND relation = ? AND resource_id IN ` + inClause(len(res
 }
 
 func (s *relationshipStore) tuples() *tupleStore {
-	return newTupleStore(s.db, config{audit: s.audit, integrity: s.integrity, tupleBinding: s.tupleBinding})
+	return newTupleStore(s.db, config{audit: s.audit, ids: s.ids, integrity: s.integrity, tupleBinding: s.tupleBinding})
 }
 func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relationships.CreateRelationship) error {
 	changes := tuples.Changes{Add: make([]tuples.Tuple, len(in))}
@@ -603,7 +604,7 @@ func withLimit(query string, args []any, limit int) (string, []any) {
 }
 
 func (s *relationshipStore) write(ctx context.Context, fn func(*writeTx) error) error {
-	return runWrite(ctx, s.db, config{audit: s.audit, integrity: s.integrity}, fn)
+	return runWrite(ctx, s.db, config{audit: s.audit, ids: s.ids, integrity: s.integrity}, fn)
 }
 
 // rawView shares canonical projections while preserving the raw facade's ambient

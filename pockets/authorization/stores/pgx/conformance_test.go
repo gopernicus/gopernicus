@@ -21,13 +21,17 @@ import (
 	"context"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
@@ -252,4 +256,36 @@ func TestAuditConformance(t *testing.T) {
 		_, repos := liveReposWith(t, opts...)
 		return repos
 	})
+}
+
+func TestAuditIDs(t *testing.T) {
+	storetest.RunAuditIDs(t, func(t *testing.T, ids sdk.IDGenerator) storetest.Repositories {
+		_, repos := liveReposWith(t, WithAudit(), WithIDs(ids))
+		return repos
+	})
+}
+
+// TestAuditIDsResourceSubjectDelete covers the relationship store's own write
+// path, which RunAuditIDs does not reach.
+func TestAuditIDsResourceSubjectDelete(t *testing.T) {
+	var n atomic.Int64
+	ids := sdk.NewIDGenerator(func() (string, error) { return "fixed-" + strconv.FormatInt(n.Add(1), 10), nil })
+	_, repos := liveReposWith(t, WithAudit(), WithIDs(ids))
+	ctx := auditContext()
+	seed := relationships.CreateRelationship{ResourceType: "doc", ResourceID: "d", Relation: "viewer", SubjectType: "user", SubjectID: "u"}
+	if err := repos.Relationships.CreateRelationships(ctx, []relationships.CreateRelationship{seed}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Relationships.DeleteByResourceAndSubject(ctx, "doc", "d", "user", "u"); err != nil {
+		t.Fatal(err)
+	}
+	var removed []audit.Record
+	for _, r := range auditRecords(t, repos) {
+		if r.Change.Action == audit.ActionRemoved {
+			removed = append(removed, r)
+		}
+	}
+	if len(removed) != 1 || removed[0].EventID != "fixed-2" || removed[0].ID != "fixed-2:00000000000000000001" {
+		t.Fatalf("resource-subject delete did not record the host event id: %+v", removed)
+	}
 }

@@ -12,7 +12,7 @@ func (m *mutationStore) evaluate(ctx context.Context, tx *writeTx, cmd mutations
 	if err != nil {
 		return "", false, err
 	}
-	cfg := config{audit: m.audit}
+	cfg := config{audit: m.audit, ids: m.ids}
 	delta, outcome, err := mutations.Plan(cmd, before, m.integrity)
 	if err != nil {
 		return "", false, err
@@ -24,7 +24,7 @@ func (m *mutationStore) evaluate(ctx context.Context, tx *writeTx, cmd mutations
 }
 
 func (m *mutationStore) readFacts(ctx context.Context, tx *writeTx, cmd mutations.Command) ([]tuples.Tuple, error) {
-	cfg := config{audit: m.audit}
+	cfg := config{audit: m.audit, ids: m.ids}
 	reader := newTupleStore(m.db, cfg)
 	reader.readQuerier = tx.Tx
 	scope := cmd.Target.Scope()

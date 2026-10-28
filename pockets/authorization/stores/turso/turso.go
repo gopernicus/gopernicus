@@ -59,12 +59,18 @@ type config struct {
 	tupleCache   bool
 	tupleBinding string
 	audit        bool
+	ids          sdk.IDGenerator
 	integrity    mutation.IntegrityPolicy
 }
 
 // WithAudit enables atomic recording of actual authorization fact changes.
 // Every write then requires an explicit valid audit source on its context.
 func WithAudit() Option { return func(c *config) { c.audit = true } }
+
+// WithIDs sets the generator for audit event ids; it has no effect without
+// WithAudit. The zero value keeps the UUIDv7 default. A generator that mints an
+// empty id fails the write with sdk.ErrInvalidInput.
+func WithIDs(ids sdk.IDGenerator) Option { return func(c *config) { c.ids = ids } }
 
 // WithIntegrityPolicy installs the host's relationship invariants. The option
 // snapshots its input; the store defaults to an empty policy. NewService checks

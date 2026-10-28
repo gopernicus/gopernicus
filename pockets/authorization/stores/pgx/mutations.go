@@ -11,6 +11,7 @@ import (
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -53,10 +54,11 @@ type mutationStore struct {
 	integrity mutations.IntegrityPolicy
 	schema    pgxdb.Schema
 	audit     bool
+	ids       sdk.IDGenerator
 }
 
 func newMutationStore(db *pgxdb.DB, cfg config) *mutationStore {
-	return &mutationStore{db: db, integrity: cfg.integrity, schema: cfg.schema, audit: cfg.audit}
+	return &mutationStore{db: db, integrity: cfg.integrity, schema: cfg.schema, audit: cfg.audit, ids: cfg.ids}
 }
 
 var (
@@ -119,7 +121,7 @@ func (m *mutationStore) Apply(ctx context.Context, cmd mutations.Command, valida
 		if err != nil {
 			return err
 		}
-		if err := appendAudit(ctx, w, config{audit: m.audit, schema: m.schema}); err != nil {
+		if err := appendAudit(ctx, w, config{audit: m.audit, ids: m.ids, schema: m.schema}); err != nil {
 			return err
 		}
 		if cmd.OperationID != "" {
