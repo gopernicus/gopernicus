@@ -42,6 +42,11 @@ type Schedule struct {
 
 // Ensure is the input for creating or updating a schedule by Name.
 type Ensure struct {
+	// ID is the create-only id candidate: a store uses it only when Ensure creates
+	// the schedule and keeps the existing id on an update by Name. The Service
+	// fills an empty ID (WithIDs); a repository rejects an empty ID with
+	// sdk.ErrInvalidInput.
+	ID   string
 	Name string
 	Kind string
 	// TenantID is the OPTIONAL host-defined boundary to stamp on the schedule
@@ -54,8 +59,9 @@ type Ensure struct {
 // Repository is the schedule store outbound port. A store adapter or host fills
 // it; the pocket core stays dialect-blind.
 type Repository interface {
-	// Ensure upserts by Name: it creates the schedule or updates its kind, spec,
-	// and payload, setting NextRunAt = next on create and on a spec change.
+	// Ensure upserts by Name: it creates the schedule with in.ID or updates its
+	// kind, spec, and payload, setting NextRunAt = next on create and on a spec
+	// change. An empty in.ID yields sdk.ErrInvalidInput.
 	Ensure(ctx context.Context, in Ensure, next time.Time) (Schedule, error)
 	// ListDue returns up to limit enabled schedules whose NextRunAt <= now.
 	// kinds restricts the scan to schedules of those kinds (applied in the query,

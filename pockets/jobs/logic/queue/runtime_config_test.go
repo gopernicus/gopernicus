@@ -90,7 +90,7 @@ func TestRuntime_StagedHandlersSnapshot(t *testing.T) {
 			seeded := make(map[string]schedule.Schedule)
 			for _, kind := range []string{"owned", "foreign", "removed"} {
 				sch, err := schedules.Ensure(ctx, schedule.Ensure{
-					Name: kind, Kind: kind, Spec: schedule.Spec{Every: time.Hour},
+					ID: "sched-" + kind, Name: kind, Kind: kind, Spec: schedule.Spec{Every: time.Hour},
 				}, past)
 				if err != nil {
 					t.Fatal(err)

@@ -3,6 +3,7 @@ package storetest
 import (
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/jobs"
 	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	schedule "github.com/gopernicus/gopernicus/pockets/jobs/logic/schedules"
 	"github.com/gopernicus/gopernicus/pockets/jobs/stores/memory"
@@ -38,5 +39,13 @@ func TestReferenceSchedules(t *testing.T) {
 func TestReferenceFencedQueue(t *testing.T) {
 	RunFencedQueue(t, func(t *testing.T) job.FencedQueueRepository {
 		return memory.NewFencedQueue()
+	})
+}
+
+// TestReferenceIDs runs the id-minting suite through jobs.New over fresh
+// in-core memstores.
+func TestReferenceIDs(t *testing.T) {
+	RunIDs(t, func(t *testing.T) jobs.Repositories {
+		return jobs.Repositories{Queue: memory.NewQueue(memory.WithLease(Lease)), FencedQueue: memory.NewFencedQueue(), Schedules: memory.NewSchedules()}
 	})
 }

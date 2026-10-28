@@ -165,7 +165,7 @@ func RunOccurrences(t *testing.T, fresh func(*testing.T) schedule.Repository) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if _, err := repo.Ensure(ctx, in, slot); err != nil {
+				if _, err := repo.Ensure(ctx, withScheduleID(in), slot); err != nil {
 					t.Error(err)
 				}
 			}()
@@ -181,7 +181,7 @@ func RunOccurrences(t *testing.T, fresh func(*testing.T) schedule.Repository) {
 			wg.Add(2)
 			go func() {
 				defer wg.Done()
-				if _, err := repo.Ensure(ctx, in, slot); err != nil {
+				if _, err := repo.Ensure(ctx, withScheduleID(in), slot); err != nil {
 					t.Error(err)
 				}
 			}()

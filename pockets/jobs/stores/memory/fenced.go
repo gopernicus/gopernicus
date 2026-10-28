@@ -47,12 +47,16 @@ func NewFencedQueue() *FencedQueue {
 
 // EnqueueOnce inserts in as a new pending execution unless a non-terminal job
 // already holds in.LogicalKey, in which case that active job is returned unchanged
-// (idempotent admission). A duplicate explicit in.ID yields sdk.ErrAlreadyExists;
-// an empty in.ID is generated; an empty LogicalKey disables the once semantics.
+// (idempotent admission). A duplicate in.ID yields sdk.ErrAlreadyExists; an
+// empty in.ID yields sdk.ErrInvalidInput; an empty LogicalKey disables the once
+// semantics.
 func (q *FencedQueue) EnqueueOnce(_ context.Context, in job.Enqueue) (job.Job, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
+	if in.ID == "" {
+		return job.Job{}, errIDRequired
+	}
 	if in.LogicalKey != "" {
 		if active, ok := q.activeByKey(in.LogicalKey); ok {
 			return cloneJob(active), nil
@@ -72,7 +76,7 @@ func (q *FencedQueue) Replace(_ context.Context, in job.Enqueue) (job.Job, error
 	// Check insertion failure before retiring the active generation. The mutex
 	// keeps this ID available until insert, matching the SQL transaction rollback.
 	if in.ID == "" {
-		in.ID = newID("job")
+		return job.Job{}, errIDRequired
 	}
 	if _, exists := q.jobs[in.ID]; exists {
 		return job.Job{}, sdk.ErrAlreadyExists
@@ -330,7 +334,7 @@ func (q *FencedQueue) Get(_ context.Context, id string) (job.Job, error) {
 func (q *FencedQueue) insert(in job.Enqueue) (job.Job, error) {
 	id := in.ID
 	if id == "" {
-		id = newID("job")
+		return job.Job{}, errIDRequired
 	}
 	if _, ok := q.jobs[id]; ok {
 		return job.Job{}, sdk.ErrAlreadyExists

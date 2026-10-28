@@ -37,6 +37,7 @@ func New(repos Repositories, opts ...Option) (*Components, error) {
 	q, err := queue.NewService(queue.Repositories{Queue: repos.Queue, FencedQueue: repos.FencedQueue},
 		queue.WithMaxAttempts(cfg.maxAttempts),
 		queue.WithClock(cfg.clock),
+		queue.WithIDs(cfg.ids),
 	)
 	if err != nil {
 		return nil, err
@@ -47,6 +48,7 @@ func New(repos Repositories, opts ...Option) (*Components, error) {
 			schedules.WithEnqueuer(q),
 			schedules.WithCronParser(cfg.cron),
 			schedules.WithBatchSize(cfg.scheduleBatch),
+			schedules.WithIDs(cfg.ids),
 		)
 		if err != nil {
 			return nil, err

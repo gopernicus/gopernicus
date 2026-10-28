@@ -105,11 +105,11 @@ func TestScheduler_FiresOnlyRegisteredKinds(t *testing.T) {
 	// Seed both schedules already due (straight into the repository — the
 	// pocketjobs.Components would compute NextRunAt = now + Every).
 	past := time.Now().UTC().Add(-time.Minute)
-	sa, err := sched.Ensure(ctx, schedule.Ensure{Name: "sa", Kind: "a", Spec: schedule.Spec{Every: time.Hour}}, past)
+	sa, err := sched.Ensure(ctx, schedule.Ensure{ID: "sched-sa", Name: "sa", Kind: "a", Spec: schedule.Spec{Every: time.Hour}}, past)
 	if err != nil {
 		t.Fatalf("Ensure sa: %v", err)
 	}
-	sb, err := sched.Ensure(ctx, schedule.Ensure{Name: "sb", Kind: "b", Spec: schedule.Spec{Every: time.Hour}}, past)
+	sb, err := sched.Ensure(ctx, schedule.Ensure{ID: "sched-sb", Name: "sb", Kind: "b", Spec: schedule.Spec{Every: time.Hour}}, past)
 	if err != nil {
 		t.Fatalf("Ensure sb: %v", err)
 	}

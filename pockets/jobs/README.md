@@ -48,6 +48,14 @@ separate modules; importing jobs does not import a driver.
   Permanent rejection overrides either ceiling. Ordinary retries are immediately
   eligible; use the fenced runtime for configurable retry backoff.
   Duplicate enqueue IDs → `sdk.ErrAlreadyExists` (the scheduler's dedup key).
+- **The services mint ids; stores never do.** `EnqueueJob`, `EnqueueOnce`/`Replace`
+  and `EnsureSchedule` fill an empty job or schedule id from `WithIDs` (default
+  UUIDv7) before the repository call; a caller-supplied `Enqueue.ID` is kept as
+  the idempotency key, and `Ensure.ID` is a create-only candidate (an update by
+  Name keeps the existing id). A repository rejects an empty id with
+  `sdk.ErrInvalidInput`, so an empty-id generator fails loudly instead of
+  producing a false `sdk.ErrAlreadyExists`. Occurrence job ids stay
+  `schedules.OccurrenceID(scheduleID, slot)` and never use `WithIDs`.
 - **Terminal states stay terminal.** Repeating Complete on completed work or
   Fail on dead-lettered work leaves it unchanged; the opposite transition
   returns `sdk.ErrConflict`. The ordinary queue still cannot distinguish a
@@ -106,6 +114,7 @@ Scheduler interface. No root facade is required for either extension.
 | `Repositories.Schedules` | nil omits scheduling; it also requires the ordinary queue |
 | `queue.TerminalPurger` on `Repositories.Queue` | absent: `NewService` WARNs and `PurgeTerminalJobs` returns `ErrTerminalPurgeRequired` (see [Retention](#retention)) |
 | `jobs.WithMaxAttempts` | ordinary admission defaults to 3 attempts |
+| `jobs.WithIDs` / `queue.WithIDs` / `schedules.WithIDs` | the zero value selects the class default: NanoID for identities, UUIDv7 for records (jobs has only records); a configured generator wins everywhere. `EnsureSchedule` mints a candidate on every call, so a counter-style generator skips values on updates |
 | `NewRuntime handlers` | runtime construction requires valid nonempty entries |
 | `queue.RuntimePolicy.Workers` | defaults to 4 |
 | `queue.WithRuntimeWorkerMiddleware` / `queue.WithRuntimeJobMiddleware` | nil adds no wrappers; first wrapper is outermost |

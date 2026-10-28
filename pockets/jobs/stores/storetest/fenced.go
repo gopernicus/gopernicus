@@ -158,7 +158,7 @@ func testFencedTenant(t *testing.T, newRepo func(t *testing.T) job.FencedQueueRe
 	}
 
 	// Replace stamps the fresh generation's tenant and leaves the tombstone's alone.
-	replacement, err := repo.Replace(ctx, job.Enqueue{Kind: "email", TenantID: "globex", LogicalKey: "k-scoped", ScheduledFor: now})
+	replacement, err := repo.Replace(ctx, withJobID(job.Enqueue{Kind: "email", TenantID: "globex", LogicalKey: "k-scoped", ScheduledFor: now}))
 	if err != nil {
 		t.Fatalf("Replace: %v", err)
 	}
@@ -186,7 +186,7 @@ func testFencedTenantNotKeyed(t *testing.T, newRepo func(t *testing.T) job.Fence
 	now := time.Now().UTC()
 
 	first := mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", TenantID: "acme", LogicalKey: "k1", ScheduledFor: now})
-	again, err := repo.EnqueueOnce(ctx, job.Enqueue{Kind: "email", TenantID: "globex", LogicalKey: "k1", ScheduledFor: now})
+	again, err := repo.EnqueueOnce(ctx, withJobID(job.Enqueue{Kind: "email", TenantID: "globex", LogicalKey: "k1", ScheduledFor: now}))
 	if err != nil {
 		t.Fatalf("second EnqueueOnce under a different tenant: %v", err)
 	}
@@ -197,7 +197,7 @@ func testFencedTenantNotKeyed(t *testing.T, newRepo func(t *testing.T) job.Fence
 		t.Errorf("the returned active execution's TenantID = %q, want the admitted acme (dedup returns it unchanged)", again.TenantID)
 	}
 
-	replacement, err := repo.Replace(ctx, job.Enqueue{Kind: "email", TenantID: "globex", LogicalKey: "k1", ScheduledFor: now})
+	replacement, err := repo.Replace(ctx, withJobID(job.Enqueue{Kind: "email", TenantID: "globex", LogicalKey: "k1", ScheduledFor: now}))
 	if err != nil {
 		t.Fatalf("Replace under a different tenant: %v", err)
 	}
@@ -227,7 +227,7 @@ func testFencedEnqueueOnce(t *testing.T, newRepo func(t *testing.T) job.FencedQu
 	ctx := context.Background()
 
 	first := mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", LogicalKey: "k1"})
-	again, err := repo.EnqueueOnce(ctx, job.Enqueue{Kind: "email", LogicalKey: "k1"})
+	again, err := repo.EnqueueOnce(ctx, withJobID(job.Enqueue{Kind: "email", LogicalKey: "k1"}))
 	if err != nil {
 		t.Fatalf("second EnqueueOnce: %v", err)
 	}
@@ -244,7 +244,7 @@ func testFencedReplaceSupersedes(t *testing.T, newRepo func(t *testing.T) job.Fe
 	now := time.Now().UTC()
 
 	first := mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", LogicalKey: "k1", ScheduledFor: now})
-	second, err := repo.Replace(ctx, job.Enqueue{Kind: "email", LogicalKey: "k1", ScheduledFor: now})
+	second, err := repo.Replace(ctx, withJobID(job.Enqueue{Kind: "email", LogicalKey: "k1", ScheduledFor: now}))
 	if err != nil {
 		t.Fatalf("Replace: %v", err)
 	}
@@ -275,7 +275,7 @@ func testFencedLatestByKey(t *testing.T, newRepo func(t *testing.T) job.FencedQu
 	ctx := context.Background()
 
 	mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", LogicalKey: "k1"})
-	latest, err := repo.Replace(ctx, job.Enqueue{Kind: "email", LogicalKey: "k1"})
+	latest, err := repo.Replace(ctx, withJobID(job.Enqueue{Kind: "email", LogicalKey: "k1"}))
 	if err != nil {
 		t.Fatalf("Replace: %v", err)
 	}
@@ -313,7 +313,7 @@ func testFencedTerminalStates(t *testing.T, newRepo func(t *testing.T) job.Fence
 	}
 
 	superseded := mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", LogicalKey: "ks"})
-	if _, err := repo.Replace(ctx, job.Enqueue{Kind: "email", LogicalKey: "ks"}); err != nil {
+	if _, err := repo.Replace(ctx, withJobID(job.Enqueue{Kind: "email", LogicalKey: "ks"})); err != nil {
 		t.Fatalf("Replace: %v", err)
 	}
 	old, _ := repo.Get(ctx, superseded.ID())
@@ -338,7 +338,7 @@ func testFencedConcurrentEnqueueOnce(t *testing.T, newRepo func(t *testing.T) jo
 	for i := 0; i < n; i++ {
 		go func(i int) {
 			defer wg.Done()
-			j, err := repo.EnqueueOnce(ctx, job.Enqueue{Kind: "email", LogicalKey: "race"})
+			j, err := repo.EnqueueOnce(ctx, withJobID(job.Enqueue{Kind: "email", LogicalKey: "race"}))
 			if err != nil {
 				t.Errorf("concurrent EnqueueOnce: %v", err)
 				return
@@ -393,12 +393,12 @@ func testFencedConcurrentReplaceVsEnqueueOnce(t *testing.T, newRepo func(t *test
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		j, err := repo.Replace(ctx, job.Enqueue{Kind: "email", LogicalKey: "race"})
+		j, err := repo.Replace(ctx, withJobID(job.Enqueue{Kind: "email", LogicalKey: "race"}))
 		replaceID, replaceErr = j.ID(), err
 	}()
 	go func() {
 		defer wg.Done()
-		j, err := repo.EnqueueOnce(ctx, job.Enqueue{Kind: "email", LogicalKey: "race"})
+		j, err := repo.EnqueueOnce(ctx, withJobID(job.Enqueue{Kind: "email", LogicalKey: "race"}))
 		enqueueID, enqueueErr = j.ID(), err
 	}()
 	wg.Wait()
@@ -462,7 +462,7 @@ func testFencedReplaceFencesRunningClaim(t *testing.T, newRepo func(t *testing.T
 	}
 
 	// A user resend supersedes the still-running generation.
-	replacement, err := repo.Replace(ctx, job.Enqueue{Kind: "email", LogicalKey: "k1", ScheduledFor: now})
+	replacement, err := repo.Replace(ctx, withJobID(job.Enqueue{Kind: "email", LogicalKey: "k1", ScheduledFor: now}))
 	if err != nil {
 		t.Fatalf("Replace: %v", err)
 	}
@@ -789,7 +789,7 @@ func testFencedConcurrentCheckpointVsReplace(t *testing.T, newRepo func(t *testi
 	}()
 	go func() {
 		defer wg.Done()
-		j, err := repo.Replace(ctx, job.Enqueue{Kind: "email", LogicalKey: "race", ScheduledFor: now})
+		j, err := repo.Replace(ctx, withJobID(job.Enqueue{Kind: "email", LogicalKey: "race", ScheduledFor: now}))
 		replaceID, replaceErr = j.ID(), err
 	}()
 	wg.Wait()
@@ -1013,7 +1013,7 @@ func testFencedErrorKinds(t *testing.T, newRepo func(t *testing.T) job.FencedQue
 // mustEnqueueOnce inserts one execution via EnqueueOnce, failing the test on error.
 func mustEnqueueOnce(t *testing.T, repo job.FencedQueueRepository, in job.Enqueue) job.Job {
 	t.Helper()
-	j, err := repo.EnqueueOnce(context.Background(), in)
+	j, err := repo.EnqueueOnce(context.Background(), withJobID(in))
 	if err != nil {
 		t.Fatalf("EnqueueOnce %q/%q: %v", in.ID, in.LogicalKey, err)
 	}
