@@ -58,6 +58,7 @@ var ids = sdk.IDGenerator{}
 // sessionRepo carries the idle-timeout capability, so this host may set
 // AUTH_IDLE_TIMEOUT.
 var _ session.ActivityRepository = sessionRepo{}
+var _ user.PasswordHashUpgrader = passwordRepo{}
 
 // data holds every auth entity in maps behind one mutex. The v2 collections
 // (oauthAccounts, securityEvents) are slices where the port has no single-key
@@ -453,6 +454,24 @@ func (r passwordRepo) Set(ctx context.Context, userID, hash string) error {
 	defer r.mu.Unlock()
 	_, err := r.changePasswordLocked(userID, user.PasswordChange{NewHash: hash, Now: time.Now().UTC()}, false)
 	return err
+}
+
+// UpgradeHash is the compare-and-swap user.PasswordHashUpgrader the service
+// re-hashes through after a successful login: it replaces only the hash, and
+// only while it still equals oldHash, never bumping auth_revision or revoking a
+// session, since both hashes encode the same password.
+func (r passwordRepo) UpgradeHash(ctx context.Context, userID, oldHash, newHash string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current, ok := r.passwords[userID]
+	if !ok || current != oldHash {
+		return false, nil
+	}
+	r.passwords[userID] = newHash
+	return true, nil
 }
 
 func (r passwordRepo) Get(_ context.Context, userID string) (string, error) {

@@ -74,3 +74,11 @@ func TestIDs(t *testing.T) {
 		return New().Repositories()
 	})
 }
+
+// TestPasswordHashUpgrade runs the compare-and-swap re-hash suite, separate
+// from Run, against authmem.
+func TestPasswordHashUpgrade(t *testing.T) {
+	storetest.RunPasswordHashUpgrade(t, func(t *testing.T) auth.Repositories {
+		return New().Repositories()
+	})
+}

@@ -49,6 +49,7 @@ import (
 	sdkauth "github.com/gopernicus/gopernicus/sdk/capabilities/authentication"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
@@ -279,6 +280,16 @@ func loadKeys(mode environment.Mode, log *slog.Logger) (authentication.Keys, err
 	return authentication.NewKeys(mode, in, log, authentication.KeyJWT, authentication.KeyIdentifier)
 }
 
+// buildJWTSigner signs with the AUTH_JWT_KEYS ring when it is set (stamping
+// kid; AUTH_JWT_SECRET kept beside it becomes the legacy id that verifies
+// kid-less tokens through a rotation), else with the single AUTH_JWT_SECRET.
+func buildJWTSigner(keys authentication.Keys) (cryptids.JWTSigner, error) {
+	if len(keys.JWTRing.Keys) > 0 {
+		return golangjwt.NewRing(keys.JWTRing, golangjwt.WithLegacyKeyID(keys.JWTLegacyKeyID))
+	}
+	return golangjwt.New(string(keys.JWTSecret))
+}
+
 // loadServerConfig reads the HTTP server settings. Production requires an
 // https PUBLIC_BASE_URL, the one origin allowed to send cookie mutations.
 func loadServerConfig(mode environment.Mode) (web.ServerConfig, error) {
@@ -362,7 +373,7 @@ type mounted struct {
 // client-info stamp covers every route on router, inside the TrustProxies Use
 // newRouter installed.
 func mount(router *web.WebHandler, c composition) (mounted, error) {
-	signer, err := golangjwt.New(string(c.keys.JWTSecret))
+	signer, err := buildJWTSigner(c.keys)
 	if err != nil {
 		return mounted{}, fmt.Errorf("build jwt signer: %w", err)
 	}

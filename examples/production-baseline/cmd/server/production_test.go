@@ -46,6 +46,13 @@ var productionKeys = map[authentication.KeyName]string{
 	authentication.KeyIdentifier: strings.Repeat("c3", 32),
 }
 
+// productionJWTRing is the ring form .env.example documents for the signing
+// key: one id, active, no legacy single key beside it.
+var productionJWTRing = map[string]string{
+	"AUTH_JWT_KEYS":       "k1:" + strings.Repeat("b2", 32),
+	"AUTH_JWT_ACTIVE_KEY": "k1",
+}
+
 // The one external user the identity doubles know: the mirror maps the
 // provider subject memberSubject to the active local user memberID.
 const (
@@ -153,6 +160,10 @@ func setKeys(t *testing.T) {
 func productionBaseline(t *testing.T) composition {
 	t.Helper()
 	setKeys(t)
+	t.Setenv(string(authentication.KeyJWT), "")
+	for name, value := range productionJWTRing {
+		t.Setenv(name, value)
+	}
 	t.Setenv("PUBLIC_BASE_URL", "https://baseline.example")
 	t.Setenv("IDP_ISSUER", "https://idp.example")
 	t.Setenv("IDP_AUDIENCE", "baseline")
@@ -216,8 +227,36 @@ func TestProductionBaselineConstructs(t *testing.T) {
 	if !strings.Contains(logs.String(), "mfa_required=admins source=config gates=/auth/admin/users*") {
 		t.Errorf("registration lacks the mfa posture line:\n%s", logs.String())
 	}
+	if !strings.Contains(logs.String(), `msg="auth: keys" jwt_signer=ring jwt_active_key_id=k1 jwt_key_ids=k1 jwt_legacy=no`) {
+		t.Errorf("the keys boot line does not report the one-key JWT ring:\n%s", logs.String())
+	}
 	if strings.Contains(logs.String(), "level=WARN") {
 		t.Errorf("production logs a WARN:\n%s", logs.String())
+	}
+}
+
+// TestProductionLegacyJWTKeyWarns is a rotation's phase (a)/(b) on the
+// baseline: AUTH_JWT_SECRET kept beside the ring joins it as the legacy id,
+// the boot line says so, and production WARNs until the single variable is
+// unset.
+func TestProductionLegacyJWTKeyWarns(t *testing.T) {
+	var logs bytes.Buffer
+	c := productionBaseline(t)
+	t.Setenv(string(authentication.KeyJWT), productionKeys[authentication.KeyJWT])
+	keys, err := loadKeys(environment.ModeProduction, quietLog())
+	if err != nil {
+		t.Fatalf("loadKeys: %v", err)
+	}
+	c.keys = keys
+	c.log = slog.New(slog.NewTextHandler(&logs, nil))
+	if _, err := mount(web.NewWebHandler(), c); err != nil {
+		t.Fatalf("production baseline: %v", err)
+	}
+	if !strings.Contains(logs.String(), "jwt_signer=ring jwt_active_key_id=k1 jwt_key_ids=k1,legacy jwt_legacy=yes") {
+		t.Errorf("the keys boot line does not report the legacy id:\n%s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "posture_warning=legacy_key_read_enabled key=jwt") {
+		t.Errorf("production does not WARN about the legacy read:\n%s", logs.String())
 	}
 }
 
