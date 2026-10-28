@@ -6071,3 +6071,76 @@ against the live Auth emulator.
   `key_rotation_test.go` proves each three-phase rotation in process; auth-cms built at
   `GOWORK=off` against the tags shows the ring boot line, a `kid` header, and a `kid`-less
   token passing through legacy.
+
+## AUDIT-060: Model-scoped integrity default and unscoped-rule refusal, tuple-cache source identity, a pre-erase hook
+
+- **Status:** released 2026-10-28: `pockets/authorization` v0.33.0 (`76660098`, #264) and
+  v0.34.0 (`fa288060`, #263); `pockets/authorization/stores/pgx` v0.24.0 and
+  `…/stores/turso` v0.23.0 (`a7ba8afd`, #267); `pockets/authentication` v0.36.0
+  (`ed810dda`, #269). Record: `RELEASING.md`, "Host asks #224/#225/#256"; executed plan
+  `plans/host-asks-224-225-256.md`.
+- **Modules:** the above. Untouched: sdk, `pockets/authorization/stores/goredis`, the
+  authentication stores and views, pgxdb, `pockets`, workshop, every canonical migration set.
+- **Old behavior:**
+  - `authorization.New` accepted `DefaultIntegrityPolicy()` (an unscoped `{owner, 1}` rule)
+    beside a model with a type that declares no `owner`; boot validation skipped that type,
+    but the store's write-time check applied the rule to it, so every write there was refused
+    with `ErrInvariantBlocked`, starting with the first grant.
+  - After the tuple-cache source database was recreated under a running process, the pgx
+    source returned a bare `tuplecache.ErrUnavailable` every poll, and the relay logged it at
+    ERROR forever. pgx `Acknowledge` reported a mid-poll identity change as `ErrConflict`;
+    turso returned `ErrBinding` (`sdk.ErrInvalidInput`).
+  - Erasing a user left their `user:<id>` authorization tuples to the host, with no
+    server-side seam; the host had to revoke roles in separate requests before the erase.
+- **New behavior:**
+  - **`mutations.DefaultIntegrityPolicyFor(model)`**: one explicit `{T, owner, 1}` rule per
+    modelled type that declares `owner`. It does not cover opaque types or permission-only
+    `owner` types.
+  - **`authorization.New` refuses**, in every mode, a rule with an empty `ResourceType` when a
+    modelled type with relations lacks the rule's relation (including a relation no type
+    declares): `ErrIntegrityRuleUnscoped`, matching `sdk.ErrInvalidInput`, naming the rule,
+    the types and both fixes. Explicit rules are never refused.
+  - **`tuplecache.ErrSourceIdentity`** (wraps `ErrUnavailable`). On it the runtime detaches:
+    decisions answer from SQL, `Poll` returns `workers.ErrPoolShutdown` wrapping the cause (one
+    ERROR, the pool stops, `Run` returns the cause), `Rebuild` returns it plain, and
+    `Stats.Detached` is true. pgx and turso return it from `Snapshot` and `Acknowledge`; pgx
+    `Acknowledge` reads the head row on a zero-row update; other head-row failures carry
+    their own `ErrUnavailable` messages.
+  - **`AdministrationConfig.BeforeErase`** (`authlogic.EraseHook`) runs after the erase's own
+    checks and before the store transaction, on the request context bounded by
+    `EraseTimeout`, on every call. A hook error refuses with nothing erased
+    (`ErrEraseRefusedByHook` wrapping it; its sdk kind sets the status). Two WARNs carry ids
+    and `error_kind` only. `BeforeErase` without `Repositories.UserErasure` refuses boot
+    (`ErrBeforeEraseWithoutErasure`).
+
+**Migration:**
+- A host passing `DefaultIntegrityPolicy()` (or any unscoped rule) beside a model with a type
+  lacking that relation must scope the rule or switch to `DefaultIntegrityPolicyFor(model)`
+  plus its own rules, or `authorization.New` (servers and seeders alike) fails at boot. Boot
+  staging first.
+- Hosts on the tuple cache: readiness reports `Stats().Detached` in its 200 body and never
+  returns 503 on it; liveness may, or the host exits on
+  `errors.Is(relayErr, tuplecache.ErrSourceIdentity)`. Restart the process after a database
+  recreate; do not rebuild the pool. Code matching turso's source-path `ErrBinding` or pgx
+  `Acknowledge`'s `ErrConflict` for an identity change matches `ErrSourceIdentity` /
+  `ErrUnavailable` instead.
+- Hosts with an authorization pocket and the erase route: wire `BeforeErase` to revoke the
+  person's role assignments in every scope, protected relations first, under an audit source
+  naming the administrator with reason `user_erase`; never inside a `Transact` on the
+  authorization store. Re-run the erase to repair a half-finished one. Remove the separate
+  role-removal step.
+- No schema change.
+
+**Verification:**
+- authorization: `DefaultIntegrityPolicyFor` and refusal tests (the issue's shape refused,
+  the model-built policy plus a platform-admin rule applying the first grant, the exemptions);
+  `TestSourceIdentityChangeDetachesTheRelay` (snapshot, acknowledgement, rebuild, a real
+  `workers.Pool`); pgx live and turso local recreate tests; mutation proofs on every PR (5, 6,
+  10).
+- authentication: hook order, refusal, WARN, cancellation and deadline tests, the HTTP
+  mapping and the boot refusal; mutation proofs (16).
+- `live-stores` green on `main` before each tag; cold verification of every tag, the
+  gps-three-sixty shape and set C; production-baseline on PostgreSQL 18 (sole owner 409, 200
+  after a second owner, audit attributed to the admin) and auth-cms (erase 200, session 401);
+  auth-cms and production-baseline built at `GOWORK=off` against the tags boot with no
+  integrity WARN.

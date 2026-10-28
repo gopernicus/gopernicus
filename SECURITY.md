@@ -29,13 +29,13 @@ each module receives fixes. Latest tags at the time of writing:
 | Module | Latest |
 |---|---|
 | `sdk` | v0.23.0 |
-| `pockets/authentication` | v0.35.0 |
+| `pockets/authentication` | v0.36.0 |
 | `pockets/authentication/stores/pgx` | v0.18.0 |
 | `pockets/authentication/stores/turso` | v0.17.0 |
 | `pockets/authentication/views/goth` | v0.9.0 |
-| `pockets/authorization` | v0.32.0 |
-| `pockets/authorization/stores/pgx` | v0.23.0 |
-| `pockets/authorization/stores/turso` | v0.22.0 |
+| `pockets/authorization` | v0.34.0 |
+| `pockets/authorization/stores/pgx` | v0.24.0 |
+| `pockets/authorization/stores/turso` | v0.23.0 |
 | `pockets/authorization/stores/goredis` | v0.6.0 |
 | `pockets/cms` | v0.7.0 |
 | `pockets/cms/stores/pgx` | v0.6.0 |

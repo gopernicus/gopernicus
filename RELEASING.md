@@ -1,5 +1,322 @@
 # Releasing gopernicus modules
 
+## Host asks #224/#225/#256: tuple-cache identity error, model-scoped integrity default, a server-side erase hook (published 2026-10-28)
+
+Five annotated tags (not signed) on four modules, for three issues filed by gps-three-sixty.
+Each tag was cut at its PR's squash-merge commit on `main` after a green `live-stores`
+dispatch on `main`, pushed one at a time, confirmed on origin, then cold-verified from a
+scratch consumer (`GOWORK=off`, an empty module cache, `proxy.golang.org`,
+`sum.golang.org`, `go mod verify`, `go build ./...`, `go 1.26.10`). Claude cuts and pushes
+the tags; the owner merges. No migration, no sdk tag, no views tag, no workshop tag. Design
+and rulings: `plans/host-asks-224-225-256.md` (ratified 2026-10-28, "good with your recs on
+R-1 to R-8"; executed copy in `plans/`). The audit entry is **AUDIT-060**. This section is
+the whole record: there is no handoff file and no manifest. The operator surface is the docs
+site: *Operations runbooks* "Erase a person" (step 3 now names `BeforeErase`), the
+authorization pocket page (the integrity default, the refusal, the recreated-database
+paragraph and the two probe shapes) and the authentication pocket page (`BeforeErase`). The
+references are the authorization README's integrity-policy and "Optional TupleCache"
+sections and the authentication README's "Erasure" section.
+
+Closes **#225** (#264), **#224** (#263 core, #267 stores) and **#256** (#269).
+
+**What changed.**
+- **authorization v0.33.0 (#264, #225): a default policy built from the model, and a boot
+  refusal.**
+  - `mutations.DefaultIntegrityPolicyFor(model)` returns one explicit `{T, owner, 1}` rule per
+    modelled type that declares `owner`, in sorted type order; a model with no types returns
+    an empty policy. Unmodelled (opaque) types and types whose `owner` is a permission only
+    are NOT covered (the unscoped default covered them): add an explicit rule for each.
+    Compose with `p := DefaultIntegrityPolicyFor(model); p.Rules = append(p.Rules, …)`.
+  - `authorization.New` refuses, in every mode, an **unscoped** rule (empty `ResourceType`)
+    when some modelled type with at least one relation does not declare that rule's
+    relation, including a relation no type declares (R-8): `ErrIntegrityRuleUnscoped`
+    (matches `sdk.ErrInvalidInput`), naming the rule, the types and both fixes. It runs only
+    when a model is configured and `Repositories.Mutations` is wired. Explicit rules are
+    never refused; types with no relations are exempt. `DefaultIntegrityPolicy()` is
+    unchanged and documented as unscoped.
+  - The "owner is unprotected" WARN now recommends `DefaultIntegrityPolicyFor(model)` or a
+    rule per type.
+- **authorization v0.34.0 (#263, #224 core): the relay stops on a lost source identity.**
+  - `tuplecache.ErrSourceIdentity` wraps `ErrUnavailable` (existing `errors.Is` callers are
+    unaffected): "tuple cache source identity changed since this process started (the
+    database was recreated or repointed); restart the process".
+  - On that error from `Snapshot` or `Acknowledge` the runtime detaches: it sets a sticky
+    `detached` flag and clears `ready`, so every decision answers from SQL (`Fallbacks`
+    counts them). `Poll` returns `workers.ErrPoolShutdown` wrapping the cause, so a
+    `workers.Pool` logs **one** ERROR (`worker requesting pool shutdown`), one INFO
+    `worker pool stopped`, and `Run` returns an error matching `ErrSourceIdentity`. Later
+    `Poll`s return the same error, neither counted nor stamped (`PollFailures` stays 1).
+    `Rebuild` returns `ErrSourceIdentity` plain (it is a host API, not a `WorkFunc`).
+  - `tuplecache.Stats.Detached`. Readiness keeps checking the database only and reports
+    `"tuple_cache":"detached"` in its 200 body, **never 503** (every replica detaches on its
+    next poll after a recreate, so a 503 would pull the fleet); liveness may answer 503 on
+    it, or the host exits on `errors.Is(relayErr, tuplecache.ErrSourceIdentity)`. Restart
+    the process, not the pool: the flag is sticky.
+- **authorization stores pgx v0.24.0 / turso v0.23.0 (#267, #224 stores): the stores
+  trigger the detach.**
+  - Both return `ErrSourceIdentity` from `Snapshot` and from `Acknowledge` when the source
+    was recreated or repointed under a running process.
+  - pgx `Acknowledge`, on an `UPDATE` that matches no row, now reads the head row and
+    returns its error (a mid-poll recreate was reported as `ErrConflict`); `ErrConflict`
+    remains for a real receipt conflict.
+  - The other head-row failures carry their own messages, each wrapping `ErrUnavailable`
+    and none echoing a value: missing or duplicated ("apply the tuple cache migration
+    once"), wrong slot or protocol, an identity that is not 32 lowercase hex. The identity
+    is checked last, so a malformed value is never reported as "changed".
+  - Both repin core v0.32.0 → **v0.34.0**, so a host taking the store tags also takes
+    #264's boot refusal. goredis is untouched (v0.6.0; MVS lifts the core through the
+    host's pin).
+- **authentication v0.36.0 (#269, #256): `AdministrationConfig.BeforeErase`.**
+  - `authlogic.EraseHook func(ctx, actor sdk.Principal, userID string) error`, wired through
+    `AdministrationConfig.BeforeErase` (and `authlogic.WithErasure(ErasureConfig{…})`). It
+    runs after `EraseUser`'s own checks (port, directory, id, self-erase) and before the
+    subject keys, the event and the store transaction, on the request context bounded by
+    `EraseTimeout` (a dropped request stops it).
+  - A hook error refuses the erase with nothing erased: `ErrEraseRefusedByHook` wrapping the
+    host's error, so the host's sdk kind sets the status (`ErrConflict`/`ErrInvariantBlocked`
+    409, `ErrForbidden` 403, `ErrInvalidInput` 400, `ErrUnavailable` 503, unkinded 500). One
+    WARN `auth: erase refused by BeforeErase` with `user_id`, `actor_id` and `error_kind`
+    only; a store refusal after a successful hook logs `auth: erase refused after
+    BeforeErase ran` with the same fields. The hook runs on every call, the repeat included.
+  - `New` refuses `BeforeErase` without `Repositories.UserErasure`
+    (`ErrBeforeEraseWithoutErasure`, R-4). The route is unchanged.
+  - The two transactions are never atomic. The hook runs first because its work is
+    reversible; re-running the erase completes a half-finished one and sweeps a grant that
+    raced in. The README's "Erasure" section lists the six partial states and their repair.
+
+| Step | Tag | Commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/authorization/v0.33.0` | `76660098` | #264 (PR-1, #225) | 40734232634 @ `76660098` | OK; set 1 |
+| 2 | `pockets/authorization/v0.34.0` | `fa288060` | #263 (PR-2, #224 core) | 40737808090 @ `fa288060` | OK; set 2 |
+| 3 | `pockets/authorization/stores/pgx/v0.24.0` | `a7ba8afd` | #267 (PR-3, #224 stores) | 40748982044 @ `a7ba8afd` | OK; set 3 |
+| 3 | `pockets/authorization/stores/turso/v0.23.0` | `a7ba8afd` | #267 (PR-3, #224 stores) | 40748982044 @ `a7ba8afd` | OK; set 3 |
+| 4 | `pockets/authentication/v0.36.0` | `ed810dda` | #269 (PR-4, #256) | 40774649712 @ `ed810dda` | OK; the gps-three-sixty shape |
+| — | none | this PR | PR-5 (record, repins) | — | set C |
+
+PR-1 and PR-2 merged in that order, so they took two core tags (R-3 (a)). PR-4 took
+authentication v0.36.0 after S4d part 3's v0.35.0 (R-5 (a)). Every module ships MINOR under
+the v0 convention. **Not tagged:** sdk (v0.23.0), `pockets/authorization/stores/goredis`
+(v0.6.0), the authentication stores (pgx v0.18.0, turso v0.17.0) and views/goth (v0.9.0),
+pgxdb (v0.17.0), `pockets`, workshop, ui/goth, the examples, and every other module. Nothing
+retracts.
+
+**The MVS sets.**
+- **Set 1** (step 1): authorization v0.33.0 + the RELEASED stores pgx v0.23.0 / turso v0.22.0
+  / goredis v0.6.0: verified, builds. No store repin is forced by #225.
+- **Set 2** (step 2): authorization v0.34.0 + the same released stores: verified, builds.
+  The old stores still return the bare `ErrUnavailable`, so nothing detaches on this set.
+- **Set 3** (step 3): authorization v0.34.0 + pgx v0.24.0 + turso v0.23.0 + goredis v0.6.0:
+  verified, builds.
+- **The gps-three-sixty shape** (step 4): authentication v0.36.0 + authentication pgx
+  v0.18.0 / turso v0.17.0 + authorization v0.34.0 + authorization pgx v0.24.0 + goredis
+  v0.6.0 + golang-jwt v0.4.0 + bcrypt v0.3.0 + pgxdb v0.17.0: verified, builds; MVS selects
+  sdk v0.23.0.
+- **Set C** (this PR, from the tags): auth-cms, production-baseline and external-identity at
+  `GOWORK=off` from an EMPTY module cache over `proxy.golang.org` + `sum.golang.org`: each
+  reports `all modules verified` and builds.
+
+**Upgrade notes.** One behaviour change can stop a boot (row 1); rows 3 and 4 change what a
+host observes after a database recreate; everything else is opt-in or additive.
+
+> **Read first:** `grep -rnE 'DefaultIntegrityPolicy\(|IntegrityRule\{|tuplecache\.New\(|ErrBinding|ErrConflict|
+> AdministrationConfig\{|UserErasureRoute' --include='*.go'`.
+> - **Pins:** authorization **v0.34.0**; a SQL host on the tuple cache pins stores **pgx v0.24.0** or **turso
+>   v0.23.0** to get the detach; authentication **v0.36.0** for `BeforeErase`. goredis stays **v0.6.0**. Repin with
+>   explicit `GOWORK=off go get <module>@<tag>`, then `GOWORK=off go mod tidy`; never `go work sync`.
+
+| # | Flip | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | **unscoped integrity rule refused at `New`** (R-1, R-8) | a host passing `DefaultIntegrityPolicy()` (or any rule with an empty `ResourceType`) beside a model where a type with relations lacks that relation no longer boots: `ErrIntegrityRuleUnscoped`. This includes seeders and bootstrap binaries that call `authorization.New` with a model | scope the rule to its types (never refused), or `DefaultIntegrityPolicyFor(model)` + `append` | authorization@v0.33.0 |
+| 2 | `mutations.DefaultIntegrityPolicyFor(model)` | opt-in; drops coverage of opaque and permission-only `owner` types | an explicit rule per such type | authorization@v0.33.0 |
+| 3 | `ErrSourceIdentity`, relay detach, `Stats.Detached` | after the source database is recreated, one ERROR, the pool stops, `Run` returns the cause; decisions answer from SQL. A host that rebuilds the pool on a non-nil `Run` loops | restart the process | authorization@v0.34.0 + stores pgx@v0.24.0 / turso@v0.23.0 |
+| 4 | pgx `Acknowledge` reads the head row on a zero-row update | an identity change mid-poll is `ErrSourceIdentity`, a missing head row is "head row missing" (both were `ErrConflict`) | — | stores pgx@v0.24.0 |
+| 5 | **turso binding mismatch kind** | `ErrBinding` (`sdk.ErrInvalidInput`) → `ErrSourceIdentity` (`sdk.ErrUnavailable`) on the source path; the mirrors' `ErrBinding` (memory, goredis) is unchanged | match `ErrSourceIdentity` / `ErrUnavailable` | stores turso@v0.23.0 |
+| 6 | `AdministrationConfig.BeforeErase` | opt-in; nothing changes without it; with it but without `Repositories.UserErasure`, boot refuses (`ErrBeforeEraseWithoutErasure`) | leave it nil | authentication@v0.36.0 |
+| 7 | production-baseline / auth-cms hooks; production-baseline `DefaultIntegrityPolicyFor(accessModel())` (R-7) | example behaviour; docs | — | examples (untagged), docs |
+
+**Upgrade notes by host shape.**
+- **gps-three-sixty** (from authentication v0.33.1 / authentication pgx v0.17.0 /
+  authorization v0.32.0 / authorization pgx v0.23.0 / goredis v0.6.0 / sdk v0.21.0): repin to
+  the cold-verified shape above (authentication v0.36.0, authentication pgx v0.18.0,
+  authorization v0.34.0, authorization pgx v0.24.0, goredis v0.6.0; S4d part 3's notes apply
+  to the authentication and golang-jwt moves). The store tags carry #264's boot refusal; it is
+  inert for gps (its rule is explicit). Then three host edits:
+  1. **Integrity:** `pockets/authorization/logic/access/access.go` `IntegrityPolicy()` becomes
+     `DefaultIntegrityPolicyFor(Model())` plus `append` of `{platform, admin, 1}`, and the
+     comment explaining why the default was left out goes. Today's explicit policy keeps
+     working unchanged; the new form covers `owner` automatically on the first type that
+     declares it.
+  2. **Readiness:** pass the `*tuplecache.TupleCache` into `healthzHandler` and report
+     `Stats().Detached` in its 200 body; never return 503 on it. Optionally exit on
+     `errors.Is(relayErr, tuplecache.ErrSourceIdentity)` so the orchestrator restarts the
+     process. After a `docker compose down -v` of the iam database, restart the server: the
+     relay has stopped after one ERROR and `relayDone` fires early.
+  3. **`BeforeErase`:** in the host pocket `pockets/authorization/logic/access` (next to
+     `Checks`), declare two narrow interfaces (an assignment lister by subject, a role
+     unassigner) rather than holding `*roles.Service` / `*mutations.Service`. The hook
+     re-reads the first page of `user:<id>` assignments until it is empty, unassigns `admin`
+     before `developer`, runs under `audit.WithSource(ctx, audit.Source{ActorType: actor.Type,
+     ActorID: actor.ID, Reason: "user_erase"})`, returns the pocket error unwrapped, stops
+     when a page does not shrink, and never runs inside a `Transact` on the iam database.
+     Late-bind it the way `checks.Bind` already does and set `AdministrationConfig.BeforeErase`.
+     Mind the two-transaction states: a 409 with the roles intact is the last-admin rule
+     (nothing erased); a 409 after the roles vanished is a held claim (settle it, re-run);
+     re-running erase is the orphan sweep. Then delete the browser-side `eraseWithRoles`,
+     `EraseFailure` and the `'roles' | 'erase'` phases in `admin-users-queries.ts` and call
+     `eraseUser` directly; CLI and script callers of the erase route get the cleanup too.
+     Both pockets run on the iam database there, so "two databases" means two stores and two
+     transactions on one database; the story is the same.
+- **battleboardhq** (authentication v0.33.1, authorization v0.32.0, authorization pgx
+  v0.23.0 at the time of writing): its integrity rule is explicit (`{tenant, owner, 1}`), so
+  the refusal is inert; it wires no TupleCache, so #224 changes nothing it sees; it wires no
+  erase route, so `BeforeErase` waits until it adopts erasure. Repin authorization v0.34.0 /
+  pgx v0.24.0 on the path S4d part 3 names; no code change for this train.
+- **segovia/v2** (sdk v0.15.0, authentication v0.19.1): defer to its repin milestone.
+- **Generic hosts.** Run the Read-first grep and **boot staging first**. A host passing
+  `DefaultIntegrityPolicy()` with a model that has a type without `owner` now fails at boot
+  with `ErrIntegrityRuleUnscoped`, which names the type and both fixes. If the type is one
+  you never write through the pocket, or you assign an undeclared relation on it (legal: an
+  undeclared relation is unconstrained), scope the rule explicitly. A host on the tuple cache
+  over pgx or turso adopts the probe shapes and the restart in row 3. A host with an
+  authorization pocket and the erase route wires `BeforeErase` from the examples' recipe and
+  removes its manual runbook step.
+- **Examples (this PR).** Every example builds, vets and tests at `GOWORK=off` on these tags.
+  Pins moved by explicit `GOWORK=off go get`, then tidy:
+  - `auth-cms`: authentication v0.36.0, authorization v0.34.0, authorization pgx v0.24.0
+    (used by `internal/outbound/domains/documents`).
+  - `production-baseline`: authentication v0.36.0, authorization pgx v0.24.0 (authorization
+    v0.34.0 was already pinned by #266).
+  - `external-identity`: authentication v0.36.0 (it wires no erasure; nothing else).
+
+**Run and look.**
+- **#264 (PostgreSQL 18):** production-baseline booted with no integrity WARN
+  (`integrity_rules=1`); a viewer as the first grant on `project:p1` → **409**
+  `invariant_conflict`, an owner first → **200**, a viewer after it → **200**. The
+  gps-three-sixty shape (platform{admin, developer}, project{owner, viewer}) with
+  `DefaultIntegrityPolicy()` is refused at `New`; with `DefaultIntegrityPolicyFor(model)` +
+  `{platform, admin, 1}` the first `platform:global#admin` grant is `applied`.
+- **#263 (a real `workers.Pool`, text logger):** one ERROR naming the fix, then `worker pool
+  stopped … Errors:1`; `Run` returned the cause with `detached=true`.
+- **#267 (`GOWORK=off`, published core v0.34.0 + goredis v0.6.0 + a real Redis + the store,
+  PostgreSQL 18):** publish once, then `DROP DATABASE … WITH (FORCE)`, `CREATE DATABASE` and
+  re-migrate under the running relay: `worker iteration failed` ERRORs while the database
+  was gone or half-migrated (`database "…" does not exist`, `relation
+  "public.iam_tuple_cache" does not exist` ×2), then exactly one `worker requesting pool
+  shutdown … tuple cache source identity changed since this process started …; restart the
+  process`, `worker stopped`, `worker pool stopped … Errors:4`, then silence. Decisions still
+  answered from SQL (`allowed:true, detached:true, fallbacks:2`).
+- **#269:** production-baseline on PostgreSQL 18: erasing a sole project owner → **409**,
+  the user still active and both tuples intact; with a second owner → **200**, no roles
+  left, the audit showing `removed viewer` and `removed owner` attributed to the admin with
+  reason `user_erase`; a repeat → **200** `changed:false`; an unknown id → **404** with the
+  after-hook WARN. auth-cms (admin at AAL2): the erase → **200**, the person's project
+  membership and global auditor role gone, their session **401** afterwards; a sole owner
+  → **409**, nothing removed. No email in any hook WARN.
+- **This PR (binaries built at `GOWORK=off` against the tags; `go version -m` shows
+  authentication v0.36.0, authorization v0.34.0, sdk v0.23.0):** auth-cms (development,
+  memory) boots with `registered authorization pocket … integrity_rules=1` and no integrity
+  WARN, the `auth: maintenance`, `auth: mfa posture`, `auth: registration`, `auth: api key
+  lifetime`, `auth: session lifetime` and `auth: keys` lines; `/healthz` 200, the erase route
+  mounted (401 unauthenticated). production-baseline (development, PostgreSQL 18 in docker,
+  migrated pre-boot; also authorization pgx v0.24.0, authentication pgx v0.18.0) boots with
+  `integrity_rules=1` and no integrity WARN (the `DefaultIntegrityPolicyFor(accessModel())`
+  line), the same `auth:` lines plus `auth: external provider lifetime`, and only the
+  documented development WARNs; `/healthz` 200.
+
+**The review record.**
+- **The plan** passed a three-reviewer gate on the draft (lead-backend-engineer and
+  data-integration-reviewer: ratify with edits; platform-sre: ship with edits), folded under
+  "Decided by gate". The design moved on three points because of it: a general `Resolve` →
+  `DefaultIntegrityPolicyFor`; `ErrWorkerShutdown` → `ErrPoolShutdown` (SRE #4: a supervisor
+  must tell identity loss from a drain); the hook recipe → role assignments by subject across
+  every scope, protected relations first (backend #11, #12; data #4, #5; SRE #6). Also SRE #3
+  (readiness never 503 on `Detached`), SRE #1/#2 and data #7 (the pgx live test is untagged
+  and recreates only its own schema), data #3 / backend #10 (pgx `Acknowledge` reads the head
+  row), SRE #7 (the two erase WARNs; reason `user_erase`).
+- **#264, #263, #267, #269:** gated by `make guard && make check`, `test -race` per module
+  (see Known and deferred for turso) and mutation (bite) proofs: 5 (#264), 6 (#263), 10
+  (#267, five per store), 16 (#269). #267 ran pgx live on PostgreSQL 18 bare, under
+  `POSTGRES_TEST_SCHEMA` and at `GOWORK=off`; turso under `-race`, `GOWORK=off` and
+  `-tags=integration` on a local file.
+
+**Owner rulings.** Ratified 2026-10-28 ("good with your recs on R-1 to R-8"): **R-1 (a)**
+refuse an unsatisfiable unscoped rule at `New` in every mode (a deliberate departure from the
+WARN posture: a policy that blocks every write on a type is worse than a boot refusal); **R-2
+(a)** `ErrPoolShutdown` wrapping `ErrSourceIdentity`; **R-3 (a)** two core tags; **R-4 (a)**
+refuse `BeforeErase` without erasure; **R-5 (a)** authentication v0.36.0 after v0.35.0;
+**R-6 (a)** example wiring in the feature PRs through `go.work`, repins here; **R-7 (a)**
+production-baseline uses `DefaultIntegrityPolicyFor`; **R-8 (a)** refuse an unscoped rule for
+a relation no type declares.
+
+**As-built deviations a host can see.**
+- **The refusal message is prefixed by its sentinel.** As built: `authorization: unscoped
+  integrity rule: invalid input: integrity rule {owner} names no resource type and platform
+  declares no owner relation, so every write there would be refused; scope the rule to the
+  types that have it, or build it from the model with
+  mutations.DefaultIntegrityPolicyFor(model)`. Several types are joined with commas and no
+  space (`platform,team`). The plan's text began `authorization: integrity rule {owner} …`.
+  Match `ErrIntegrityRuleUnscoped` with `errors.Is`, not the text.
+- **#263's stores did not detach until #267.** Between `pockets/authorization/v0.34.0` and
+  the store tags, pgx v0.23.0 and turso v0.22.0 still returned the bare error every poll
+  (set 2); the detach needs pgx v0.24.0 or turso v0.23.0.
+- **#267 changed two store behaviours** (rows 4 and 5): turso's binding mismatch moves kind
+  from `ErrBinding` (`sdk.ErrInvalidInput`) to `ErrSourceIdentity` (`sdk.ErrUnavailable`);
+  pgx `Acknowledge` with a missing head row reports "head row missing" instead of
+  `ErrConflict`.
+- **#269: the example hooks take concrete types.** Guard H10 forbids an interface type in a
+  composition root under `cmd/`, so production-baseline and auth-cms pass `*roles.Service` and
+  `*mutations.Service`; a host whose hook lives in its own pocket (gps-three-sixty) declares
+  narrow interfaces there.
+- **#269: a no-progress guard** the plan did not have. When a page of assignments does not
+  shrink, the example hook returns `sdk.ErrUnavailable` (**503**) instead of looping.
+- **#269: the real check used a third user.** The plan's step "add yourself as a second
+  owner" is refused by the role routes' `RefuseSelfTarget` write policy, so a third user
+  became the second owner.
+- **The audit entry is AUDIT-060**; the plan named AUDIT-059, which S4d part 3 took.
+- **The plan's PR-5 cold consumer named authentication pgx v0.17.0**; it was verified with
+  v0.18.0 (S4d part 3's store tag), which the gps-three-sixty shape now selects.
+- **production-baseline already pinned authorization v0.34.0** (#266), so this PR moves only
+  authentication and authorization pgx there.
+- **auth-cms and production-baseline did not build at `GOWORK=off` on `main` between #269 and
+  this PR**: #269 set `AdministrationConfig.BeforeErase` while their go.mod pinned
+  authentication v0.35.0 (the accepted R-6 window). This PR's repins fix it.
+
+**Verification record.**
+- `make guard` and `make check` pass on every PR. `live-stores` is green on `main` before each
+  tag (runs 40734232634, 40737808090, 40748982044, 40774649712).
+- **Live legs (#267).** `TestTupleSourceRecreatedDatabaseStopsTheRelay` (pgx, untagged,
+  gated on `POSTGRES_TEST_DSN`) drops and recreates only its own schema and re-applies the
+  stream; the turso equivalent runs on local SQLite. Each asserts exactly one ERROR whose
+  `error` attribute matches `ErrSourceIdentity`, one `worker pool stopped`, `Run` returning
+  the cause, `ErrSourceIdentity` from `Snapshot` and `Acknowledge`, and a fresh process
+  publishing again.
+- **From the tags (this PR):** every repinned example `GOWORK=off go build`, `vet` and
+  `test`; set C; the run above; `make docs-build` builds the runbook change.
+- **This PR:** docs and pins only; `make guard` and `make check` pass.
+
+**Known and deferred.**
+- **turso `-tags=integration` under `-race`** exceeds the 10-minute default timeout locally;
+  without race it passes in about 50 s, and CI runs it without race. turso's CI legs skip
+  without secrets, so turso is proven hermetically and on a local file.
+- **Pre-existing:** auth-cms `go test -race ./cmd/server` reports a data race in the passkey
+  tests (`passkey_test.go:208`, a shared log buffer). It reproduces on unchanged `main`.
+  Follow-up.
+- **The hook's audit `Source` carries no `RequestID`**, so the unassign rows a hook writes
+  are not joined to the erase request. Follow-up.
+- **`securityevent.ErrorKind` has no `forbidden` or `unavailable` label**, so the hook WARNs
+  log `error_kind=unknown` for a 403 or 503 refusal. Follow-up.
+- **auth-cms's `authzIntegrityPolicy` / `authzSchema`** break the naming rule (never "authz");
+  rename later.
+- **Pre-existing, not from this train:** in a bare (no schema) local authentication pgx run,
+  `TestInvitationAcceptanceUpgrade` and `TestOAuth2SessionUpgradePreservesBrowserSession` fail
+  with "oauth_clients table missing", the same on unchanged `main`; they pass under
+  `POSTGRES_TEST_SCHEMA`.
+- **Out of scope by plan:** a repeat-error dampener in `sdk/pkg/workers`; re-binding the relay
+  without a restart; a `PurgeSubjectAuthorization` command across scopes; a read-only claim
+  pre-check before the hook; a boot WARN for `UserErasureRoute` without a hook; a post-erase
+  hook; `IntegrityPolicy.Resolve` / `With`.
+- gps-three-sixty's, battleboardhq's and segovia's repins happen in their own repositories.
+
 ## Key management and password policy (SOC 2 slice S4d part 3 — published 2026-10-28)
 
 Seven annotated tags (not signed) on seven modules, one of them new
