@@ -260,3 +260,60 @@ func TestWebHandler_HijackThroughGlobalMiddleware(t *testing.T) {
 		t.Errorf("body = %q, want %q", body, "hijacked")
 	}
 }
+
+func TestWebHandler_RoutesRecordsEveryRegistrationPathInOrder(t *testing.T) {
+	noop := func(w http.ResponseWriter, r *http.Request) {}
+	h := NewWebHandler()
+	h.GET("/healthz", noop)
+	h.Handle("post", "/items", noop)
+	h.Handle("", "/any", noop)
+	h.HandleRaw("/static/", http.HandlerFunc(noop))
+	admin := h.Group("/admin/")
+	admin.DELETE("/reports/{id}", noop)
+	admin.Group("/nested").Handle("patch", "/x", noop)
+
+	want := []Route{
+		{Method: "GET", Pattern: "/healthz"},
+		{Method: "POST", Pattern: "/items"},
+		{Method: "", Pattern: "/any"},
+		{Method: "", Pattern: "/static/", Raw: true},
+		{Method: "DELETE", Pattern: "/admin/reports/{id}"},
+		{Method: "PATCH", Pattern: "/admin/nested/x"},
+	}
+	got := h.Routes()
+	if len(got) != len(want) {
+		t.Fatalf("Routes() = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Routes()[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestWebHandler_RoutesReturnsACopy(t *testing.T) {
+	noop := func(w http.ResponseWriter, r *http.Request) {}
+	h := NewWebHandler()
+	h.GET("/a", noop)
+	h.GET("/b", noop)
+
+	first := h.Routes()
+	first[0] = Route{Method: "PUT", Pattern: "/mutated"}
+	_ = append(first[:1], Route{Pattern: "/appended"})
+
+	got := h.Routes()
+	if got[0] != (Route{Method: "GET", Pattern: "/a"}) || got[1] != (Route{Method: "GET", Pattern: "/b"}) {
+		t.Fatalf("caller mutation leaked into Routes(): %+v", got)
+	}
+
+	h.GET("/c", noop)
+	if len(first) != 2 {
+		t.Fatalf("earlier copy changed length after a new registration: %+v", first)
+	}
+}
+
+func TestWebHandler_RoutesEmpty(t *testing.T) {
+	if got := NewWebHandler().Routes(); len(got) != 0 {
+		t.Fatalf("Routes() on a fresh handler = %+v, want none", got)
+	}
+}

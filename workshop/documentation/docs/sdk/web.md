@@ -47,6 +47,15 @@ outermost-first, so put tracing outside logging and access logs carry the traced
 context. Route groups copy their middleware; later changes to the caller's slice
 cannot alter an existing group. Registration and `Use` are boot-time operations.
 
+`Routes()` returns a copy of every registration in order, as
+`web.Route{Method, Pattern, Raw}`: `Method` is upper-cased (`""` for any
+method), `Pattern` is the final path including any group prefix, and `Raw`
+marks a `HandleRaw` registration, recorded with its raw pattern. It never
+exposes handlers or middleware. A host route-inventory test can compare it
+against the routes it expects. Read it at boot, like `Use`. Routes served
+behind a `HandleRaw` subtree (a nested mux, a static file server) are
+invisible to it.
+
 ## Decode, validate, respond
 
 ```go
