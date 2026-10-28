@@ -2,7 +2,7 @@ module {{.ModulePath}}
 
 go 1.26.10
 
-require github.com/gopernicus/gopernicus/sdk v0.20.0
+require github.com/gopernicus/gopernicus/sdk v0.21.0
 {{- if .HasDB}}
 
 require {{.ConnectorPath}} {{.ConnectorVersion}}

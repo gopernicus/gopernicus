@@ -525,8 +525,12 @@ cite by item number:
     `req.NormalizedLimit` / `list.Params.Limits`; the zero value keeps
     `list`'s `DefaultLimit`/`MaxLimit`.
 14. Entity-ID strategy (segovia-lessons phase 04, amended D9/D10): the
-    pocket `Config` carries `IDs sdk.IDGenerator` (zero value → the
-    nanoid default) and threads it to every ENTITY-KEY constructor; opaque
+    pocket `Config` carries `IDs sdk.IDGenerator` and threads it to every
+    ENTITY-KEY constructor. The zero value selects the class default at the
+    layer that mints, through `ids.Or(sdk.UUIDv7())`: NanoID for identities
+    (users, service accounts, invitations — the user id is the JWT `sub`, so
+    it must not reveal signup time), UUIDv7 for every other generated record
+    id; a configured generator wins everywhere. Opaque
     secrets (session tokens, verification codes, minted key material)
     never follow it — they keep a package-private unconditional random
     generator with a doc saying why. Every entity-keyed store `Create`

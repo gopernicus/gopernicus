@@ -227,6 +227,16 @@ the timeout a blocked file aborts the whole stream — nothing is applied — an
 runner, instead of holding locks that stall login inserts for the runner's whole budget. The S2
 pgx files require PostgreSQL 18 or later, the pgxdb migration floor.
 
+**Generated id columns** in every pgx canonical `CREATE` are `TEXT COLLATE "C"`, and so are the
+columns that reference them, so joins use their indexes and `ORDER BY` matches the memory and
+turso stores' byte order on any cluster locale. Ids are minted in Go; the column default is
+only the raw-SQL backstop: `uuidv7()::text` for record ids and `gen_random_uuid()::text` for
+identities (users, service accounts, invitations), whose NanoIDs must not reveal signup time.
+Since the default-ids release those `CREATE` files changed bytes, so a database that applied
+the earlier files fails the checksum check: recreate it and re-export the ledger (a renumbered
+ledger copies the new bytes over its own filenames), or stay on the previous store tags with
+pgxdb v0.16.x. No in-place upgrade path ships yet.
+
 **Apply the S3 files in their own runner invocation**, before deploying the binaries built
 against them: authentication `0023_retention.sql` (required; its `users.erased_at` `ADD COLUMN`
 comes last) and `0024_security_events_retention.sql` (required), and the admitted index files —

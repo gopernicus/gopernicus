@@ -178,7 +178,13 @@ supplied as a named group:
 | `WithAdministration` | `AdministrationConfig`: machine gate, user administration, list strategy and the `UserErasureRoute` opt-in |
 | `WithMaintenance` | `MaintenanceConfig`: the retention policy (`maintenance.Config`) and `MaintenanceRunnerAcknowledged` |
 
-`WithIDs` and `WithLogger` select optional host dependencies. Nil options return
+`WithIDs` and `WithLogger` select optional host dependencies. With no `WithIDs`,
+users, service accounts and invitations get NanoIDs (identities: the user id is
+the JWT `sub`), and every other generated record id (identifiers, API keys,
+security events, passkeys, recovery codes, challenges, contact changes,
+authentication grants) gets a UUIDv7. One `WithIDs(generator)` overrides every
+class. Secrets and keys (session ids, refresh tokens, OAuth state, API-key
+secrets, invitation secrets) never follow it. Nil options return
 an error; they are not omission markers. Each group replaces its complete value,
 including zero fields. For example, assemble one `DeliveryConfig` with all needed
 senders and encryption settings rather than applying two partial groups that

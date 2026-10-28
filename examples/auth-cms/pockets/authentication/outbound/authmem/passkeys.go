@@ -84,6 +84,9 @@ func (r passkeyRepo) Create(ctx context.Context, in passkey.CreateInput) (passke
 	if p.ID == "" {
 		p.ID = ids.MustGenerate()
 	}
+	if _, taken := r.passkeys[p.ID]; taken {
+		return passkey.Passkey{}, sdk.ErrAlreadyExists
+	}
 	p.CreatedAt = p.CreatedAt.UTC()
 	p.LastUsedAt = nil
 	r.passkeys[p.ID] = clonePasskey(p)

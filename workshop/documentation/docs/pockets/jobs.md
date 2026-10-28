@@ -143,7 +143,12 @@ needs its own bounds.
 
 Protocol keys for `EnqueueOnce`, `Replace` and `LatestStatusByKey` must be nonempty
 (`sdk.ErrInvalidInput` otherwise). Empty execution IDs for ordinary `EnqueueJob`
-still request a generated ID; these are separate concepts.
+still request a generated ID; these are separate concepts. Since jobs v0.8.0 the
+core mints that ID: `jobs.WithIDs` (default `sdk.UUIDv7()`) fills empty job and
+schedule ids on `EnqueueJob`, `EnqueueOnce`, `Replace` and `EnsureSchedule`, and
+the stores reject an empty id with `sdk.ErrInvalidInput` instead of minting one.
+The old `job_<hex>` / `sched_<hex>` prefixes are gone, so never wire
+`sdk.DatabaseID` here. Occurrence ids stay `schedules.OccurrenceID(scheduleID, slot)`.
 
 ## Middleware and job gates
 

@@ -28,28 +28,28 @@ each module receives fixes. Latest tags at the time of writing:
 
 | Module | Latest |
 |---|---|
-| `sdk` | v0.20.0 |
-| `pockets/authentication` | v0.32.0 |
-| `pockets/authentication/stores/pgx` | v0.16.0 |
-| `pockets/authentication/stores/turso` | v0.15.0 |
+| `sdk` | v0.21.0 |
+| `pockets/authentication` | v0.33.1 |
+| `pockets/authentication/stores/pgx` | v0.17.0 |
+| `pockets/authentication/stores/turso` | v0.16.0 |
 | `pockets/authentication/views/goth` | v0.9.0 |
-| `pockets/authorization` | v0.31.0 |
-| `pockets/authorization/stores/pgx` | v0.22.0 |
-| `pockets/authorization/stores/turso` | v0.21.0 |
+| `pockets/authorization` | v0.32.0 |
+| `pockets/authorization/stores/pgx` | v0.23.0 |
+| `pockets/authorization/stores/turso` | v0.22.0 |
 | `pockets/authorization/stores/goredis` | v0.6.0 |
-| `pockets/cms` | v0.6.0 |
-| `pockets/cms/stores/pgx` | v0.5.0 |
+| `pockets/cms` | v0.7.0 |
+| `pockets/cms/stores/pgx` | v0.6.0 |
 | `pockets/cms/stores/turso` | v0.4.0 |
 | `pockets/events` | v0.3.0 |
-| `pockets/jobs` | v0.7.0 |
-| `pockets/jobs/stores/pgx` | v0.7.0 |
-| `pockets/jobs/stores/turso` | v0.6.0 |
+| `pockets/jobs` | v0.8.0 |
+| `pockets/jobs/stores/pgx` | v0.8.0 |
+| `pockets/jobs/stores/turso` | v0.7.0 |
 | `pockets/secrets` | v0.2.0 |
 | `integrations/authentication/firebase` | v0.2.0 |
 | `integrations/cryptids/go-oidc` | v0.2.0 |
 | `integrations/cryptids/go-webauthn` | v0.1.0 |
 | `integrations/cryptids/golang-jwt` | v0.3.0 |
-| `integrations/datastores/pgxdb` | v0.16.0 |
+| `integrations/datastores/pgxdb` | v0.17.0 |
 | `integrations/datastores/turso` | v0.10.0 |
 | `integrations/email/sendgrid` | v0.5.0 |
 | `integrations/encoding/rsc-qr` | v0.1.0 |
@@ -59,7 +59,7 @@ each module receives fixes. Latest tags at the time of writing:
 | `integrations/oauth/github` | v0.3.0 |
 | `integrations/oauth/google` | v0.3.0 |
 | `ui/goth` | v0.2.1 |
-| `workshop/gopernicus` | v0.9.2 |
+| `workshop/gopernicus` | v0.10.0 |
 
 Every module declares `go 1.26.10`; a host that honors the pin builds with a standard
 library carrying the fixes listed in `plans/soc2-s8-toolchain-pgx-repin-handoff.md`.

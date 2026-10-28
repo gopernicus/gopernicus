@@ -18,6 +18,7 @@ package commands
 //     A cold cache FAILS LOUD — it never skips.
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -61,6 +62,8 @@ func TestScaffoldPocketCoreCompiles(t *testing.T) {
 			t.Fatalf("emitted migration missing: %s", m)
 		}
 	}
+
+	assertPgxFloorMatchesDDL(t, target, params)
 
 	replaceModule(t, target, baseModule+"/sdk", filepath.Join(root, "sdk"))
 	replaceModule(t, target, baseModule+"/pockets", filepath.Join(root, "pockets"))
@@ -108,6 +111,38 @@ func TestScaffoldPocketStoresCompile(t *testing.T) {
 		runGo(t, dir, env, "mod", "tidy")
 		runGo(t, dir, env, "build", "./...")
 		runGo(t, dir, env, "vet", "-tags=integration", "./...")
+	}
+}
+
+// pgxFloorMinor is the first pgxdb minor that refuses a server below
+// PostgreSQL 18, the release uuidv7() arrived in.
+const pgxFloorMinor = 17
+
+// assertPgxFloorMatchesDDL pins the emitted pgx store's connector to the DDL it
+// ships: the migration calls uuidv7() if and only if go.mod pins pgxdb at
+// v0.17.0 or later, so a scaffold never emits PostgreSQL 18 DDL behind a
+// connector that would migrate it on 17 and fail on the DEFAULT.
+func assertPgxFloorMatchesDDL(t *testing.T, target string, p pocketParams) {
+	t.Helper()
+	ddl := readFile(t, filepath.Join(target, "stores", "pgx", "migrations", "0001_"+p.Agg+".sql"))
+	gomod := readFile(t, filepath.Join(target, "stores", "pgx", "go.mod"))
+	pin := ""
+	for _, line := range strings.Split(gomod, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == baseModule+"/integrations/datastores/pgxdb" {
+			pin = fields[1]
+		}
+	}
+	var major, minor, patch int
+	if _, err := fmt.Sscanf(pin, "v%d.%d.%d", &major, &minor, &patch); err != nil {
+		t.Fatalf("emitted pgx store go.mod pgxdb pin %q: %v", pin, err)
+	}
+	floored := major > 0 || minor >= pgxFloorMinor
+	if usesV7 := strings.Contains(ddl, "DEFAULT uuidv7()"); usesV7 != floored {
+		t.Fatalf("emitted pgx DDL uses uuidv7() = %t but pgxdb pin %s at the PostgreSQL 18 floor = %t; they must move together:\n%s", usesV7, pin, floored, ddl)
+	}
+	if !strings.Contains(ddl, `TEXT        COLLATE "C"`) {
+		t.Errorf("emitted pgx DDL id column is not TEXT COLLATE \"C\":\n%s", ddl)
 	}
 }
 

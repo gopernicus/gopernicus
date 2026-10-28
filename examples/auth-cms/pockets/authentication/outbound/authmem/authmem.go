@@ -391,6 +391,9 @@ func (r identifierRepo) ApplyVerifiedChange(_ context.Context, input identifier.
 	if u.AuthRevision != expectedAuthRevision {
 		return identifier.Identifier{}, sdk.ErrConflict
 	}
+	if _, taken := r.identifiers[input.ID]; input.ID != "" && taken {
+		return identifier.Identifier{}, sdk.ErrAlreadyExists
+	}
 
 	retire := map[string]bool{}
 	if input.ReplacesIdentifierID != "" {
@@ -415,8 +418,12 @@ func (r identifierRepo) ApplyVerifiedChange(_ context.Context, input identifier.
 		it.Retire(now)
 		r.identifiers[id] = it
 	}
+	id := input.ID
+	if id == "" {
+		id = ids.MustGenerate()
+	}
 	newIdent := identifier.Identifier{
-		ID:                  ids.MustGenerate(),
+		ID:                  id,
 		UserID:              input.UserID,
 		Kind:                input.Kind,
 		NormalizedValue:     input.NormalizedValue,
@@ -524,7 +531,7 @@ func (r sessionRepo) Rotate(_ context.Context, id, expectedCurrentHash, newHash 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s, ok := r.sessions[id]
-	if !ok || s.RefreshTokenHash != expectedCurrentHash {
+	if !ok || s.RefreshTokenHash != expectedCurrentHash || !firstPartyProfile(s) {
 		return session.ErrRotationConflict
 	}
 	s.PreviousRefreshTokenHash = expectedCurrentHash
@@ -542,12 +549,19 @@ func (r sessionRepo) ConsumeGrace(_ context.Context, id, previousHash string) er
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s, ok := r.sessions[id]
-	if !ok || s.PreviousUsed || s.PreviousRefreshTokenHash == "" || s.PreviousRefreshTokenHash != previousHash {
+	if !ok || s.PreviousUsed || s.PreviousRefreshTokenHash == "" || s.PreviousRefreshTokenHash != previousHash || !firstPartyProfile(s) {
 		return session.ErrRotationConflict
 	}
 	s.PreviousUsed = true
 	r.sessions[id] = s
 	return nil
+}
+
+// firstPartyProfile mirrors the SQL stores' empty-or-first_party
+// session_profile filter: a delegated (OAuth2) session rotates only through
+// oauth2.Repository.RotateRefresh.
+func firstPartyProfile(s session.Session) bool {
+	return s.Profile == "" || s.Profile == session.ProfileFirstParty
 }
 
 func (r sessionRepo) Delete(_ context.Context, id string) error {
@@ -581,7 +595,7 @@ func (r sessionRepo) RotateAt(_ context.Context, id, expectedCurrentHash, newHas
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s, ok := r.sessions[id]
-	if !ok || s.RefreshTokenHash != expectedCurrentHash {
+	if !ok || s.RefreshTokenHash != expectedCurrentHash || !firstPartyProfile(s) {
 		return session.ErrRotationConflict
 	}
 	s.PreviousRefreshTokenHash = expectedCurrentHash

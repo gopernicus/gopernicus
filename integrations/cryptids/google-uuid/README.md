@@ -33,6 +33,11 @@ by creation time, which keeps uuid keys friendly to created-at/id keyset
 pagination and B-tree locality — prefer it for database keys. Prefer V4 when
 IDs must not reveal creation time.
 
+Since sdk v0.21.0 the stdlib `sdk.UUIDv7()` is the pockets' record-class
+default, so a host needs this module only when it already links
+`github.com/google/uuid`, or wants that library's v7 counter semantics shared
+across every generator it builds.
+
 ## Testing
 
 Unit tests are hermetic and run with a plain `go test ./...` — canonical-form

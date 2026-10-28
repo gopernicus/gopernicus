@@ -266,11 +266,17 @@ func (r contactChangeRepo) Create(_ context.Context, p contactchange.PendingChan
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// Empty ID → mimic a schema default (the greenfield DB-generated convention).
+	key := contactChangeKey(p.UserID, p.Kind)
 	if p.ID == "" {
 		p.ID = ids.MustGenerate()
 	}
+	for k, existing := range r.contactChanges {
+		if k != key && existing.ID == p.ID {
+			return contactchange.PendingChange{}, sdk.ErrAlreadyExists
+		}
+	}
 	// Replace-per-(user, kind): the composite key overwrites any prior pending row.
-	r.contactChanges[contactChangeKey(p.UserID, p.Kind)] = p
+	r.contactChanges[key] = p
 	return p, nil
 }
 

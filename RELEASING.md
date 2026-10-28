@@ -1,5 +1,431 @@
 # Releasing gopernicus modules
 
+## Default ids by entity class; PostgreSQL 18 floor (published 2026-10-27)
+
+Fourteen annotated tags (not signed) on thirteen modules, plus `workshop/gopernicus/v0.10.0`
+for the scaffold, which is cut after this PR merges. Each tag was cut at its PR's squash-merge
+commit on `main` after a green `live-stores` dispatch on `main`, pushed one at a time,
+confirmed on origin and the proxy, then cold-verified from a scratch consumer (`GOWORK=off`, an
+empty module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build ./...`, a
+consumer pinning `go 1.26.10`). Under the 2026-10-27 owner ruling, Claude cuts and pushes the
+tags and the owner merges. Design and rulings: `plans/database-default-ids.md` (ratified rev 4,
+2026-10-27; executed copy in `plans/`). The audit entry is **AUDIT-057**. Under the owner's
+2026-10-23 process ruling this section is the whole record: there is no handoff file and no
+manifest. The operator surface is the docs site: *Database posture* ("Generated id columns"),
+*Operations runbooks* ("Move a PostgreSQL server from 17 to 18"), the sdk overview's *Entity
+IDs*, the authentication, cms, jobs and authorization pocket pages, *Create a pocket* and the
+integrations catalog. The reference is the pgxdb README's floor paragraph, `pockets/README.md`
+§8 item 14 and each store README.
+
+**What changed.**
+- **Go mints ids, per entity class.** With no `WithIDs`, every pocket mints a NanoID for users,
+  service accounts and invitations, and a UUIDv7 for every other generated record id. These
+  are identities shown to people and outside systems, and the user id is the JWT `sub`; a
+  UUIDv7 would reveal when the user signed up. One host generator (`WithIDs` / `Config.IDs`)
+  overrides every class. Gopernicus does not decide that hosts want UUIDv7; it ships it as the
+  default.
+- **sdk v0.21.0.** `sdk.UUIDv7()` is stdlib only: RFC 9562 canonical lowercase text, a
+  millisecond timestamp, a 12-bit sub-millisecond fraction, then 62 random bits. Mints from one
+  returned generator never sort before earlier mints from it, and there is no error path.
+  `IDGenerator.Or(fn)` returns the generator when it is configured and a generator over `fn`
+  otherwise. Each pocket applies it at the layer that mints, so no construction path reaches a
+  mint with the raw zero value. The zero `IDGenerator` still emits NanoIDs when called
+  directly.
+- **Database defaults are a backstop for raw SQL.** Every pgx canonical `CREATE` for a
+  generated id is `TEXT COLLATE "C"`. Record columns default to `uuidv7()::text`; identity
+  columns keep `gen_random_uuid()::text` (R1 (a)). Under R5 (a) the columns that reference a
+  pocket-generated id are collated `"C"` too. turso DDL is unchanged: SQLite `TEXT` already
+  compares `BINARY`, the byte-order twin of `"C"`.
+- **The PostgreSQL 18 floor (pgxdb v0.17.0).** `RunMigrations` reads `server_version_num` on
+  the migrating connection and refuses a server below 180000 with `ErrServerVersion`, before it
+  touches the ledger. Both `Open` paths log one non-fatal, redacted WARN in every mode.
+- **jobs:** the core mints job and schedule ids (`jobs.WithIDs`), and the stores reject an
+  empty id. **authorization:** `audit.NewRecordsWith` mints the audit `event_id`, and the pgx
+  and turso stores gain `WithIDs`.
+
+> **Read first.**
+> - **Runtime lockstep (transitive).** Once ANY tag a host takes selects pgxdb ≥ v0.17.0
+>   through MVS, `RunMigrations` refuses on PostgreSQL 17, even with nothing pending. That
+>   includes the events, secrets and authorization stores, which did not change here. Every new
+>   pgx store tag below requires pgxdb v0.17.0.
+> - **No PostgreSQL 17 line (R11).** Upgrade the server to 18, or stay on pgxdb ≤ v0.16.x and
+>   the previous store tags (the "defer" row below). There is no maintenance branch.
+> - **Checksums changed.** 26 canonical pgx `CREATE` files changed bytes (tables below). A
+>   database that applied the old files fails `RunMigrations` and P9. Recreate it and
+>   re-export; there is no in-place path in this release.
+> - **By host shape:** greenfield → nothing but PostgreSQL 18; old files applied, no data →
+>   recreate and re-export; old files applied and you cannot recreate → defer; gps-three-sixty
+>   and battleboardhq have their own rows; turso hosts → no DDL change.
+
+| Step | Tag | Commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `sdk/v0.21.0` | `7622522b` | #239 (PR-1) | 40606369391 @ `7622522b` | OK; set A, with the negative |
+| 1 | `integrations/datastores/pgxdb/v0.17.0` | `7622522b` | #239 (PR-1) | 40606369391 @ `7622522b` | OK; set A, with the negative |
+| 2 | `pockets/authorization/v0.32.0` | `531ed18f` | #240 (PR-5a) | 40611946152 @ `2b3cc0b3` | OK; beside its released stores |
+| 2 | `pockets/cms/v0.7.0` | `7791a381` | #241 (PR-3a) | 40611946152 @ `2b3cc0b3` | OK; beside its released stores |
+| 2 | `pockets/jobs/v0.8.0` | `2b3cc0b3` | #242 (PR-4a) | 40611946152 @ `2b3cc0b3` | OK; beside its released stores |
+| 3 | `pockets/authentication/v0.33.0` | `4d8ce3cc` | #243 (PR-2a) | 40613825645 @ `4d8ce3cc` | OK; beside pgx v0.16.0 / turso v0.15.0 / views v0.9.0 |
+| 4 | `pockets/authorization/stores/pgx/v0.23.0` | `627bc8c3` | #244 (PR-5b) | 40617383182 @ `efeae231` | OK; set B |
+| 4 | `pockets/authorization/stores/turso/v0.22.0` | `627bc8c3` | #244 (PR-5b) | 40617383182 @ `efeae231` | OK; set B |
+| 4 | `pockets/authentication/v0.33.1` (storetest only) | `efeae231` | #245 (PR-2b part 1) | 40617383182 @ `efeae231` | OK |
+| 5 | `pockets/authentication/stores/pgx/v0.17.0` | `181472d6` | #246 (PR-2b part 2) | 40622425163 @ `d5af245f` | OK; set B, gps-three-sixty and battleboardhq shapes |
+| 5 | `pockets/authentication/stores/turso/v0.16.0` | `181472d6` | #246 (PR-2b part 2) | 40622425163 @ `d5af245f` | OK; set B |
+| 5 | `pockets/cms/stores/pgx/v0.6.0` | `d350f081` | #247 (PR-3b) | 40622425163 @ `d5af245f` | OK; set B |
+| 5 | `pockets/jobs/stores/pgx/v0.8.0` | `d5af245f` | #248 (PR-4b) | 40622425163 @ `d5af245f` | OK; set B |
+| 5 | `pockets/jobs/stores/turso/v0.7.0` | `d5af245f` | #248 (PR-4b) | 40622425163 @ `d5af245f` | OK; set B |
+| 6 | `workshop/gopernicus/v0.10.0` | this PR's squash commit | this PR (PR-6) | — | after the tag: a cold `init --db pgx` / `--db turso` from `@v0.10.0` |
+
+Where a run's commit is later than the tag's, the run covered every tag commit at or before it
+on `main`; no tag was cut before a green run had covered its commit. Every module ships MINOR
+under the v0 convention, except `pockets/authentication/v0.33.1`, a PATCH carrying test support
+only. `workshop/gopernicus/v0.10.0` is a minor because the emitted DDL now needs PostgreSQL 18.
+It changes no rule set, so hosts pinning the guard need not bump.
+
+**Why authentication has two core tags.** The store modules' conformance tests call
+`storetest.RunIDs` and `storetest.RunDelegatedRotationFence`. Shipping those runners with the
+stores would have left the tagged stores' tests unable to compile against their pinned core,
+v0.33.0. So PR-2b split: the storetest additions shipped as v0.33.1 (#245), and the stores
+(#246) pin v0.33.1.
+
+**The MVS sets.** Every set selected sdk v0.21.0.
+- **Set A** (step 1): sdk v0.21.0 + pgxdb v0.17.0 + every pgx store released at the time
+  (authentication v0.16.0, cms v0.5.0, events v0.4.0, jobs v0.7.0, secrets v0.2.1,
+  authorization v0.22.0) built.
+- **Set A, negative (recorded on purpose, verbatim)**, from the v0.17.0 tag against a real
+  Homebrew PostgreSQL 17.4. `RunMigrations` returned:
+  `pgxdb: PostgreSQL 18 or later is required: server reports "17.4 (Homebrew)" (server_version_num 170004 < 180000); the canonical pgx migrations use uuidv7() (PostgreSQL 18). Upgrade the server, or hold pgxdb at v0.16.x and the pgx stores at their previous tags (RELEASING "PostgreSQL 18 floor")`.
+  `errors.Is(err, pgxdb.ErrServerVersion)` is true, and the table was not created. The
+  quoted section is this one.
+- **Each new core beside its released stores** (steps 2–3) built: authorization v0.32.0,
+  cms v0.7.0 and jobs v0.8.0 with all their prior store tags; authentication v0.33.0 with
+  stores pgx v0.16.0 / turso v0.15.0 / views v0.9.0. The compile-level change is additive.
+- **Set B** (steps 4–5): every new core + every new store + pgxdb v0.17.0 + datastores/turso
+  v0.10.0 built.
+- **gps-three-sixty shape:** authentication v0.33.1 + authentication pgx v0.17.0 +
+  authorization v0.32.0 + authorization pgx v0.23.0 + jobs pgx v0.8.0 + pgxdb v0.17.0 +
+  authorization goredis v0.6.0 built.
+- **battleboardhq shape:** its own module list (golang-jwt v0.3.0, google-uuid v0.2.0, sendgrid
+  v0.5.0, oauth/google v0.3.0) + authentication v0.33.1 + authentication pgx v0.17.0 +
+  authorization v0.32.0 + authorization pgx v0.23.0 + jobs v0.8.0 + jobs pgx v0.8.0 + pgxdb
+  v0.17.0 built.
+- **Set C** (this PR, from the tags): every example at `GOWORK=off` from an EMPTY module cache
+  over `proxy.golang.org` + `sum.golang.org`: `all modules verified` and `go build ./...` in
+  each. Selected:
+  - auth-cms: pgxdb v0.17.0, datastores/turso v0.10.0, authentication v0.33.1, authorization
+    v0.32.0 + pgx v0.23.0, cms v0.7.0, jobs v0.8.0 + pgx v0.8.0 + turso v0.7.0;
+  - production-baseline: pgxdb v0.17.0, authentication v0.33.1 + pgx v0.17.0, authorization
+    v0.32.0 + pgx v0.23.0;
+  - cms: cms v0.7.0, cms turso v0.4.0, datastores/turso v0.10.0;
+  - minimal: cms v0.7.0; jobs-minimal: jobs v0.8.0; external-identity: authentication
+    v0.33.1; goth-showcase: sdk only.
+
+**Not tagged.** `integrations/kvstores/goredis` and `pockets/authorization/stores/goredis`
+(goredis mirrors and mints nothing); `pockets/cms/stores/turso` (no change: turso DDL is
+untouched and the cms core mints); `pockets/events` and its stores, and `pockets/secrets` and
+its stores (untouched, and `secrets_audit.id` stays as it is under R7 (a)); `pockets`, views,
+`ui/goth`, `integrations/cryptids/google-uuid` (README sentence only) and the other
+integrations. Nothing retracts.
+
+**Behaviour changes a host can see.**
+
+| # | Change | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | Record ids are UUIDv7 by default (were NanoID): identifiers, API keys, security events, passkeys, recovery codes, challenges, contact changes, authentication grants, the maintenance archive marker row; cms entries, terms, menus, menu items, assets, inquiries | new rows carry 36-char ids with `7` at index 14; old rows keep theirs; a host-side `VARCHAR(21)`, length CHECK, route regex or validator fails (22001 or 404) | `WithIDs(sdk.NewIDGenerator(sdk.NanoID("", 0)))` restores NanoIDs for every class | authentication@v0.33.0, cms@v0.7.0 |
+| 2 | Identities stay NanoID by default: users, service accounts, invitations | no change; a host that drops its own `WithIDs` now gets NanoID users (and so a new JWT `sub` shape) | keep `WithIDs` | authentication@v0.33.0 |
+| 3 | Two identifier paths are Go-minted and reach `WithIDs`: the passwordless provisioning template and the confirmed contact change (`ApplyVerifiedChangeInput.ID`, new and optional) | released stores pgx ≤ v0.16.0 / turso ≤ v0.15.0 ignore the field and keep database-minting those two rows | take the new store tags | authentication@v0.33.0; stores pgx@v0.17.0, turso@v0.16.0 |
+| 4 | Challenges, contact changes and authentication grants are Go-minted (R3 (a); were database-minted: v4 on pgx, hex on turso); the stores' empty-id branches stay as the backstop | v7 ids on those rows | — | authentication@v0.33.0 |
+| 5 | Audit `event_id` is UUIDv7 by default (was a NanoID literal); row ids stay `<event_id>:%020d` (42 → 57 chars) | longer ids in `iam_audit`; `event_id` is TEXT with no length check | `authorization/stores/{pgx,turso}.WithIDs` | authorization@v0.32.0; stores pgx@v0.23.0, turso@v0.22.0 |
+| 6 | **jobs: the `job_<hex>` / `sched_<hex>` prefixes are gone.** The core mints a UUIDv7 job or schedule id on `EnqueueJob`, `EnqueueOnce`, `Replace` and `EnsureSchedule`; occurrence ids stay `schedules.OccurrenceID(scheduleID, slot)` | dashboards, log queries and URLs keyed on the prefixes stop matching | `jobs.WithIDs(gen)` | jobs@v0.8.0 |
+| 7 | **jobs stores reject an empty id** with `sdk.ErrInvalidInput` ("the jobs service mints it"); the pgx `uuidv7()` default is only the raw-SQL backstop | a host calling a store directly with no id gets `ErrInvalidInput`; `jobs.WithIDs(sdk.NewIDGenerator(sdk.DatabaseID))` fails loudly instead of inserting `job_id = ''` and turning the next enqueue into a false `ErrAlreadyExists` | supply ids, or keep the default | jobs@v0.8.0 (memory); stores pgx@v0.8.0, turso@v0.7.0 |
+| 8 | **An empty audit mint is refused** with `sdk.ErrInvalidInput` (R12 (a)) | `WithIDs(sdk.NewIDGenerator(sdk.DatabaseID))` on an authorization store fails every audited write | never use `sdk.DatabaseID` there | authorization@v0.32.0 |
+| 9 | **PostgreSQL 18 floor**: `RunMigrations` refuses below 180000 with `ErrServerVersion`; `Open` logs one WARN (msg "pgxdb: server below the PostgreSQL 18 floor; RunMigrations will refuse", attrs `server_version_num`, `required=180000`, `server_version`) in every mode; a probe failure never fails `Open` | the migrator stops on 17 with the text above | upgrade, or defer (row "Defer" below) | pgxdb@v0.17.0 |
+| 10 | pgxdb `MapError` maps SQLSTATE 23001 `restrict_violation` to `sdk.ErrInvalidReference`, like 23503 | PostgreSQL 18 reports an `ON DELETE RESTRICT` refusal as 23001 (17 used 23503); without this, stores relying on `ErrInvalidReference` would mis-map on 18 | — | pgxdb@v0.17.0 |
+| 11 | pgx canonical `CREATE` files edited in place (26 files; tables below): `TEXT COLLATE "C"`, the `uuidv7()::text` record backstop, R5 referencing columns | a database with the old files applied fails the checksum check and P9 | recreate and re-export, or defer | authentication pgx@v0.17.0, cms pgx@v0.6.0, jobs pgx@v0.8.0 |
+| 12 | The one store SQL mint (`stores/pgx/totp.go`, recovery codes with an empty id) calls `uuidv7()`; guard G38 allow-lists only that site | that store path needs PostgreSQL 18 at runtime; nothing else does | — | authentication pgx@v0.17.0 |
+| 13 | pgx `Rotate`, `RotateAt` and `ConsumeGrace` refuse a delegated (OAuth2) session with `ErrRotationConflict` (S4d part 2 LOW-2; turso already did) | a delegated grant rotates only through `oauth2.Repository.RotateRefresh` | — | authentication pgx@v0.17.0 |
+| 14 | The contact-change stale-request guard binds a SHA-256 digest of the pending payload (review MED-1) | **a contact change in flight at deploy (at most 15 minutes) is refused once** with the usual `ErrChallengeInvalid` and denial event, and must be restarted | — | authentication@v0.33.0 |
+| 15 | `ConfirmIdentifierChange` and `Service.Verify` mint the identifier id before consuming the challenge | a failing host generator never burns the code or the pending change | — | authentication@v0.33.0 |
+| 16 | Scaffold: `init` pins sdk v0.21.0 + pgxdb v0.17.0 (turso v0.10.0 unchanged); `new pocket` emits `TEXT COLLATE "C" … DEFAULT uuidv7()::text`, `ids.Or(sdk.UUIDv7())` and `postgres:18` docker lines; `.env.example` says PostgreSQL 18; the emitted README runs the guard `@v0.10.0` | a cold `init` lands on the floor | — | workshop@v0.10.0 |
+
+**Upgrade notes by host shape.** Repin with explicit `GOWORK=off go get <module>@<tag>`, then
+`GOWORK=off go mod tidy`; never `go work sync`.
+- **Greenfield:** PostgreSQL 18; `gopernicus init` at `@v0.10.0`; nothing else.
+- **Old canonical files applied, no data:** bump the pins; drop and recreate the database(s);
+  re-export the ledger(s) from the new store tags (`ExportMigrations`); `guard --posture` P9 is
+  green. **A renumbered ledger never re-exports** (export writes canonical names, which would
+  duplicate a suffix beside, say, `0032_passkey_credentials.sql`); copy the new bytes over your
+  own filenames instead, as `examples/production-baseline` does.
+- **Defer (the supported state when you cannot recreate):** stay on the old store pins
+  (authentication pgx ≤ v0.16.0, cms pgx ≤ v0.5.0, jobs pgx ≤ v0.7.0) and pgxdb ≤ v0.16.x. Any
+  newer pgxdb refuses to migrate on PostgreSQL 17, and the new store tags' files would mismatch
+  your ledger. A live-data upgrade path ships when a host needs it (see "Deferred: live-host
+  upgrade protocol").
+- **gps-three-sixty** (authentication v0.31.0 / pgx v0.15.0, authorization v0.31.0 / pgx
+  v0.21.0, jobs v0.7.0 / pgx v0.7.0, pgxdb v0.14.0; ledgers `workshop/migrations/{iam,jobs,primary}`
+  over `db` + `iamDB`; no `WithIDs`; no real data): the "old files applied" row, for both
+  databases. The pgxdb bump drags in the authorization floor (pgxdb ≥ v0.15.0 ⇒ authorization
+  pgx ≥ v0.22.0), which v0.23.0 meets. The new defaults apply with no code change: NanoID users,
+  UUIDv7 records, no `job_` prefixes. Its goredis v0.6.0 still drags in authorization stores/turso
+  v0.17.0 + datastores/turso v0.9.0 for tests only; harmless while no turso package is imported.
+- **battleboardhq** (bootstrapping, no data; `authentication.WithIDs(sdk.NewIDGenerator(googleuuid.V7()))`;
+  its own tables already `COLLATE "C" DEFAULT uuidv7()::text`; `postgres:18-alpine`; ledgers
+  `iam/`, `jobs/`, `battleboard/`): bump the pins, re-export `iam/` + `jobs/`, `make dev-reset`.
+  **No id change for this host:** it already mints v7 everywhere through `cfg.IDs`, so the
+  collation and the re-export are its whole upgrade. Dropping the option would switch users,
+  service accounts and invitations to NanoIDs. `jobs.WithIDs` and
+  `authorization/stores/pgx.WithIDs` exist if it wants its generator there too — never
+  `sdk.DatabaseID` on those two (rows 7 and 8).
+- **gps-360-go / segovia:** a rough draft and a from-scratch rebuild respectively — greenfield.
+- **Hosts on turso:** no DDL change; new ids arrive from Go. Take authentication turso v0.16.0
+  for rows 3 and 4.
+- **Examples (this PR).** Every example builds, vets and tests at `GOWORK=off` on these tags.
+  Pins moved by explicit `GOWORK=off go get`, then tidy:
+  - `auth-cms`: authentication v0.33.1, authorization v0.32.0 + pgx v0.23.0, cms v0.7.0, jobs
+    v0.8.0 + pgx v0.8.0 + turso v0.7.0, pgxdb v0.17.0, sdk v0.21.0;
+  - `production-baseline`: authentication v0.33.1 + pgx v0.17.0, authorization v0.32.0 + pgx
+    v0.23.0, pgxdb v0.17.0, sdk v0.21.0;
+  - `cms` and `minimal`: cms v0.7.0, sdk v0.21.0; `jobs-minimal`: jobs v0.8.0, sdk v0.21.0;
+    `external-identity`: authentication v0.33.1, sdk v0.21.0; `goth-showcase`: sdk v0.21.0.
+
+  The production-baseline ledger already held byte copies of the 14 edited authentication
+  files (G34 and P9 forced them into #246); this PR checked every file in it against its
+  canonical source with `cmp`. `auth-cms`'s in-memory authentication store (`authmem`) now
+  passes `storetest.RunIDs` and `RunDelegatedRotationFence`: it honours
+  `ApplyVerifiedChangeInput.ID`, refuses a colliding supplied id on contact changes, confirmed
+  identifiers, passkeys and recovery codes (`sdk.ErrAlreadyExists`), and refuses first-party
+  rotation of a delegated session.
+
+**PostgreSQL server move 17 → 18 (every pgx host).**
+- An image-tag change never upgrades a data directory. The official `postgres:18` image keeps
+  `PGDATA` in a versioned subdirectory under `/var/lib/postgresql`, so a compose volume mounted
+  at `…/data` does not carry over.
+- PostgreSQL 18's `initdb` enables data checksums by default, so `pg_upgrade` from a cluster
+  created without them needs `--no-data-checksums` on the new `initdb`, or checksums enabled on
+  the old cluster first.
+- `pg_dump` / `pg_restore` clients must be 18 or later. An 18 dump does not restore onto 17
+  (the `uuidv7()` defaults).
+- Replicas and DR targets must be 18.
+- A stale long-lived test database carries old checksums; run live legs on fresh databases.
+
+The docs site's *Operations runbooks* carries the same steps.
+
+**Checksums of the edited canonical files** (`shasum -a 256`; before = the file at the PR's
+parent commit, after = the file as tagged). They are published so any host comparing ledgers,
+and the deferred live-host plan, start from facts.
+
+authentication pgx (#246; before `181472d6^`, after v0.17.0). Under its numbering the
+production-baseline ledger carries 0025 as `0032_passkey_credentials.sql` and 0026 as
+`0033_totp.sql`.
+
+| File | Before | After |
+|---|---|---|
+| `0002_user_passwords.sql` | `4d2df1cc28a88f9d281133058bdb9c12692ce0be927731799923f9e1062dd635` | `675e9a5f609bf95ab2d4a747caea5da99547b144c00ed4cf55b19f93b1c021b9` |
+| `0003_sessions.sql` | `fdcfd4d413684ab08ad489f672554f04cc284aa3d88b386ae66264893c5a7e7a` | `7c05fa60198f4bc7ebfd94867f37fba96ed27c4d5383e15aae3eaf766e23eb9e` |
+| `0004_oauth_accounts.sql` | `d5c8cf745f4cb94928bf46aa711e03e034a4dd324aa3c05b5ad549c73ae3613e` | `8e739f89fdc5323517745b29c0d96504d39c06d1d3f89ae83ed6082ad3d25b53` |
+| `0006_service_accounts.sql` | `62494e2cc2238561e31221e5ed061ed2db678f4a095e6c84b444f3c7f352f218` | `c664af9eec79f598d731bdea3ccdc8c66200179a3a453b66d651f2a9e925e8f9` |
+| `0007_api_keys.sql` | `28da3700b3228c8e0443f7f43d4124a71f4a81045a59bb6d1f9f778037969893` | `14d4084920c4525560b8a7228ac6ae31623c98c7b683a39758c54e6c3800f767` |
+| `0008_security_events.sql` | `86fabeec0eed5057ba5f6ea8ff4b02fc0a68f7f3d1c89e609ec6644caea519fa` | `5e06cffb6dc91241ba07f1415e966808360a1607f4d94074ec24fd3dbec2135a` |
+| `0010_user_identifiers.sql` | `fbf0d9abe4a4e2977d62cb757aad6754c560f0813403bd6842156401e0152bdf` | `92f64e3e40e3de32abb9b778bb0a2c8f5f25e01acc9022e5f581c68c3c036c7e` |
+| `0011_challenges.sql` | `7751067efa2fb93f7a08dd9804c44395acfd559920d1a7c006100dbe86d37e33` | `3819d185e9050e3964e5578635c7e74d6142840cb9018a0eae244c9a14c70357` |
+| `0012_contact_changes.sql` | `56928a5c676c1f2b27d9d3bc4ae0892d45538c11c121dd966481a55398629569` | `7a90a7cdb1c29e16de12c31597e81ca4427e9f99ce2d51131cdaa4a77b2ea740` |
+| `0013_authentication_grants.sql` | `711531c218181aea8d9b95081b6d7b37d761d4a315d51e08d2b575181dc613ba` | `c7985bdeee0c5d3acdc87cc700cb5c63a970edbe2eb4a0fb422db974c0731a35` |
+| `0019_oauth2_sessions.sql` | `b025891039db7f234922c56e14f45dcc921c45ab041aac137a8b82405d41ccb4` | `404e590aac12b27c5629a8932446d4911f3426a4cc82e24f309e662c1043b2c4` |
+| `0020_external_subjects.sql` | `52d5fc606bfc534f17a9de261d06f54f2b9a3dd32cc69323cede5d627e50c89b` | `4de86e2bbac98df3e67dad62d85bf7f291022f91d7342fdea62f4adbe6fe715f` |
+| `0025_passkey_credentials.sql` | `ba0723b3ceb135d2198f66653bbead79f28cf48c00126c4d73378e92066b9cf6` | `10ed39367102b24d50cd36c50f201eda955e07de1a9e03b62896e9ca9d761f30` |
+| `0026_totp.sql` | `e355eb8791c11c36560b63937b58ffc7fff51f051cce393991e242193059b63f` | `89269fb0e39890125dadc7dbabecbf0b5cb35ceaa69150342f4e57ee245503a7` |
+
+`0001_users.sql`, `0009_invitations.sql` and `0027_service_account_status.sql` are unchanged:
+0014 already pins `users.id`, invitations keep their identity backstop, and 0027's referencing
+column was already `"C"`.
+
+cms pgx (#247; before `d350f081^`, after v0.6.0):
+
+| File | Before | After |
+|---|---|---|
+| `0009_terms.sql` | `5bd1588130636e5e8e72d0ca20aa71295cfb1c948fbf8cb7ec92796af48a5391` | `419460396cd51f1d85487c9da106af0f9b4a6d1a595bc21b75ffa334e45ff869` |
+| `0013_menus.sql` | `8ed3659af2fd72a28dc1836cd20e4a26f99900dd9bba4798f72ba0aa3618b2a6` | `f8f9b1cf2d268e4a3a36a9ea0d11fb465f2bc0eea2db407f8e00128289acbdf8` |
+| `0014_menu_items.sql` | `7cac6e279fc6f1e84c8eb28a2d5ea8bd7ec87cae88362101b166945f1cb64938` | `4529281306591c6346f941efa863aa195c62332e892e4576f2a70e52134a3157` |
+| `0016_assets.sql` | `d6198a655c0138a77dc385ba602cf349b8ae52dfbcd006036e903767cce96f28` | `46a0e1cf032508d3e5dcd32db7ab3c6dc30cd3bcc9a84fd98e103c97386fc47d` |
+| `0017_inquiries.sql` | `42fa4fe0cfc99be034c136089c825a3d68e1211213b6a38e488422afd4af2c93` | `0b41eceaba2a89becd58a79109209707357d08eefeac0765797571a323dc411a` |
+| `0018_entries.sql` | `2bedcbea8e51d99c6999af0265a32f53cdc3933b76a76a09641247caf4e72eb3` | `3b757823ad1e7db0b08dca0e1ad10a95ae95f76d516a0583dea6da22bb2926c4` |
+| `0020_entry_fields.sql` | `26cec292698e763eaf79e446904658d0e76497ecb71d4c55a9f5eb29dc7cb66f` | `3f2cc4e53cd2dec8f05a4019198535e0a6a7aa20ec01e4cfb5987bdfa59db15b` |
+| `0021_entry_terms.sql` | `b12d26b54410f9afbf281a6222db81937ca6dceefec2aac63e1ca7e047975f03` | `955c44ec28cffefec36673f1883f544e5df1a2e611f2824da0d8edbb8405ad3e` |
+
+jobs pgx (#248; before `d5af245f^`, after v0.8.0):
+
+| File | Before | After |
+|---|---|---|
+| `0001_job_queue.sql` | `4250d24065f0c2a4f90a506333bffdba53dd9a086b200fe15f5edbf2fd535fb1` | `6295ae85926d74c148da9457fb506efccdb152aa4ef6ef987534d89d2ffabd4f` |
+| `0002_job_schedules.sql` | `ed7f35367bbae603ca8b5b2b3272f3075af7318f1e103c5bc1fd865080310747` | `b0f96f7155bc4dcbca1529a12c4790d2c8d12829c991aa970130ba1a3c01e1d1` |
+| `0003_fenced_job_queue.sql` | `d873b9b017534a7a6ab1380892b552d5bc8060978a211269aaecb9e28fee21d5` | `98cc02b736461c5af2004e2fca0cc180fecb2034c8696634ccb3c2b7b32dc123` |
+| `0004_job_schedule_occurrences.sql` | `a8d6d981e8a942bfc88c48034dc845f082f10117a9842f0a59ea26ba53f6cfcb` | `d93e9760c52b82cbf5192a6ed378055942654710a935b34082422b0538507ff3` |
+
+**Deferred: live-host upgrade protocol** (not in this release; owner ruling 2026-10-27). None
+of the hosts has data, so the in-place path was cut. The analysis is kept so a future plan,
+started by the first host with data that needs the new store tags, begins from it:
+- **The problem.** P9 requires byte-identical copies of the pinned store module's files, and
+  `pgxdb.RunMigrations` refuses a file whose bytes differ from the applied checksum (checked
+  per file, in sorted order, inside one transaction). The edited canonical `CREATE` files fail
+  both checks on a host that applied the old bytes.
+- **The shape that works** (reviewed by platform-sre and data-integration on rev 3): one
+  idempotent deploy per `RunMigrations` stream (one per schema or database; gps-three-sixty's
+  `iam/` and `jobs/` are two):
+  1. `0000_gopernicus_ids_restamp.sql`, containing ONLY scoped
+     `UPDATE schema_migrations SET checksum = '<new>' WHERE source = 'default' AND version = '<file>' AND checksum = '<old>';`
+     rows for that stream's edited files (renumbered ledgers substitute their `version`). It
+     sorts first, so it restamps before the re-exported copies verify. It updates zero rows on
+     a fresh database, and in the wrong stream it updates nothing and the next file fails
+     loudly.
+  2. The re-exported canonical copies.
+  3. `<next>_gopernicus_ids_upgrade.sql`: `SET LOCAL lock_timeout = '5s';` then, per table,
+     `ALTER TABLE IF EXISTS <t> ALTER COLUMN <id> SET DEFAULT uuidv7()::text;` and
+     `ALTER TABLE IF EXISTS <t> ALTER COLUMN <c> TYPE TEXT COLLATE "C";`. `text → text COLLATE "C"`
+     does not rewrite the table but takes `ACCESS EXCLUSIVE` and rebuilds every index on the
+     column (for `entries.id`, the key the EAV tables reference): a maintenance window,
+     measured on a restored copy; in-flight keyset cursors may skip or repeat once.
+
+  Roll forward only: the previous artifact's copies no longer match the restamped ledger.
+  `raw_sql` is left as applied.
+- **Rejected:** rev 2's two-run variant. Between the runs the released artifact could not
+  re-migrate (a second replica, a crashloop, a rollback), and P9 was red.
+- **Evidence a future plan must produce:** a pgxdb live test (old set, then the new copies + the
+  0000 file in ONE run → success; a second run → no-op; a `WithSchema` variant; a wrong-stream
+  negative) and a drill on a real ledger (three green runs, verbatim).
+- **Inputs it will have:** the sha256 pairs above; the pgxdb README's ledger-relocation section
+  as the precedent for host-side `schema_migrations` surgery; possibly a `gopernicus db restamp`
+  verb that emits the 0000 file from a store module's old/new file pairs.
+
+**The review record.**
+- **The plan** passed a four-reviewer gate on rev 2 (lead-backend-engineer, data-integration,
+  platform-sre: ship-with-edits; architecture-steward: aligned-with-edits); its 22 findings
+  (G1–G22) are folded under "Decided by gate" in the plan.
+- **PR-2a (#243), lead-backend, ship-with-edits.**
+  - **HIGH-1:** the maintenance archive marker row shared the secret archive-key generator. It
+    is now record class and, per the owner, reached by `WithIDs` through `maintenance.WithIDs`
+    (no new pocket-root option). Archive object keys stay secret.
+  - **MED-1** (owner: fix now): the contact-change stale-request guard binds a pending-payload
+    digest (row 14). Without it, a host generator that repeats ids could let a user race two
+    starts and get another address verified onto their account.
+  - **LOW-1..3** folded: mint before consume (row 15), stale docs, an external-engine wiring leg.
+    **LOW-4:** the plan's `IDGenerator{}` grep expects six files and sees seven, because of the
+    documented OAuth2 fallback literal (it resolves inside `NewRecorder`, pinned by a test).
+- **PR-1 (#239), PR-5b (#244), PR-3b (#247), PR-4b (#248):** lead self-check plus the live legs
+  below. **PR-2b part 2 (#246):** lead re-run of both store suites at `GOWORK=off` against the
+  tags. The other PRs were gated by `make guard && make check` and their live or integration
+  legs.
+
+**The R5 gate** (PR-2b, postgres:18, 50k users; collating `user_identifiers.user_id` `"C"` to
+match `users.id`): `GetSummary` went from a `Seq Scan` on `user_identifiers` to an
+`Index Scan using idx_user_identifiers_user_active`, and the list page went from a `Sort` over a
+`Hash Right Join` to an index-ordered `Nested Loop` (`idx_users_created_at_id` →
+`idx_user_identifiers_primary`). The plans changed, so **R5 (a) was KEPT** in all three store
+trains.
+
+**Owner rulings** (2026-10-27, "all recs" on rev 3):
+- **R1 (a):** identity columns keep the `gen_random_uuid()::text` backstop.
+- **R3 (a):** challenges, contact changes and authentication grants are Go-minted.
+- **R4 (a):** `0014_user_status.sql` / `0019_oauth2_sessions.sql` are not dropped or rewritten
+  as history. 0019's referencing columns were collated under R5, so its checksum changed (table
+  above).
+- **R5 (a):** referencing id columns are collated too, `EXPLAIN`-gated. Kept.
+- **R7 (a):** `secrets_audit.id` is left alone.
+- **R8 (a):** `Open` WARNs in every mode; `RunMigrations` refuses.
+- **R11:** no PostgreSQL 17 maintenance line.
+- **R12 (a):** an empty generated id is rejected with `sdk.ErrInvalidInput` in the jobs stores
+  and in `audit.NewRecordsWith`.
+- **The live-host upgrade protocol is cut** (above). **Claude cuts and pushes tags** after the
+  owner merges and `live-stores` is green on `main`.
+- R2, R6, R9 and R10 were closed by the gate; R6 → (b): no turso DDL anywhere.
+
+**As-built deviations a host can see.**
+- **pgxdb `MapError` 23001** (row 10), found on the PostgreSQL 18 leg; not in the plan.
+- **The `live-stores` job B carries a `postgres:17` service** (port 5433) wired to
+  `POSTGRES_BELOW_FLOOR_TEST_DSN`, so the negative leg runs in CI and does not rot.
+- **`authentication/v0.33.1`**, the storetest-only patch (above); the plan had one core tag.
+- **jobs `storetest.RunIDs` takes a repositories factory** and drives the services with a
+  counting `WithIDs`; the plan described a factory variant taking an `sdk.IDGenerator`.
+- **authentication's `storetest.RunIDs` and `RunDelegatedRotationFence` are separate runners**,
+  outside `Run`, so a host store adopts them explicitly (auth-cms's `authmem` did in this PR).
+- **`Service.Verify` is a second `ApplyVerifiedChange` caller** the plan missed; it mints from the
+  record generator too, before it consumes the challenge.
+- **G38 `guard-store-uuidv7-sites`**: store SQL outside `migrations/` may call `uuidv7()` only at
+  the allow-listed `stores/pgx/totp.go` line. It self-checks its pattern.
+- **14 baseline ledger copies** landed in #246, not this PR: G34 and P9 refuse a ledger that
+  diverges from the canonical files in the workspace.
+- **The pgx `session_profile` filter** on `Rotate`/`RotateAt`/`ConsumeGrace` (row 13) was folded
+  into #246 (S4d part 2 LOW-2, owner-approved).
+- **The jobs turso integration tests blank-import `integrations/datastores/turso/localfile`**, so
+  `file:` URLs work; tidy adds `modernc.org/sqlite` as a test-only indirect.
+- **The PR-2a upgrade edge**: a contact change in flight at deploy is refused once (row 14).
+- **auth-cms's `authmem` flaky purge case fixed in its test.** `TestConformance/Maintenance/
+  PurgeSecurityEventsBoundaryAndLimit` failed intermittently: the store stamps its purge
+  evidence rows with `time.Now()`, consecutive purges can share a microsecond, and the rail
+  orders ties by id, which was a random NanoID. The suite reads the evidence rows oldest first.
+  The test binary now swaps `authmem`'s own generator for `sdk.UUIDv7()`, whose mints sort in
+  mint order; production ordering is unchanged. 50 consecutive runs (and 2000 of the single
+  case) pass.
+
+**Verification record.**
+- `make guard` and `make check` pass on each PR. `live-stores` is green on `main` at the five
+  commits in the tag table.
+- **PR-1 (#239).** sdk 89 tests (11 new: UUIDv7 form, version and variant, ms timestamp, 1e5
+  unique, 1e4 monotonic, per-generator order, concurrent mints; `Or`; the zero value is still
+  NanoID). pgxdb hermetic 383/0. pgxdb live on postgres:18, fresh databases: 553/0/1 bare,
+  553/0/1 with `POSTGRES_TEST_SCHEMA=ids`, 554/0/0 with both DSNs set. The PostgreSQL 17.4
+  negative leg passes: one WARN per `Open` path, no DSN in the log, nothing applied.
+- **PR-2a (#243).** `pockets/authentication` `test -race` (25 packages); the class and wiring
+  tests under the defaults and a counting `WithIDs` (a mutation removing the `Or` failed every
+  record path); `TestIdentifierChangeBindsThePendingPayload` reproduces the race with a
+  constant generator and is now refused; the released stores build and pass against the core.
+- **PR-2b part 2 (#246).** pgx live on a fresh postgres:18 at `GOWORK=off`: **544/0/1**, bare and
+  schema-scoped (the skip is the opt-in non-C ordering test, run locally); turso
+  `-tags=integration` on a local file: **865/0/0**. The raw-SQL default test yields v7 on all 8
+  record tables, and the store-path recovery-code insert yields v7.
+- **PR-3a (#241) / PR-3b (#247).** cms wiring through the real routes yields `fixed-1`…`fixed-6`
+  in order; the zero value yields v7; cms pgx live **74/0/1** bare and **75/0/0** schema-scoped;
+  the non-C ordering test passes locally; `examples/cms` minted v7 ids for a new term and
+  article.
+- **PR-4a (#242) / PR-4b (#248).** `examples/jobs-minimal` enqueued `demo.print` and returned a
+  v7 `job_id` through enqueue, processing and completion. jobs pgx live **133/0/0**, bare and
+  schema-scoped; jobs turso **110/0/0**.
+- **PR-5a (#240) / PR-5b (#244).** authorization pgx live **802/0/1**, bare and schema-scoped (the
+  skip is the opt-in non-C collation test); turso **1025/0/0**.
+- **This PR (PR-6).**
+  - Every example: `GOWORK=off go build`, `go vet` and `go test` pass; set C as listed.
+  - `authmem` passes `RunIDs` and `RunDelegatedRotationFence`; before the store changes the
+    runners failed on the colliding-id and delegated-rotation cases.
+  - **Run and look:** production-baseline built at `GOWORK=off` against the tags, migrated a
+    fresh `postgres:18` (`server_version_num` 180000) with the ledger, booted, and took a
+    dev-issuer token (`sub` u1). In psql, the provisioned `users.id` is a 21-character NanoID;
+    `security_events.id` (`external_subject_provisioned`, `external_login`,
+    `authorization_denied`) and `user_identifiers.id` are 36-character UUIDs with `7` at index
+    14; `collation_name` is `C` on `users.id`, `security_events.id`, `user_identifiers.id` and
+    `user_identifiers.user_id`; and the column defaults read `(uuidv7())::text` on the record
+    tables and `(gen_random_uuid())::text` on `users`.
+  - **Scaffold:** `TestScaffold*` pass, including the new pin/DDL check (the pgx store's pgxdb
+    pin is ≥ v0.17.0 if and only if its migration has `DEFAULT uuidv7()`; it fails on a
+    v0.16.0 pin). The release-tagged scaffold test resolves sdk v0.21.0, pgxdb v0.17.0 and
+    datastores/turso v0.10.0 through the public proxy, and every emitted host and pocket module
+    tidies, builds, tests and vets. A cold `init --db pgx` and `init --db turso` from THIS tree
+    (empty module cache, `GOWORK=off`, the proxy) pin sdk v0.21.0 + pgxdb v0.17.0 /
+    datastores/turso v0.10.0, cite the guard `@v0.10.0`, tidy, build, vet, pass `go mod verify`,
+    and `guard --posture` is clean (25 rules, 2 packages). The cold `init` from `@v0.10.0` is
+    run after the tag.
+  - `pnpm build` in `workshop/documentation` succeeds.
+
+**Known and deferred.**
+- **The deferred live-host upgrade protocol** (above) and a possible `gopernicus db restamp`
+  verb.
+- **The storetest reference store** stamps its purge evidence rows the same way `authmem` did,
+  with the same latent tie. Its `ids` should mint in order on the next authentication core tag.
+- **cms turso integration tests** still do not import `turso/localfile`, so a `file:` URL fails
+  with "no sqlite driver present" (found in PR-3a; jobs was fixed in #248).
+- **A Makefile guard for `sdk.IDGenerator{}` literals** in pocket `logic/` (G22), if a second
+  pocket grows an allow-list; a shared storetest id-shape case.
+- **pgxdb `live_test.go:68`** still counts every `default`-source ledger row; run the pgxdb live
+  suite on a fresh database.
+- Battleboard's and gps-three-sixty's repins happen in their own repositories.
+
 ## Transaction-local settings for row-level security (pgxdb v0.16.0)
 
 One annotated tag (not signed) on one module: `integrations/datastores/pgxdb/v0.16.0`, cut at the

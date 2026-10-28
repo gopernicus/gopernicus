@@ -9,12 +9,24 @@
 package authmem
 
 import (
+	"os"
 	"testing"
 
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk"
 )
+
+// TestMain swaps the store's own id generator for one whose mints sort in mint
+// order. The store stamps rows it writes itself (the purge evidence rows) with
+// time.Now, and consecutive calls can share a microsecond; the rail lists by
+// (created_at, id), so random NanoID tiebreaks made the suite's oldest-first
+// reading of those rows flaky.
+func TestMain(m *testing.M) {
+	ids = sdk.NewIDGenerator(sdk.UUIDv7())
+	os.Exit(m.Run())
+}
 
 // TestConformance runs the auth storetest suite against authmem.
 func TestConformance(t *testing.T) {
@@ -43,6 +55,22 @@ func TestPasskeyConformance(t *testing.T) {
 // TestTOTPConformance runs the TOTP suite, separate from Run, against authmem.
 func TestTOTPConformance(t *testing.T) {
 	storetest.RunTOTP(t, func(t *testing.T) auth.Repositories {
+		return New().Repositories()
+	})
+}
+
+// TestDelegatedRotationFence runs the delegated-session rotation fence, separate
+// from Run, against authmem.
+func TestDelegatedRotationFence(t *testing.T) {
+	storetest.RunDelegatedRotationFence(t, func(t *testing.T) auth.Repositories {
+		return New().Repositories()
+	})
+}
+
+// TestIDs runs the record-id persistence suite, separate from Run, against
+// authmem.
+func TestIDs(t *testing.T) {
+	storetest.RunIDs(t, func(t *testing.T) auth.Repositories {
 		return New().Repositories()
 	})
 }

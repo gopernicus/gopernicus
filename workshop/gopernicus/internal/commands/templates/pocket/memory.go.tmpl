@@ -16,8 +16,8 @@ import (
 )
 
 // memIDs assigns an id when an incoming {{.Agg}} carries none — the honest mirror
-// of the schema DEFAULT (a fresh random key). A caller using the nanoid generator
-// supplies ids already; an sdk.DatabaseID generator leaves them empty and this
+// of the schema DEFAULT (a fresh random key). A service with the default or a
+// configured generator supplies ids already; an sdk.DatabaseID generator leaves them empty and this
 // fills them here.
 var memIDs = sdk.IDGenerator{}
 

@@ -18,8 +18,10 @@ type config struct {
     ids sdk.IDGenerator
 }
 
-// WithIDs selects the ID generator. Its zero value uses nanoid;
-// sdk.NewIDGenerator(sdk.DatabaseID) defers generation to the store.
+// WithIDs selects the ID generator. The zero value selects the class default:
+// NanoID for identities, UUIDv7 for records ({{.Agg}} is a record); a configured
+// generator wins everywhere. sdk.NewIDGenerator(sdk.DatabaseID) defers
+// generation to the store.
 // Repeated options use the last supplied generator.
 func WithIDs(ids sdk.IDGenerator) Option {
     return func(cfg *config) { cfg.ids = ids }
@@ -43,7 +45,7 @@ func NewService(store Storer, opts ...Option) (*Service, error) {
         }
         opt(&cfg)
     }
-    return &Service{store: store, ids: cfg.ids}, nil
+    return &Service{store: store, ids: cfg.ids.Or(sdk.UUIDv7())}, nil
 }
 
 // Create persists a new {{.Agg}}, minting its id with the configured generator.

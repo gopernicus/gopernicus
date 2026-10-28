@@ -63,7 +63,9 @@ A larger pocket can return named `Components` instead of combining every method
 onto a root service. Keep logic independent of transport and root composition.
 
 Required dependencies stay explicit. The generated `WithIDs` option selects the
-ID generator; omitting it uses the SDK default. Options configure private state
+ID generator; omitting it selects the record default, `sdk.UUIDv7()`, through
+`ids.Or(sdk.UUIDv7())`, and the emitted pgx migration's `uuidv7()` column
+default is only the raw-SQL backstop (PostgreSQL 18). Options configure private state
 before construction and document defaults, nil values and ordering. Coherent
 policy or connection records can remain configuration structs when useful.
 
