@@ -4,7 +4,7 @@ go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.10.0
-	github.com/gopernicus/gopernicus/pockets/authorization v0.32.0
+	github.com/gopernicus/gopernicus/pockets/authorization v0.34.0
 	github.com/gopernicus/gopernicus/sdk v0.21.0
 	modernc.org/sqlite v1.52.0
 )

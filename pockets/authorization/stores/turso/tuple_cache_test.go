@@ -265,15 +265,28 @@ func TestTupleCacheSourcePreconditions(t *testing.T) {
 			t.Fatal("missing migration accepted")
 		}
 	})
-	for _, mutation := range []string{"DELETE FROM iam_tuple_cache", "UPDATE iam_tuple_cache SET binding='ffffffffffffffffffffffffffffffff'"} {
-		t.Run(mutation, func(t *testing.T) {
+	cases := []struct {
+		mutation, message string
+		identity          bool
+	}{
+		{mutation: "DELETE FROM iam_tuple_cache", message: "apply the tuple cache migration once"},
+		{mutation: "PRAGMA ignore_check_constraints=ON; UPDATE iam_tuple_cache SET protocol=3", message: "slot 1 protocol 3, want 1/2"},
+		{mutation: "PRAGMA ignore_check_constraints=ON; UPDATE iam_tuple_cache SET binding='NOT-HEX-NOT-HEX-NOT-HEX-NOT-HEX!'", message: "not 32 lowercase hex"},
+		{mutation: "UPDATE iam_tuple_cache SET binding='ffffffffffffffffffffffffffffffff'", message: "restart the process", identity: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.mutation, func(t *testing.T) {
 			db, source := tupleTestSource(t)
-			mustTupleExec(t, db, mutation)
-			if _, err := source.Snapshot(t.Context(), ""); err == nil {
-				t.Fatal("invalid metadata accepted")
-			}
-			if err := source.Acknowledge(t.Context(), "", "next", nil); err == nil {
-				t.Fatal("invalid metadata acknowledged")
+			mustTupleExec(t, db, tc.mutation)
+			_, snapshotErr := source.Snapshot(t.Context(), "")
+			acknowledgeErr := source.Acknowledge(t.Context(), "", "next", nil)
+			for stage, err := range map[string]error{"snapshot": snapshotErr, "acknowledgement": acknowledgeErr} {
+				if !errors.Is(err, tuplecache.ErrUnavailable) || errors.Is(err, tuplecache.ErrSourceIdentity) != tc.identity || !strings.Contains(err.Error(), tc.message) {
+					t.Fatalf("%s: %v", stage, err)
+				}
+				if strings.Contains(err.Error(), "ffffffff") || strings.Contains(err.Error(), "NOT-HEX") {
+					t.Fatalf("%s echoes the binding: %v", stage, err)
+				}
 			}
 			if err := source.ReadSnapshot(t.Context(), func(context.Context, tuplecache.CheckReads) error { return nil }); err != nil {
 				t.Fatal(err)
