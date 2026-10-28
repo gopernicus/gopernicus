@@ -1,6 +1,7 @@
 package golangjwt_test
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -72,5 +73,40 @@ func TestUpstreamInteroperability(t *testing.T) {
 				t.Errorf("unexpected adapter claims: %v", verified)
 			}
 		})
+	}
+}
+
+func TestSignerTokenVerifiesUnderLegacyRing(t *testing.T) {
+	const secret = "test-secret-key-at-least-32-chars-long"
+	signer, err := golangjwt.New(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile("testdata/legacy-hs256.jwt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := map[string]string{"New": mustSign(t, signer), "testdata": strings.TrimSpace(string(fixture))}
+	keys := map[string][]byte{"legacy": []byte(secret), "k1": ringKey1}
+
+	ring := newRing(t, "k1", keys, golangjwt.WithLegacyKeyID("legacy"))
+	for name, token := range tokens {
+		claims, err := ring.Verify(token)
+		if err != nil {
+			t.Fatalf("%s token under a legacy ring: %v", name, err)
+		}
+		if claims["user_id"] == nil {
+			t.Errorf("%s token claims = %v", name, claims)
+		}
+		if _, err := newRing(t, "k1", keys).Verify(token); !errors.Is(err, golangjwt.ErrMissingKeyID) {
+			t.Errorf("%s token without the legacy option err = %v, want ErrMissingKeyID", name, err)
+		}
+	}
+
+	// A kid=k2 token is refused by a ring holding only k1; the error names the
+	// id, never the key.
+	_, err = ring.Verify(signWithHeader(t, jwt.SigningMethodHS256, ringKey2, map[string]any{"kid": "k2"}))
+	if !errors.Is(err, golangjwt.ErrUnknownKeyID) || !strings.Contains(err.Error(), `"k2"`) || strings.Contains(err.Error(), string(ringKey2)) {
+		t.Fatalf("kid=k2 err = %v", err)
 	}
 }

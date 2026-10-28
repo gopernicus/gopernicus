@@ -133,14 +133,23 @@ func (s *Signer) Sign(claims map[string]any, expiresAt time.Time) (string, error
 	if s == nil || s.method == nil || len(s.secret) == 0 {
 		return "", errors.New("golangjwt: signer must be created with New")
 	}
+	return sign(s.method, s.secret, "", claims, expiresAt)
+}
+
+// sign is the signing path Signer and RingSigner share. A non-empty kid is
+// written to the JOSE header.
+func sign(method *jwt.SigningMethodHMAC, key []byte, kid string, claims map[string]any, expiresAt time.Time) (string, error) {
 	mapClaims := make(jwt.MapClaims, len(claims)+2)
 	for k, v := range claims {
 		mapClaims[k] = v
 	}
 	mapClaims["exp"] = expiresAt.Unix()
 	mapClaims["iat"] = time.Now().UTC().Unix()
-	token := jwt.NewWithClaims(s.method, mapClaims)
-	signed, err := token.SignedString(s.secret)
+	token := jwt.NewWithClaims(method, mapClaims)
+	if kid != "" {
+		token.Header["kid"] = kid
+	}
+	signed, err := token.SignedString(key)
 	if err != nil {
 		return "", fmt.Errorf("golangjwt: sign: %w", err)
 	}
@@ -167,18 +176,25 @@ func (s *Signer) Verify(tokenString string) (map[string]any, error) {
 		return nil, ErrEmptyToken
 	}
 
+	return verify(tokenString, s.method, func(*jwt.Token) ([]byte, error) { return s.secret, nil })
+}
+
+// verify is the parse/validate tail Signer and RingSigner share, so their
+// method pin and claim checks cannot drift. It checks the concrete HMAC method
+// before key is called, so key never sees a token whose alg was swapped.
+func verify(tokenString string, want *jwt.SigningMethodHMAC, key func(*jwt.Token) ([]byte, error)) (map[string]any, error) {
 	keyFunc := func(token *jwt.Token) (any, error) {
 		method, ok := token.Method.(*jwt.SigningMethodHMAC)
-		if !ok || *method != *s.method {
-			return nil, fmt.Errorf("golangjwt: unexpected signing method %q, want %q", token.Method.Alg(), s.method.Alg())
+		if !ok || *method != *want {
+			return nil, fmt.Errorf("golangjwt: unexpected signing method %q, want %q", token.Method.Alg(), want.Alg())
 		}
-		return s.secret, nil
+		return key(token)
 	}
 
 	token, err := jwt.Parse(
 		tokenString,
 		keyFunc,
-		jwt.WithValidMethods([]string{s.method.Alg()}),
+		jwt.WithValidMethods([]string{want.Alg()}),
 		jwt.WithStrictDecoding(),
 		jwt.WithExpirationRequired(),
 		jwt.WithIssuedAt(),
