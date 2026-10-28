@@ -697,7 +697,7 @@ PR-1 can merge before PR-2 is opened; PR-3 cannot be CI-green until PR-2's tree 
   v0.4.0, pin the tool (`go get -tool github.com/gopernicus/gopernicus/workshop/gopernicus@v0.4.0`)
   and collapse the mirrored greps per §7 — its 25 `guard-*` targets with no H-equivalent stay.
   The `cmd/gps360` interfaces are sanctioned under H10's client-binary carve-out.
-- **venona-project.** Its S2.R plan (`/Users/jrazmi/code/venona/plans/hosting/02-management-app.md`
+- **venona-project.** Its S2.R plan (`venona: plans/hosting/02-management-app.md`
   "S2.R plan (2026-10-20)") already matches rulings 1–2: top-level `integrations/`, repo-local
   `sdk/`, `internal/outbound/domains/<d>`, `guard-no-vendor-libs`. Alignment notes: (a) put
   authjobs at `pockets/authentication/outbound/authjobs` (a sub-package, matching auth-cms and
@@ -707,7 +707,7 @@ PR-1 can merge before PR-2 is opened; PR-3 cannot be CI-green until PR-2's tree 
   `internal/{inbound/{cli,httpapi},integrations/*,outbound/<flat>}` are H0/H5 findings its own
   slices R1–R6 remove; (e) pin the tool after v0.4.0 and run `go tool gopernicus guard` red
   until R6 lands (:431–434).
-- **Segovia v2** (`/Users/jrazmi/code/segovia/segovia/v2`). Already has top-level
+- **Segovia v2** (`segovia/v2`). Already has top-level
   `integrations/ratelimit` named only by `cmd/server`, and `internal/outbound/domains`. Findings
   under the new text: `internal/outbound/identifiers` (not under `domains/` — H0 shape);
   `cmd/server/{notice_delivery,discussions,mention_labels}.go` declare five interfaces (H10 —

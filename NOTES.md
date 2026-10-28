@@ -1745,7 +1745,7 @@ cut, not now. The feature README documents the seam verbatim in intent.
 
 **Execution notes:** the plan's salvage tree `../gopernicus-original/`
 does not exist on this machine — DDL verified against the identical copy
-under `/Users/jrazmi/code/menagerie/`; the pgx UNNEST insert + both
+under the sibling `menagerie` repo; the pgx UNNEST insert + both
 dialects' CTEs were DERIVED from the port contract + memstore semantics
 (the shared suite is the equivalence proof, which is design risk 3's
 mitigation working as designed). Z1 exported no order allow-list from the

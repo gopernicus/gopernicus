@@ -69,11 +69,27 @@ jobs:
           go-version-file: go.work
           cache: true
           cache-dependency-path: "**/go.sum"
+      # The pgx stores' TestCollationControlsOrdering_NonC legs (authentication,
+      # authorization, cms) prove a column's COLLATE "C" — not the database
+      # default — decides keyset order, so they need a database whose default
+      # collation is a real locale. The image's cluster is initialized with
+      # en_US.utf8 (it ships that locale), but the proof must not depend on an
+      # image default: this database pins it explicitly. Under en_US.utf8,
+      # 'a' < 'B'; under C, 'B' < 'a' — the tests' premise, and they fail loudly
+      # (not skip) on a C-family datcollate. TEMPLATE template0 lets the locale
+      # differ from template1's, so the step holds if the image default moves.
+      - name: create the non-C collation database
+        run: >-
+          docker exec ${{ job.services.postgres.id }}
+          psql -U postgres -v ON_ERROR_STOP=1 -c
+          "CREATE DATABASE collation_non_c LC_COLLATE 'en_US.utf8' LC_CTYPE 'en_US.utf8' TEMPLATE template0"
       - name: make test-stores (pgx live + turso -tags=integration)
         env:
           # pgx legs (cms/auth/jobs) connect here; matches the canonical
           # local-dev DSN. postgres:18 defaults db=postgres user=postgres.
           POSTGRES_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+          # The non-C database created above; unset, the _NonC legs skip loudly.
+          POSTGRES_NON_C_TEST_DSN: postgres://postgres:postgres@localhost:5432/collation_non_c?sslmode=disable
           # Turso legs. Secrets PENDING UPLOAD (2026-07-07) ⇒ empty ⇒ the three
           # turso legs skip loudly, which is correct until jrazmi uploads them.
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}

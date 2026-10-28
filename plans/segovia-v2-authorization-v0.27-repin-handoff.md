@@ -1,7 +1,7 @@
 # Segovia v2: repin authorization to v0.27.0
 
 Paste everything below the line into a session working in
-`/Users/jrazmi/code/segovia/segovia/v2`. This was prepared on 2026-10-21 from a read-only look
+`segovia/v2`. This was prepared on 2026-10-21 from a read-only look
 at that repo's `origin/main` at `62671aaa`.
 
 ---

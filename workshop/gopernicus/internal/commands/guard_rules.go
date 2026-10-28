@@ -631,6 +631,14 @@ func messageFuncs(f *guardFile) map[string]map[string]int {
 
 // isMessageArg reports whether lit is, directly, the message or format
 // argument of a messageArgs call.
+//
+// Only package-qualified calls are recognized, so a message passed to a method
+// on a *slog.Logger or *log.Logger value (logger.Info("delete from cache")) is
+// still read as SQL. Skipping those needs the receiver's type, and the guard
+// parses with go/parser alone — no go/types, and type-checking a host would
+// mean resolving its whole dependency graph. Matching method names instead
+// would exempt Info/Error/Printf on any type, a hole a database wrapper could
+// use, so that heuristic is deliberately not taken.
 func isMessageArg(lit *ast.BasicLit, stack []ast.Node, messages map[string]map[string]int) bool {
 	parent, child := parentOf(lit, stack)
 	call, ok := parent.(*ast.CallExpr)
