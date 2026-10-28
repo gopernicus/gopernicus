@@ -1,6 +1,6 @@
 ---
 title: Operations runbooks
-description: Deactivate or erase a user, revoke sessions, handle an abusive IP, read the audit rails, and run retention.
+description: Deactivate or erase a user, revoke sessions, rotate a key, handle an abusive IP, read the audit rails, and run retention.
 ---
 
 # Operations runbooks
@@ -58,8 +58,8 @@ Authentication v0.31.0 (SOC 2 S4d). For a suspected fleet-wide session compromis
   the partial counts and `error_kind` (re-run it). Read them with
   `GET /auth/admin/security-events?event_type=all_sessions_revoked_global`.
 - **What survives:** outstanding access JWTs on safe reads under the default tier, for up
-  to `AccessTokenTTL` (rotate `AUTH_JWT_SECRET` too to end them at once, *Keys and
-  rotation*); API keys (next runbook); external IdP sessions (an external admin's next
+  to `AccessTokenTTL` (to end them at once too, run the JWT key's emergency rotation in
+  *Rotate a key*: a planned rotation keeps them verifying through its window); API keys (next runbook); external IdP sessions (an external admin's next
   provider token still signs in; deactivate the user locally to stop one).
 
 ## Disable a service account
@@ -157,6 +157,260 @@ v0.16.x and the pgx stores at their previous tags.
   restore onto 17 (the canonical migrations use `uuidv7()` defaults).
 - **Replicas and DR targets** must be 18 before the first migrate under the new tags.
 - **Verify:** `SHOW server_version_num;` reads `180000` or higher, then run the migrator.
+
+## Rotate a key
+
+Authentication v0.35.0, golang-jwt v0.4.0, sdk v0.23.0 (SOC 2 S4d part 3). One subsection
+per key in the inventory (*Keys and rotation*). Generate every new key with
+`openssl rand -hex 32`; never reuse one across roles. Key ids are lower-case
+(`^[a-z0-9][a-z0-9_-]{0,31}$`), are configuration and not secrets, and appear in logs; key
+material never does.
+
+**The three phases.** Every ring rotation (JWT, delivery, provider tokens) runs in three
+phases, so a rolling fleet never refuses a token or dead-letters an envelope part-way through
+a deploy:
+
+- **(a) Ring beside the single key, legacy active.** Deploy code on the three tags above with
+  the ring variables set, the single variable KEPT and the active id `legacy`. The ring reads
+  both shapes and writes the old one (no `kid`, no `v1.` prefix), so instances still on the
+  single key read everything the new ones write.
+- **(b) Activate the new id.** Once EVERY instance runs (a), set the active id to the new key.
+  New output carries the new id; the legacy key still verifies or opens the old output.
+- **(c) Drop the legacy key.** After the window below, unset the single variable. The boot
+  line then reads `…_legacy=no`, and the production
+  `posture_warning=legacy_key_read_enabled key=<role>` WARN stops.
+
+**Before each phase:**
+
+- before (a): `go version -m <binary>` shows authentication v0.35.0 or later, golang-jwt
+  v0.4.0 or later and sdk v0.23.0 or later. An older `AESGCMRing` treats `legacy` as an
+  ordinary key and cannot open single-key ciphertext.
+- before (b): every instance's boot line shows phase (a) (`…_active_key_id=legacy`). An
+  instance still on the single key cannot read what (b) writes.
+- before (c): the key's window has passed since the last instance reached (b), and the key's
+  own gate below is met.
+
+**Boot-line evidence.** `New` logs one `auth: keys` line (no key material). Record it at each
+phase: it is the rotation's evidence.
+
+```
+phase (a):  msg="auth: keys" jwt_signer=ring jwt_active_key_id=legacy jwt_key_ids=k2,legacy jwt_legacy=yes …
+phase (b):  msg="auth: keys" jwt_signer=ring jwt_active_key_id=k2 jwt_key_ids=k2,legacy jwt_legacy=yes …
+phase (c):  msg="auth: keys" jwt_signer=ring jwt_active_key_id=k2 jwt_key_ids=k2 jwt_legacy=no …
+```
+
+The delivery and provider-token roles print `delivery_…` and `token_…` the same way, and the
+challenge protector prints `challenge_active_key_id` and `challenge_key_ids`. A role printed
+`single` is on its single variable; `opaque` is a collaborator that does not report its keys
+(a third-party signer), which gets no legacy WARN.
+
+**Rollback.** Before (c), re-activating the old id (`…_ACTIVE_KEY=legacy`) is a KEY rollback
+and loses nothing. A CODE rollback below the three tags after phase (b) is lossy: the old code
+cannot read anything written under the new id. Every `kid`-stamped access token is refused
+until its client refreshes, every `v1.` delivery envelope dead-letters, and every `v1.`
+provider token is unreadable until the user re-links. To roll code back, go back to phase (a)
+first and wait out the window.
+
+**Emergency rotation.** When a key may be compromised, skip the overlap: set the ring to a
+fresh key with no legacy id and drop the compromised key everywhere at once, then accept the
+cost listed under each key. **The `legacy_key_read_enabled` WARN is never acceptable during a
+compromise**: a legacy id keeps the compromised key verifying.
+
+### JWT signing key (`AUTH_JWT_SECRET` → `AUTH_JWT_KEYS`)
+
+The host wires `golangjwt.NewRing(keys.JWTRing, golangjwt.WithLegacyKeyID(keys.JWTLegacyKeyID))`
+when `keys.JWTRing` has keys, else `golangjwt.New(string(keys.JWTSecret))` (the reference
+hosts do both).
+
+```sh
+# (a) every instance: ring + secret kept, legacy active
+AUTH_JWT_SECRET=<current hex>          # kept: joins the ring as id "legacy"
+AUTH_JWT_KEYS=k2:<new hex>
+AUTH_JWT_ACTIVE_KEY=legacy
+# (b) after the whole fleet runs (a)
+AUTH_JWT_ACTIVE_KEY=k2
+# (c) after the window
+#   unset AUTH_JWT_SECRET
+# next rotation: AUTH_JWT_KEYS=k2:<hex>,k3:<new hex>, AUTH_JWT_ACTIVE_KEY=k3, then drop k2
+```
+
+- **Window:** `max(AccessTokenTTL, OAuth2Config.AccessTTL, OAuth2Config.ConsentTTL) + 60 s`.
+  The same signer mints delegated OAuth2 tokens. With the defaults that is 16 minutes.
+- **Evidence:** a fresh token's header carries `kid` from (b) on
+  (`cut -d. -f1 <<<"$TOKEN" | base64 -d` shows `"kid":"k2"`). In (a) it carries none.
+- **What a token without `kid` does:** it verifies under `legacy` while that id is in the
+  ring and is refused once it is gone. A `kid` the ring does not hold is always refused.
+  Sessions survive every phase (refresh never consults the signer), so a refused access
+  token costs one refresh, never a sign-in.
+- **HS384/HS512:** a host whose single `Signer` used `WithMethod(HS384|HS512)` cannot read its
+  old tokens through the HS256 ring. It stays on `Signer`, or rotates as an emergency.
+- **Emergency:** `AUTH_JWT_KEYS=k3:<new hex>`, `AUTH_JWT_ACTIVE_KEY=k3`, every old id and
+  `AUTH_JWT_SECRET` removed. Every outstanding access token (and any forged one) is 401 at
+  once and clients refresh. If refresh tokens may also be exposed, run *Revoke all sessions*.
+
+### Challenge pepper (`AUTH_CHALLENGE_PEPPER` → `AUTH_CHALLENGE_PEPPERS`)
+
+Challenge rows and recovery codes store the id of the key that digested them, so the pepper
+ring names its ids itself and the single variable is never joined as `legacy`: setting both
+forms refuses boot (`ErrKeyRequired` naming both). The first ring entry MUST reuse the id and
+value the host uses today (`dev` on the reference host). The host builds the protector with
+`protection.NewHMACChallengeProtector(protection.HMACKeyRing(keys.ChallengeRing))`.
+
+```sh
+# (a) the ring with the current id and value, still active; AUTH_CHALLENGE_PEPPER unset
+AUTH_CHALLENGE_PEPPERS=dev:<current hex>,p2:<new hex>
+AUTH_CHALLENGE_ACTIVE_PEPPER=dev
+# (b) after the whole fleet runs (a)
+AUTH_CHALLENGE_ACTIVE_PEPPER=p2
+# (c) after the window, and the recovery-code gate
+AUTH_CHALLENGE_PEPPERS=p2:<new hex>
+```
+
+The single variable and the ring with the same id and value digest identically, so (a) can
+also be a single step on a small fleet. Only (b) needs the whole fleet to hold `p2` first.
+
+- **Window:** the longest code-challenge TTL: 15 minutes for the bundled purposes (5 for login
+  and step-up codes). Magic-link, reset and invitation tokens are unkeyed SHA-256
+  (`DigestToken`): the pepper does not touch them.
+- **Gate (recovery codes, the long tail):** a recovery code stays digested under the id that
+  was active when it was generated, until the user regenerates. While any remain under an id
+  that left the ring, `New` WARNs `auth: recovery codes sealed under retired pepper keys
+  key_ids=[…]`. Keep the old id while that matters, or accept the loss and record the WARN's
+  `key_ids` as evidence. Those users regenerate codes at their next AAL2 step-up, or an
+  administrator resets their TOTP.
+- **Evidence:** `challenge_active_key_id=p2 challenge_key_ids=p2`.
+- **Code rollback:** code below v0.35.0 reads only `AUTH_CHALLENGE_PEPPER` under the host's
+  hard-coded id. Codes and recovery codes under `p2` stop verifying.
+- **Emergency:** drop the compromised id at once. Pending codes fail (users request a new
+  one), and recovery codes under it are orphaned (the WARN above lists them).
+
+### Identifier key (`AUTH_IDENTIFIER_KEY`)
+
+A single key, rotated in one step: no ring, no legacy id. Set the new value on every instance.
+
+- **Effect:** rate-limit budgets and outbox idempotency windows reset once (they are minutes
+  long). `identifier_digest` on invitation and delivery audit rows minted before the cut no
+  longer matches digests recomputed afterwards: the digest is correlation only, and nothing is
+  looked up by it.
+- **Window:** `max(budget window)`, the longest `AuthenticationLimits` window you configured
+  (1 minute by default). During a rolling deploy two instances key the same identifier
+  differently, so a budget can briefly allow up to twice its limit.
+- **Evidence:** record the cut time and keep the retired key in the evidence store if audit
+  digests before the cut must stay checkable.
+- **Emergency:** the same procedure. The only cost is the budget reset.
+
+### Delivery envelope key (`AUTH_DELIVERY_ENCRYPTER_KEY` → `AUTH_DELIVERY_ENCRYPTER_KEYS`)
+
+The host wires `cryptids.NewAESGCMRing(keys.DeliveryEncrypterRing,
+cryptids.WithLegacyKeyID(keys.DeliveryLegacyKeyID))` when the ring is set, else
+`cryptids.NewAESGCM(keys.DeliveryEncrypterKey)`.
+
+```sh
+# (a)
+AUTH_DELIVERY_ENCRYPTER_KEY=<current hex>     # kept: joins as "legacy"
+AUTH_DELIVERY_ENCRYPTER_KEYS=d2:<new hex>
+AUTH_DELIVERY_ENCRYPTER_ACTIVE_KEY=legacy
+# (b)
+AUTH_DELIVERY_ENCRYPTER_ACTIVE_KEY=d2
+# (c) once the queue holds no pre-(b) envelope
+#   unset AUTH_DELIVERY_ENCRYPTER_KEY
+```
+
+- **Window:** the drain time: until no envelope sealed before (b) is still queued. On the
+  generic jobs rail the (c) gate is a zero from
+  `SELECT count(*) FROM job_queue WHERE kind = 'authentication.delivery' AND status IN
+  ('pending', 'running', 'failed')` taken after the last instance reached (b) (`failed` still
+  has retries left). Delayed retries can hold an envelope for its whole retry schedule. In
+  `in_process` mode nothing persists, so the window is one drain of the in-memory pool.
+- **Evidence:** `delivery_encrypter=ring delivery_active_key_id=d2 delivery_key_ids=d2
+  delivery_legacy=no`. An envelope the ring cannot open fails as `ErrUnsealedPayload` (no bytes
+  in the error) and dead-letters.
+- **Emergency:** drop the compromised key. In-flight envelopes dead-letter, and their users
+  request the code or link again.
+
+### Provider-token key (`AUTH_TOKEN_ENCRYPTER_KEY` → `AUTH_TOKEN_ENCRYPTER_KEYS`)
+
+Optional: only a host that persists OAuth provider tokens has it. The wiring matches
+delivery: `NewAESGCMRing(keys.TokenEncrypterRing, WithLegacyKeyID(keys.TokenLegacyKeyID))`.
+A host that branches only on `keys.TokenEncrypterKey != nil` silently stops wiring the
+encrypter once the ring is set, so branch on `len(keys.TokenEncrypterRing.Keys) > 0` first.
+A host that decrypts these columns itself moves its reader to the same ring with the legacy
+id at the same time.
+
+```sh
+# (a)
+AUTH_TOKEN_ENCRYPTER_KEY=<current hex>        # kept: joins as "legacy"
+AUTH_TOKEN_ENCRYPTER_KEYS=t2:<new hex>
+AUTH_TOKEN_ENCRYPTER_ACTIVE_KEY=legacy
+# (b)
+AUTH_TOKEN_ENCRYPTER_ACTIVE_KEY=t2
+# (c) only at a zero count (below)
+#   unset AUTH_TOKEN_ENCRYPTER_KEY
+```
+
+- **Window: until no row remains under the legacy key.** A stored row is never rewritten by a
+  returning login, so legacy rows persist until the user unlinks and relinks or the host
+  re-seals them. The (c) gate is a zero from this count (PostgreSQL and SQLite/Turso; legacy
+  values are base64url and never contain a `.`):
+
+  ```sql
+  SELECT count(*) FROM oauth_accounts
+   WHERE (access_token <> '' AND access_token NOT LIKE 'v1.%')
+      OR (refresh_token <> '' AND refresh_token NOT LIKE 'v1.%');
+  ```
+
+  `refresh_token` is counted too: providers such as Google omit it on a repeat consent, so a
+  legacy refresh token can outlive the access-token check.
+- **Re-sealing (host Go, never SQL alone):** for each counted row, decrypt each legacy column
+  with the ring (it opens legacy values), encrypt the plaintext with the ring (it writes the
+  active id), and write it back compare-and-swap so a concurrent relink is never overwritten:
+  `UPDATE oauth_accounts SET access_token = $new WHERE provider = $p AND provider_user_id = $u
+  AND access_token = $old`, and the same for `refresh_token`. Re-run the count until it is zero.
+- **Evidence:** the zero count, then `token_encrypter=ring token_active_key_id=t2
+  token_key_ids=t2 token_legacy=no`.
+- **Emergency:** drop the compromised key. Every row under it is unreadable: revoke the tokens
+  at the provider, and users re-link.
+
+### TOTP secret key (`AUTH_TOTP_KEYS`)
+
+Already a ring and unchanged by this release; the other rings copy it. Secrets are sealed with
+the user id inside the envelope as `v1.<id>.…` and are never re-sealed on rotation.
+
+```sh
+# add, then activate (on a fleet: add everywhere first, then activate)
+AUTH_TOTP_KEYS=t1:<current hex>,t2:<new hex>
+AUTH_TOTP_ACTIVE_KEY=t2
+# drop t1 only at a zero count:
+#   SELECT count(*) FROM totp_credentials WHERE secret LIKE 'v1.t1.%';
+```
+
+- **Window:** until no `totp_credentials` row names the old id. Rows move only when users
+  re-enroll.
+- **Evidence:** the zero count, then `totp_active_key_id=t2 totp_key_ids=t2`.
+- **Emergency:** drop the compromised id. Those users' codes stop verifying until an
+  administrator TOTP reset and re-enrollment; their recovery codes (under the pepper) still
+  work.
+
+### Raise the password hash cost (rehash on login)
+
+bcrypt v0.3.0 `New()` hashes at cost 12 (`WithCost(10)` is the hatch, and below 12 production
+WARNs `posture_warning=password_hash_cost_low`). Existing hashes verify at their stored cost.
+With the store tags pgx v0.18.0 / Turso v0.17.0 (or a store implementing
+`user.PasswordHashUpgrader`), a successful login or password step-up re-hashes a lower-cost
+hash at the configured cost through a compare-and-swap that bumps no revision and revokes no
+session. A failure logs one `password_rehash_failed` WARN and never fails the login.
+
+- **The timing residual closes as users log in.** A login miss path verifies against a dummy
+  hash at the configured cost. Until a user's stored hash is re-hashed, a wrong password for
+  that user answers faster than a miss. Track it with
+  `SELECT count(*) FROM user_passwords WHERE substr(hash, 5, 2) < '12';`
+  (bcrypt hashes are `$2a$<cost>$…`; both dialects). Accounts that never log in keep their old
+  hashes until the host forces a reset.
+- **Breach checks.** No example wires one. A password host wires
+  `integrations/passwords/hibp` (the keyless Pwned Passwords range API; fail-closed, 503 on an
+  outage unless `CompromisedPasswordFailOpen`) or `protection.NewBlocklistChecker` over a list
+  file as `PasswordConfig.CompromisedPasswordChecker`. In production a password host with
+  neither logs `posture_warning=password_breach_check_none`.
 
 ## An abusive IP
 

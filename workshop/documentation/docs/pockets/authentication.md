@@ -885,6 +885,71 @@ Authentication v0.34.0 is additive: no store, migration or views change.
 - **Host upgrade.** A host whose route matrix test enumerates routes adds `POST
   /auth/invitations/decline` as public.
 
+## Added by S4d part 3 (key management and password policy)
+
+Authentication v0.35.0 with sdk v0.23.0, golang-jwt v0.4.0, bcrypt v0.3.0, the new
+`integrations/passwords/hibp` v0.1.0 and stores pgx v0.18.0 / Turso v0.17.0 (SOC 2 slice S4d
+part 3). The core stays on sdk v0.21.0; a host that wires the ring forms lifts sdk to v0.23.0
+through golang-jwt or its own `cryptids` call. Everything is host opt-in except bcrypt's default
+cost, and a host setting only the single key variables is unchanged.
+
+- **Key rings.** `NewKeys` reads a ring form beside four single variables: `AUTH_JWT_KEYS` /
+  `AUTH_JWT_ACTIVE_KEY`, `AUTH_CHALLENGE_PEPPERS` / `AUTH_CHALLENGE_ACTIVE_PEPPER`,
+  `AUTH_DELIVERY_ENCRYPTER_KEYS` / `…_ACTIVE_KEY` and `AUTH_TOKEN_ENCRYPTER_KEYS` /
+  `…_ACTIVE_KEY` (`id:hex,id:hex` and the active id). The JWT and the two encrypters join a
+  single variable set beside the ring under the reserved id `legacy`, so the ring keeps reading
+  what the single key wrote; the pepper ring names its own ids (both forms refuse). Build the
+  adapters from `Keys`:
+
+  ```go
+  var signer cryptids.JWTSigner
+  var err error
+  if len(keys.JWTRing.Keys) > 0 {
+      signer, err = golangjwt.NewRing(keys.JWTRing, golangjwt.WithLegacyKeyID(keys.JWTLegacyKeyID))
+  } else {
+      signer, err = golangjwt.New(string(keys.JWTSecret))
+  }
+  // the same branch for each encrypter; an empty legacy id is no option
+  delivery, err := cryptids.NewAESGCMRing(keys.DeliveryEncrypterRing,
+      cryptids.WithLegacyKeyID(keys.DeliveryLegacyKeyID))
+  // the pepper ring converts directly
+  protector, err := protection.NewHMACChallengeProtector(protection.HMACKeyRing(keys.ChallengeRing))
+  ```
+
+  A ring signer stamps `kid` and verifies under any ring key; a token without `kid` verifies
+  only under the legacy id. While `legacy` is the active id the adapters write the single-key
+  shape, which makes a rolling three-phase rotation safe (*Operations runbooks*, "Rotate a
+  key", one runbook per key).
+- **The `auth: keys` boot line.** One INFO line per `New`: each role's kind (`ring`, `single`,
+  `opaque`, `none`), a ring's active id, ids and legacy state, the identifier keyer, and the
+  first-party token issuer and audience. Never key material. Production logs
+  `posture_warning=legacy_key_read_enabled key=<role>` while a legacy id is set. Rings report
+  through the named optional interface `authlogic.KeyRingReporter`.
+- **First-party `iss` / `aud`.** `SessionsConfig.Issuer` (`AUTH_TOKEN_ISSUER`) and `Audience`
+  (`AUTH_TOKEN_AUDIENCE`): set, first-party tokens carry and require them (one refresh per
+  client at enablement); a collision with the OAuth2 issuer or resources refuses
+  (`ErrTokenAudienceCollides`).
+- **Passwords.** bcrypt v0.3.0 defaults to cost 12 (`WithCost(10)` hatch) and reports it
+  (`authlogic.CostReporter`); production WARNs `password_hash_cost_low` below 12 and
+  `password_breach_check_none` when password flows run with no
+  `CompromisedPasswordChecker`. The checkers are `integrations/passwords/hibp` (the keyless
+  Pwned Passwords range API, fail-closed: 503 on an outage unless
+  `CompromisedPasswordFailOpen`) and `protection.NewBlocklistChecker` over a host-supplied
+  list; the pocket ships no list, and no example wires a checker. Login miss paths verify
+  against a dummy hash, so an unknown identifier costs what a wrong password does.
+- **Rehash on login (live).** A hasher implementing `authlogic.Rehasher` (bcrypt v0.3.0
+  `NeedsRehash`) gets a lower-cost hash re-hashed after a successful login or step-up,
+  through the optional compare-and-swap `user.PasswordHashUpgrader` (`UpgradeHash`; pgx
+  v0.18.0, Turso v0.17.0, and the auth-cms memory store). No revision bump, no session revoked,
+  no security event; a failure is one `password_rehash_failed` WARN and never fails the login.
+  `storetest.RunPasswordHashUpgrade` is the conformance suite (outside `Run`). The timing
+  residual left by older, cheaper hashes closes as users log in.
+- **No lockout.** The per-account control is `AuthenticationLimits.Login.PerSubject` (5 a
+  minute by default; an hourly ceiling on a shared limiter is one option).
+
+The pocket README's "Key rings and the `auth: keys` boot line (SOC 2 S4d part 3)" and "Host
+password policy" sections are the reference.
+
 ## Production posture
 
 Production has no implicit mode and fails closed on incomplete security wiring. Among other requirements:

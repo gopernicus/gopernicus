@@ -262,9 +262,12 @@ type keyedCollaborators struct {
 //   - AUTH_TOKEN_ENCRYPTER_KEY unset leaves provider tokens unpersisted in every mode
 //     (login and linking still work).
 //
-// The JWT signer takes the decoded bytes; the challenge ring keeps the active key ID
-// "dev" its pending challenges were stamped with. Each key is a distinct role and is
-// never logged.
+// Each of the JWT, pepper, delivery and token keys also takes its ring form
+// (AUTH_JWT_KEYS / AUTH_JWT_ACTIVE_KEY and the like); a ring wins over the single
+// key, which then joins it as the legacy id (the pepper ring names its ids
+// itself). The single-key challenge ring keeps the active key ID "dev" its pending
+// challenges were stamped with, so a pepper ring's first entry reuses "dev". Each
+// key is a distinct role and is never logged.
 func buildKeyedCollaborators(mode environment.Mode, log *slog.Logger) (keyedCollaborators, error) {
 	var in auth.KeysInput
 	if err := environment.ParseEnvTags("", &in); err != nil {
@@ -275,15 +278,19 @@ func buildKeyedCollaborators(mode environment.Mode, log *slog.Logger) (keyedColl
 	if err != nil {
 		return keyedCollaborators{}, err
 	}
-	signer, err := golangjwt.New(string(keys.JWTSecret))
+	signer, err := buildJWTSigner(keys)
 	if err != nil {
 		return keyedCollaborators{}, fmt.Errorf("build jwt signer: %w", err)
 	}
-	const activeKeyID = "dev"
-	protector, err := protection.NewHMACChallengeProtector(protection.HMACKeyRing{
-		Active: activeKeyID,
-		Keys:   map[string][]byte{activeKeyID: keys.ChallengePepper},
-	})
+	pepperRing := protection.HMACKeyRing(keys.ChallengeRing)
+	if len(pepperRing.Keys) == 0 {
+		const activeKeyID = "dev"
+		pepperRing = protection.HMACKeyRing{
+			Active: activeKeyID,
+			Keys:   map[string][]byte{activeKeyID: keys.ChallengePepper},
+		}
+	}
+	protector, err := protection.NewHMACChallengeProtector(pepperRing)
 	if err != nil {
 		return keyedCollaborators{}, fmt.Errorf("build challenge protector: %w", err)
 	}
@@ -291,7 +298,7 @@ func buildKeyedCollaborators(mode environment.Mode, log *slog.Logger) (keyedColl
 	if err != nil {
 		return keyedCollaborators{}, fmt.Errorf("build identifier keyer: %w", err)
 	}
-	deliveryEncrypter, err := cryptids.NewAESGCM(keys.DeliveryEncrypterKey)
+	deliveryEncrypter, err := buildEncrypter(keys.DeliveryEncrypterKey, keys.DeliveryEncrypterRing, keys.DeliveryLegacyKeyID)
 	if err != nil {
 		return keyedCollaborators{}, fmt.Errorf("build delivery encrypter: %w", err)
 	}
@@ -306,14 +313,33 @@ func buildKeyedCollaborators(mode environment.Mode, log *slog.Logger) (keyedColl
 		deliveryEncrypter:  deliveryEncrypter,
 		totpEncrypter:      totpEncrypter,
 	}
-	if keys.TokenEncrypterKey != nil {
-		tokenEncrypter, err := cryptids.NewAESGCM(keys.TokenEncrypterKey)
+	if keys.TokenEncrypterKey != nil || len(keys.TokenEncrypterRing.Keys) > 0 {
+		tokenEncrypter, err := buildEncrypter(keys.TokenEncrypterKey, keys.TokenEncrypterRing, keys.TokenLegacyKeyID)
 		if err != nil {
 			return keyedCollaborators{}, fmt.Errorf("build token encrypter: %w", err)
 		}
 		collaborators.tokenEncrypter = tokenEncrypter
 	}
 	return collaborators, nil
+}
+
+// buildJWTSigner signs with the AUTH_JWT_KEYS ring when it is set (stamping
+// kid; the legacy id, when AUTH_JWT_SECRET is kept beside the ring, verifies
+// kid-less tokens), else with the single AUTH_JWT_SECRET.
+func buildJWTSigner(keys auth.Keys) (cryptids.JWTSigner, error) {
+	if len(keys.JWTRing.Keys) > 0 {
+		return golangjwt.NewRing(keys.JWTRing, golangjwt.WithLegacyKeyID(keys.JWTLegacyKeyID))
+	}
+	return golangjwt.New(string(keys.JWTSecret))
+}
+
+// buildEncrypter seals with the key ring when it is set (the legacy id opens
+// what the single key wrote), else with the single key.
+func buildEncrypter(single []byte, ring cryptids.KeyRing, legacyKeyID string) (cryptids.Encrypter, error) {
+	if len(ring.Keys) > 0 {
+		return cryptids.NewAESGCMRing(ring, cryptids.WithLegacyKeyID(legacyKeyID))
+	}
+	return cryptids.NewAESGCM(single)
 }
 
 // writeHostJSON writes v as a JSON response at status (host-local handlers).

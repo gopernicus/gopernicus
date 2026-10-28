@@ -293,6 +293,47 @@ revocation_checker=wired|none fail_open=<bool>`.
   `RevocationFailOpen` now logs `posture_waiver=RevocationFailOpen` (re-key alerts on the old
   WARN text). `guard --posture` gains no rule.
 
+**Added by S4d part 3** (authentication v0.35.0, golang-jwt v0.4.0, sdk v0.23.0, bcrypt v0.3.0,
+the new `integrations/passwords/hibp` v0.1.0, stores pgx v0.18.0 / Turso v0.17.0; SOC 2 slice
+S4d part 3). Key management and password policy. Everything is host opt-in except bcrypt's
+default cost; a host that sets only the single key variables sees one new INFO line.
+
+| Module | Refuses | Sentinel | Acknowledgement |
+|---|---|---|---|
+| authentication (all modes) | `AUTH_CHALLENGE_PEPPER` beside `AUTH_CHALLENGE_PEPPERS`; a ring entry named `legacy` beside its single variable; a malformed ring (bad id, wrong length, active id missing) | `ErrKeyRequired`, naming the variables | none — use one form, or rename the entry |
+| authentication (all modes) | `SessionsConfig.Issuer` / `Audience` with surrounding whitespace; an `Issuer` equal to `OAuth2Config`'s issuer, or an `Audience` equal to its MCP or API resource | `ErrTokenIssuerInvalid`; `ErrTokenAudienceCollides` | none |
+| sdk `cryptids`, golang-jwt | a legacy id not in the ring | `cryptids.ErrLegacyKeyMissing` | none |
+
+- **The `auth: keys` boot line.** One INFO line per `New`: each key-bearing role's kind
+  (`ring`, `single`, `opaque`, `none`) and, for a ring, `…_active_key_id`, `…_key_ids` and
+  `…_legacy=yes|no`; `identifier_keyer`; `token_issuer` / `token_audience` (`none` when unset).
+  No key material. A single-key role logs no WARN (rotation is a procedure, not a
+  misconfiguration).
+- **WARN, never a refusal:** `posture_warning=legacy_key_read_enabled key=<role>` for each
+  role whose ring still reads the single key's output, until the single variable is unset
+  (*Operations runbooks*, "Rotate a key"). Never acceptable during a compromise.
+- **First-party `iss` / `aud`.** `AUTH_TOKEN_ISSUER` / `AUTH_TOKEN_AUDIENCE`: set, every
+  first-party access token carries them and one without them is a generic 401, so enabling
+  costs each client one refresh.
+- **Password hosts.** bcrypt `New()` now hashes at **cost 12** (new hashes only; existing
+  ones verify at their stored cost; `WithCost(10)` is the hatch). Production with password
+  flows on WARNs `posture_warning=password_breach_check_none` when no
+  `CompromisedPasswordChecker` is wired, and `posture_warning=password_hash_cost_low
+  cost=<n> recommended=12` for a hasher reporting a lower cost. A checker that cannot complete
+  logs `password_breach_check_unavailable outcome=refused|allowed`; the fail-closed default
+  answers **503**. The shipped checkers are `integrations/passwords/hibp` (the keyless Pwned
+  Passwords range API, k-anonymity: five hex characters of the SHA-1 leave the process) and
+  `protection.NewBlocklistChecker` over a list file the host supplies; no example wires one.
+- **Rehash on login.** A successful login or step-up re-hashes a hash below the configured cost
+  through the store's compare-and-swap `UpgradeHash` (pgx v0.18.0 / Turso v0.17.0), with no
+  revision bump and no session revoked; a failure is one `password_rehash_failed` WARN. A login
+  miss path verifies against a dummy hash at the configured cost, so the residual timing
+  difference for not-yet-re-hashed users closes as they log in.
+- **No account lockout.** The per-account control is the login budget,
+  `AuthenticationLimits.Login.PerSubject` (5 a minute by default; for an hourly ceiling, set for
+  example 20 an hour on a shared limiter). `guard --posture` gains
+  no rule.
+
 ## Retention (S3)
 
 Every row class the pockets write has an owner-set lifetime, each disposal is bounded, and the

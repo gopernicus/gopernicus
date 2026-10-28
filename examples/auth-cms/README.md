@@ -181,7 +181,14 @@ remain absent.
   partial-pending-uniqueness contracts, atomic single-use consume + revision-CAS,
   and the created_at DESC, id DESC paging), and projects the masked credential
   inventory from the real identifier rows exactly as pgx/turso do.
-- **hasher**: `bcrypt.New()`. **mailer**: `email.NewConsole(log)` (logs mail —
+- **hasher**: `bcrypt.New()` (cost 12 since bcrypt v0.3.0; a stored lower-cost
+  hash is re-hashed at 12 on its next successful login through authmem's
+  compare-and-swap `UpgradeHash`, with no session revoked). No breach checker is
+  wired: a password host can add `integrations/passwords/hibp` (the keyless
+  Pwned Passwords range API, fail-closed by default) or
+  `protection.NewBlocklistChecker` over a list file as
+  `PasswordConfig.CompromisedPasswordChecker`; in production without one the
+  pocket WARNs `posture_warning=password_breach_check_none`. **mailer**: `email.NewConsole(log)` (logs mail —
   this is how you read verification codes and invitation tokens below).
 - **OAuth provider**: `fakeOAuthProvider` (`cmd/server/oauthfake.go`) — a
   self-contained `sdk/capabilities/oauth.Provider`, no vendor, no network; identity derived
@@ -193,7 +200,11 @@ remain absent.
   single-instance convenience only**: access JWTs don't survive a restart, and a
   **multi-instance** deployment MUST share `AUTH_JWT_SECRET` across every instance
   (per-instance keys can't cross-verify). API clients recover a dead access JWT via
-  `POST /auth/refresh` (refresh tokens are store-backed).
+  `POST /auth/refresh` (refresh tokens are store-backed). With `AUTH_JWT_KEYS` /
+  `AUTH_JWT_ACTIVE_KEY` set the signer is `golangjwt.NewRing` instead: tokens
+  carry a `kid`, and `AUTH_JWT_SECRET` kept beside the ring joins it as id
+  `legacy`, which verifies kid-less tokens through a rotation (the
+  "Rotate a key" runbook; `cmd/server/key_rotation_test.go` proves the overlap).
 - **Granter**: `integrityRelationshipGranter` (`cmd/server/membership.go`) asks
   `Components.Mutations.Recorded` first; only an unrecorded operation runs the
   resource-existence probe. It then calls `Components.Mutations.Apply` with
@@ -262,9 +273,14 @@ remain absent.
   `authentication.NewKeys` call. In development each unset key falls back to an
   **ephemeral per-boot** key (single-instance only, WARN-logged; key material is
   never printed); production refuses to boot until the first four are set, and
-  leaves provider tokens unstored without the fifth.
+  leaves provider tokens unstored without the fifth. The JWT, pepper, delivery
+  and token keys each also take a ring form (`AUTH_JWT_KEYS`,
+  `AUTH_CHALLENGE_PEPPERS`, `AUTH_DELIVERY_ENCRYPTER_KEYS`,
+  `AUTH_TOKEN_ENCRYPTER_KEYS`, each with its active-id variable); the boot line
+  `auth: keys` reports each role's kind, ids and legacy read.
 - **Challenge rail**: `ChallengeProtector` (`buildKeyedCollaborators`, HMAC key
-  ring with active key ID `dev`) + the `Challenges`/`PasswordResets`/`Challenges`
+  ring with active key ID `dev`, or the `AUTH_CHALLENGE_PEPPERS` ring, whose
+  first entry reuses `dev`) + the `Challenges`/`PasswordResets`/`Challenges`
   ports from `authmem` back verify/reset/step-up/passwordless.
 - **Delivery** (two proof-host variants, `AUTH_DELIVERY_MODE`): the queue is the ONLY
   send path in either — the console mailer/notifier log the delivered secret, so

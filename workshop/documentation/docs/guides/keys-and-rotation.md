@@ -5,7 +5,8 @@ description: The six authentication keys, how NewKeys decodes and loads them, wh
 
 # Keys and rotation
 
-Current state on `main` at 2026-10-22, after S1. The authentication pocket never generates a
+Current state as of authentication v0.35.0, golang-jwt v0.4.0 and sdk v0.23.0 (SOC 2 S4d
+part 3). The authentication pocket never generates a
 key in production: every signer, encrypter and keyer is a required collaborator, and
 `authentication.NewKeys(mode, KeysInput{…}, log, need…)` is the one loader that decodes them.
 The host fills `KeysInput` from its own environment (hex, every key), names the keys it wires
@@ -16,14 +17,14 @@ reference host (`examples/auth-cms/cmd/server/demo.go`) and the `init` scaffold 
 
 ## The six authentication keys
 
-| Env (reference host) | Protects | Encoding (`NewKeys`) | Minimum | Rotation consequence |
+| Key (single variable → ring form) | Protects | Encoding (`NewKeys`) | Minimum | Rotation |
 |---|---|---|---|---|
-| `AUTH_JWT_SECRET` | access-JWT signing (HS256 by default) | hex, decoded to bytes (before S1 the reference host used the hex *text* as the key — see continuity below) | 32 bytes for HS256, 48 for HS384, 64 for HS512 (enforced by `integrations/cryptids/golang-jwt`) | single key: every outstanding access JWT becomes invalid at once; sessions survive and clients refresh |
-| `AUTH_CHALLENGE_PEPPER` | HMAC over OTP codes; digests of reset and magic-link tokens | hex, decoded to bytes | 32 bytes per ring key | the only key with overlap: `HMACKeyRing` keeps older keys so unexpired codes still verify until the old key is dropped |
-| `AUTH_IDENTIFIER_KEY` | PII-free rate-limit and idempotency digests | hex, decoded to bytes | 32 bytes | single key: every budget and idempotency bucket resets once (transient) |
-| `AUTH_DELIVERY_ENCRYPTER_KEY` | AES-256-GCM over queued delivery envelopes (the rendered secret and destination) | hex, decoded to bytes (before S1: a raw 32-byte string) | 32 bytes | single key: drain the queue first; in-flight sealed rows dead-letter under a new key |
-| `AUTH_TOKEN_ENCRYPTER_KEY` | AES-256-GCM over stored OAuth provider tokens | hex, decoded to bytes (before S1: a raw 32-byte string); optional in every mode — unset → provider tokens are not persisted | 32 bytes | single key: stored provider tokens become unreadable; users re-link |
-| `AUTH_TOTP_KEYS` + `AUTH_TOTP_ACTIVE_KEY` (`KeyTOTPRing`, since authentication v0.28.0) | AES-256-GCM over stored TOTP secrets, each sealed with its user id | a ring `id:hex,id:hex` parsed by `cryptids.ParseKeyRing`; the active variable names the sealing id; needed only by a host that wires `WithTOTP` | 32 bytes per ring key | a ring: add the new key, make it active, and keep the old id in the ring while any secret is sealed under it (secrets are not re-sealed on rotation); dropping it means those users' codes stop verifying until an admin TOTP reset and re-enrollment |
+| `AUTH_JWT_SECRET` → `AUTH_JWT_KEYS` + `AUTH_JWT_ACTIVE_KEY` | access-JWT signing (HS256; delegated OAuth2 tokens too) | hex; the ring is `id:hex,id:hex` | 32 bytes per key for the HS256 ring; the single `Signer` keeps 48 for HS384 and 64 for HS512 | `golangjwt.NewRing` stamps `kid` and verifies under any ring key; `AUTH_JWT_SECRET` kept beside the ring is the `legacy` key for tokens with no `kid`, for one window (`max(AccessTokenTTL, OAuth2 AccessTTL, ConsentTTL) + 60 s`) |
+| `AUTH_CHALLENGE_PEPPER` → `AUTH_CHALLENGE_PEPPERS` + `AUTH_CHALLENGE_ACTIVE_PEPPER` | HMAC over OTP codes and recovery codes | hex; the ring names its ids itself (both forms set refuses boot) | 32 bytes per key | the first ring entry reuses the current id (`dev` on the reference host); unexpired codes verify under every ring id; regenerate recovery codes before dropping an id |
+| `AUTH_IDENTIFIER_KEY` | PII-free rate-limit and idempotency digests; `identifier_digest` on invitation and delivery audit rows (correlation only) | hex | 32 bytes | single key, rotated in one step: budgets and idempotency windows reset once, and audit digests before the cut no longer match recomputed ones (nothing is looked up by them) |
+| `AUTH_DELIVERY_ENCRYPTER_KEY` → `AUTH_DELIVERY_ENCRYPTER_KEYS` + `…_ACTIVE_KEY` | AES-256-GCM over queued delivery envelopes (the rendered secret and destination) | hex | exactly 32 bytes | `cryptids.NewAESGCMRing` with `WithLegacyKeyID` opens envelopes the single key sealed; drop the legacy key once the queue holds none |
+| `AUTH_TOKEN_ENCRYPTER_KEY` → `AUTH_TOKEN_ENCRYPTER_KEYS` + `…_ACTIVE_KEY` (optional in every mode; unset → provider tokens are not persisted) | AES-256-GCM over stored OAuth provider tokens | hex | exactly 32 bytes | the ring with the legacy id reads old rows; a legacy row persists until the user unlinks and relinks or the host re-seals it (a returning login never rewrites it), so drop the legacy key only at a zero count |
+| `AUTH_TOTP_KEYS` + `AUTH_TOTP_ACTIVE_KEY` (`KeyTOTPRing`, since authentication v0.28.0) | AES-256-GCM over stored TOTP secrets, each sealed with its user id | a ring `id:hex,id:hex` parsed by `cryptids.ParseKeyRing`; needed only by a host that wires `WithTOTP` | exactly 32 bytes per key | unchanged: add, activate, keep the old id while any secret is sealed under it (secrets are not re-sealed); dropping it means those users' codes stop verifying until an admin TOTP reset and re-enrollment |
 
 Two things to know before you repin a host that copied the pre-S1 reference host:
 
@@ -50,12 +51,28 @@ While any remain, `New` WARNs `auth: recovery codes sealed under retired pepper 
 key_ids=[…]`; those users regenerate at their next AAL2 step-up.
 
 There is deliberately no separate CSRF or magic-link key: CSRF is a per-render double-submit
-token, and link tokens are digested under the challenge pepper.
+token, and magic-link, reset and invitation tokens are 256-bit random values digested with
+unkeyed SHA-256 (`DigestToken`), not under the pepper.
 
-The sdk ships `cryptids.AESGCMRing` (key-id-tagged ciphertext, overlapping rotation) and the
-secrets pocket uses it; the authentication pocket accepts any `cryptids.Encrypter`, so a host
-may wire the ring for the delivery and provider-token keys today. The reference host wires
-the single-key `cryptids.NewAESGCM`.
+**Key rings (S4d part 3).** The JWT, pepper, delivery and provider-token keys each take a ring
+form beside the single variable. The ring alone fills `Keys.JWTRing`, `ChallengeRing`,
+`DeliveryEncrypterRing` or `TokenEncrypterRing`. For the JWT and the two encrypters, the single
+variable set beside its ring joins it under the reserved id `legacy`
+(`authentication.LegacyKeyID`) and sets `JWTLegacyKeyID`, `DeliveryLegacyKeyID` or
+`TokenLegacyKeyID`. The host builds the ring adapters with that id:
+`golangjwt.NewRing(keys.JWTRing, golangjwt.WithLegacyKeyID(keys.JWTLegacyKeyID))` and
+`cryptids.NewAESGCMRing(ring, cryptids.WithLegacyKeyID(id))` (an empty id is no option). While
+`legacy` is the active id the adapters write the single-key shape, so a rolling fleet rotates
+in three phases (*Operations runbooks*, "Rotate a key"): ring beside the single key with
+`legacy` active, then the new id active, then the single key dropped. Both reference hosts
+(`examples/auth-cms`, `examples/production-baseline`) wire the ring when it is set and the
+single key otherwise; `examples/auth-cms/cmd/server/key_rotation_test.go` walks every phase.
+
+`New` logs one `auth: keys` line naming each role's kind (`ring`, `single`, `opaque`, `none`)
+and, for a ring, its active id, ids and legacy state, never a key. In production a role with a
+legacy id logs `posture_warning=legacy_key_read_enabled key=<role>` until the single variable is
+unset. **That WARN is never acceptable during a compromise:** an emergency rotation drops the
+compromised key at once with no legacy id.
 
 ## Revoking every session at once
 
@@ -71,8 +88,10 @@ sessions, use `RevokeAllSessions` (authentication v0.31.0, SOC 2 S4d):
    `all_sessions_revoked_global` (`started`, then `success` or `failure` with the counts).
 2. Outstanding access JWTs keep working for up to `AccessTokenTTL` (default 15 minutes) on
    safe reads under the default liveness tier and on `Stateless()` routes. If that window is
-   too long, or the signing key itself may be compromised, ALSO rotate `AUTH_JWT_SECRET` on
-   every instance: together they end everything native at once.
+   too long, or the signing key itself may be compromised, ALSO run the JWT key's emergency
+   rotation on every instance (a fresh ring key, no legacy id; *Operations runbooks*, "Rotate a
+   key"): together they end everything native at once. A planned rotation with a legacy id
+   keeps old access tokens verifying through its window and ends nothing.
 3. What survives: API keys (revoke them, or disable their service accounts) and external IdP
    sessions (the provider's own; locally, deactivate the user).
 

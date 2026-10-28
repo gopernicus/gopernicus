@@ -505,8 +505,11 @@ Production never opens `.env` (it logs `.env present, ignored in production`),
 so every variable moves to the process environment. Each missing input stops
 the boot before anything is served, in this order:
 
-1. `AUTH_JWT_SECRET` and `AUTH_IDENTIFIER_KEY` unset → one joined
-   `authentication.ErrKeyRequired` naming both (`openssl rand -hex 32`).
+1. The signing key (`AUTH_JWT_KEYS` + `AUTH_JWT_ACTIVE_KEY`, or the pre-ring
+   `AUTH_JWT_SECRET`) and `AUTH_IDENTIFIER_KEY` unset → one joined
+   `authentication.ErrKeyRequired` naming both (`openssl rand -hex 32`). The
+   boot logs `auth: keys jwt_signer=ring jwt_active_key_id=k1 jwt_key_ids=k1
+   jwt_legacy=no`; rotate the ring with the "Rotate a key" runbook.
 2. `PUBLIC_BASE_URL` unset or not https → `web.ErrPublicBaseURLRequired` /
    `ErrPublicBaseURLInsecure`.
 3. `AUDIT_ARCHIVE_DIR` unset → `AUDIT_ARCHIVE_DIR is required in production`.
