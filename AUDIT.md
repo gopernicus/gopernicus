@@ -5994,3 +5994,80 @@ against the live Auth emulator.
 - `live-stores` green on `main` at `bf1d0d74` and `0850deff`; cold verification of every tag,
   the train set, the battleboardhq shape and set C; `examples/auth-cms` run against the tags:
   decline by token 200, a second decline 409, and the created row shows the user actor.
+
+## AUDIT-059: Key rings with `kid` and legacy read, first-party `iss`/`aud`, bcrypt cost 12, a breach checker, rehash on login
+
+- **Status:** released 2026-10-28: `sdk` v0.23.0 (`d3fc9dcf`, #258 + #260);
+  `integrations/cryptids/bcrypt` v0.3.0 and `integrations/passwords/hibp` v0.1.0 (new)
+  (`d403f6a1`, #259); `pockets/authentication` v0.35.0 (`409e030e`, #261);
+  `integrations/cryptids/golang-jwt` v0.4.0 (`6d0acbe1`, #262);
+  `pockets/authentication/stores/pgx` v0.18.0 and `…/stores/turso` v0.17.0 (`82fd7c13`,
+  #265). Examples and runbooks: #266. Record: `RELEASING.md`, "Key management and password
+  policy (SOC 2 slice S4d part 3)"; executed plan `plans/s4d3-keys-passwords.md`.
+- **Modules:** the above. Untouched: views/goth, `pockets`, workshop, ui/goth, pgxdb, every
+  canonical migration set, every existing port's method set.
+- **Old behavior:**
+  - The JWT signer, the delivery encrypter and the provider-token encrypter were single keys:
+    rotating one refused every outstanding access token, dead-lettered queued deliveries or
+    made stored provider tokens unreadable. `AESGCMRing` refused single-key ciphertext as
+    malformed. The challenge pepper was a ring in code but one key from the environment.
+  - Tokens carried no `kid`; a first-party token carrying `iss` or `aud` was refused.
+  - bcrypt `New()` hashed at cost 10 and exposed no cost.
+  - No breach checker shipped; a production password host with none logged nothing.
+  - A failed fail-closed breach check returned the checker's error wrapped (its kind decided
+    the status); fail-open logged "compromised-password check failed open".
+  - A login for an unknown identifier hashed nothing.
+- **New behavior:**
+  - **Key rings.** `NewKeys` reads `AUTH_JWT_KEYS`, `AUTH_CHALLENGE_PEPPERS`,
+    `AUTH_DELIVERY_ENCRYPTER_KEYS` and `AUTH_TOKEN_ENCRYPTER_KEYS`, each with an active id. A
+    single variable set beside the JWT or an encrypter ring joins it as the reserved id
+    `legacy`, which reads what the single key wrote; while `legacy` is active the adapters
+    write the single-key shape (phase (a) of a three-phase rotation). Both pepper forms
+    together refuse; a ring key named `legacy` beside a single variable refuses; a set ring
+    leaves its single field nil. `cryptids.WithLegacyKeyID` and `golangjwt.NewRing` are the
+    adapters; the ring signer stamps `kid` and refuses an unknown or malformed one.
+  - **`auth: keys`** INFO boot line (no key material); production
+    `posture_warning=legacy_key_read_enabled key=<role>` while a legacy id is set.
+  - **`SessionsConfig.Issuer` / `Audience`** (optional): set, first-party tokens carry and
+    require them; a collision with an OAuth2 or external issuer or an OAuth2 resource
+    refuses boot.
+  - **bcrypt v0.3.0** defaults to cost 12 (`WithCost(10)` hatch), reports `Cost()` and
+    `NeedsRehash`. Production WARNs `password_hash_cost_low` below 12 and
+    `password_breach_check_none` with password flows on and no checker.
+  - **Breach checkers:** `integrations/passwords/hibp` (the keyless k-anonymity range API;
+    fail-closed by default) and `protection.NewBlocklistChecker` (no list shipped). A
+    checker failure logs `password_breach_check_unavailable outcome=refused|allowed
+    error_kind=<kind>`; fail-closed returns `ErrPasswordBreachCheckUnavailable`
+    (`sdk.ErrUnavailable`, 503) and never wraps the checker's error.
+  - Every login miss path spends one dummy `VerifyPassword`; `New` mints the dummy hash once.
+  - **Rehash on login:** with an `authlogic.Rehasher` hasher and a `user.PasswordHashUpgrader`
+    store (pgx v0.18.0, turso v0.17.0), a hash below the configured cost is rewritten by
+    compare-and-swap after a successful login or step-up; no revision bump, no session
+    revoked, no security event; a failure WARNs and never fails the login.
+
+**Migration:**
+- A host on the single variables repins with no change beyond the boot line, except a
+  password host's new hashes cost 12 (≈4× the hashing time; existing hashes verify at their
+  stored cost).
+- To rotate a key, follow the docs site's *Operations runbooks* "Rotate a key": three phases,
+  the window and gate per key, and the boot line as evidence. A pepper ring must keep the id
+  the host's protector uses today (battleboardhq: `primary`).
+- Code that matched a breach checker's own error with `errors.Is` matches
+  `ErrPasswordBreachCheckUnavailable` or `sdk.ErrUnavailable`; log alerts keyed on the old
+  fail-open message re-key on `password_breach_check_unavailable`.
+- A host-owned password store implements `UpgradeHash` and adopts
+  `storetest.RunPasswordHashUpgrade` to get rehash on login; without it nothing is rehashed.
+- No schema change.
+
+**Verification:**
+- sdk ring tests (legacy open, tamper, no option, missing legacy id, legacy-active write,
+  minimum-length parse, no bytes in errors, sorted `KeyIDs`); golang-jwt ring and
+  cross-verify tests (a released v0.3.0 token verifies through legacy; alg confusion still
+  refused; no key in output); core key, boot-line, issuer, posture and rehash tests; hibp
+  tests on `httptest` (never the real API); `RunPasswordHashUpgrade` on pgx live (PostgreSQL
+  18, bare and under a schema) and turso local file; mutation proofs on every PR.
+- `live-stores` green on `main` before each tag; cold verification of every tag, set A (the
+  new core beside the released stores), the auth-cms shape, the full set and set C;
+  `key_rotation_test.go` proves each three-phase rotation in process; auth-cms built at
+  `GOWORK=off` against the tags shows the ring boot line, a `kid` header, and a `kid`-less
+  token passing through legacy.
