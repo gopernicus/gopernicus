@@ -33,9 +33,48 @@ const (
 	sentenceH14 = "The host's `ui/**` imports only the standard library, framework `sdk/...`, framework `ui/*`, recognized view technology, the host's `sdk/...`, and its own `ui/...` — never `internal/*`, a pocket of either scope, or an integration of either scope."
 )
 
-// The H10 SQL-literal floor: a string literal whose trimmed, upper-cased text
-// starts with one of these verbs followed by whitespace.
-var sqlVerbs = []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP"}
+// The H10 SQL-literal floor reads a string literal's upper-cased,
+// whitespace-split tokens: a verb counts only when SQL shape follows it, so
+// prose such as "create invitation: %w" or "UPDATE profile SETTINGS" passes.
+var (
+	// sqlDDLObjects is the token that must follow CREATE, ALTER, or DROP.
+	sqlDDLObjects = map[string]bool{
+		"TABLE": true, "INDEX": true, "UNIQUE": true, "OR": true, "POLICY": true,
+		"SCHEMA": true, "ROLE": true, "EXTENSION": true, "FUNCTION": true,
+		"TRIGGER": true, "VIEW": true, "TYPE": true, "SEQUENCE": true, "TEMP": true,
+		"TEMPORARY": true, "MATERIALIZED": true, "DATABASE": true, "DEFAULT": true,
+	}
+
+	// sqlVerbShapes maps each verb to the shape its remaining tokens must have.
+	sqlVerbShapes = map[string]func(rest []string) bool{
+		"CREATE": sqlDDLShape,
+		"ALTER":  sqlDDLShape,
+		"DROP":   sqlDDLShape,
+		"INSERT": func(rest []string) bool { return len(rest) > 0 && rest[0] == "INTO" },
+		"DELETE": func(rest []string) bool { return len(rest) > 0 && rest[0] == "FROM" },
+		"UPDATE": func(rest []string) bool { return len(rest) > 1 && isSQLIdent(rest[0]) && rest[1] == "SET" },
+		"SELECT": sqlSelectShape,
+	}
+
+	// messageArgs is, per standard-library package, each function whose
+	// argument at the given index is a message or format string, never SQL
+	// handed to a database.
+	messageArgs = map[string]map[string]int{
+		// fmt.Sprintf is deliberately absent: it builds a value, and a SQL
+		// format string handed to a database must still be flagged.
+		"fmt":    {"Errorf": 0},
+		"errors": {"New": 0},
+		"log": {
+			"Print": 0, "Printf": 0, "Println": 0, "Fatal": 0, "Fatalf": 0,
+			"Fatalln": 0, "Panic": 0, "Panicf": 0, "Panicln": 0,
+		},
+		"log/slog": {
+			"Debug": 0, "Info": 0, "Warn": 0, "Error": 0,
+			"DebugContext": 1, "InfoContext": 1, "WarnContext": 1, "ErrorContext": 1,
+			"Log": 2, "LogAttrs": 2,
+		},
+	}
+)
 
 // guardRules is the H table in id order.
 var guardRules = []guardRule{
@@ -548,21 +587,66 @@ func evalH10(h *guardHost) guardResult {
 	r.scan(h, prefixScope("cmd"), false, func(pkg *guardPackage, f *guardFile) {
 		s := segments(pkg.rel)
 		root := len(s) >= 2 && roots[s[1]]
-		ast.Inspect(f.ast, func(n ast.Node) bool {
+		messages := messageFuncs(f)
+		walkStack(f.ast, func(n ast.Node, stack []ast.Node) {
 			switch n := n.(type) {
 			case *ast.TypeSpec:
 				if _, ok := n.Type.(*ast.InterfaceType); ok && root {
 					r.add(posOf(f, n.Pos()), "declares interface "+n.Name.Name+" (a composition root declares no interface type)")
 				}
 			case *ast.BasicLit:
-				if n.Kind == token.STRING && isSQLLiteral(n.Value) {
+				if n.Kind == token.STRING && isSQLLiteral(n.Value) && !isMessageArg(n, stack, messages) {
 					r.add(posOf(f, n.Pos()), "contains an SQL statement literal (cmd wires; SQL lives in an adapter)")
 				}
 			}
-			return true
 		})
 	})
 	return r
+}
+
+// messageFuncs maps the local name under which f imports each messageArgs
+// package to that package's message-taking functions.
+func messageFuncs(f *guardFile) map[string]map[string]int {
+	out := map[string]map[string]int{}
+	for _, spec := range f.ast.Imports {
+		ip, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		funcs, ok := messageArgs[ip]
+		if !ok {
+			continue
+		}
+		name := path0(ip)
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		if name == "_" || name == "." {
+			continue
+		}
+		out[name] = funcs
+	}
+	return out
+}
+
+// isMessageArg reports whether lit is, directly, the message or format
+// argument of a messageArgs call.
+func isMessageArg(lit *ast.BasicLit, stack []ast.Node, messages map[string]map[string]int) bool {
+	parent, child := parentOf(lit, stack)
+	call, ok := parent.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	at, ok := messages[pkg.Name][sel.Sel.Name]
+	return ok && at < len(call.Args) && call.Args[at] == child
 }
 
 // inwardImport reports whether an import makes a cmd/<binary> tree a
@@ -582,14 +666,57 @@ func isSQLLiteral(lit string) bool {
 	if err != nil {
 		return false
 	}
-	s = strings.ToUpper(strings.TrimSpace(s))
-	for _, verb := range sqlVerbs {
-		rest, ok := strings.CutPrefix(s, verb)
-		if ok && (rest == "" || rest[0] == ' ' || rest[0] == '\t' || rest[0] == '\n' || rest[0] == '\r') {
+	tokens := strings.Fields(strings.ToUpper(s))
+	if len(tokens) == 0 {
+		return false
+	}
+	shape, ok := sqlVerbShapes[tokens[0]]
+	return ok && shape(tokens[1:])
+}
+
+func sqlDDLShape(rest []string) bool {
+	return len(rest) > 0 && sqlDDLObjects[rest[0]]
+}
+
+// sqlSelectShape accepts SELECT followed by `*`, a digit, `$`, `(`, or a call
+// `<ident>(`, or any SELECT with a FROM token.
+func sqlSelectShape(rest []string) bool {
+	if len(rest) == 0 {
+		return false
+	}
+	switch c := rest[0][0]; {
+	case c == '*', c == '$', c == '(', c >= '0' && c <= '9':
+		return true
+	}
+	if i := strings.IndexByte(rest[0], '('); i > 0 && isSQLIdent(rest[0][:i]) {
+		return true
+	}
+	for _, t := range rest {
+		if t == "FROM" {
 			return true
 		}
 	}
 	return false
+}
+
+// isSQLIdent reports whether t is an upper-cased, optionally schema-qualified
+// or double-quoted SQL identifier.
+func isSQLIdent(t string) bool {
+	if t == "" {
+		return false
+	}
+	for i, c := range t {
+		switch {
+		case c == '_', c == '"', c >= 'A' && c <= 'Z':
+		case c == '.', c >= '0' && c <= '9':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func evalH11(h *guardHost) guardResult {
