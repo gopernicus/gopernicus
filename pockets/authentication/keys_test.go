@@ -35,11 +35,17 @@ func fullKeysInput() KeysInput {
 // variable a host must set.
 func TestKeyNamesMatchKeysInputTags(t *testing.T) {
 	typ := reflect.TypeOf(KeysInput{})
-	if typ.NumField() != len(allKeys)+1 {
-		t.Fatalf("KeysInput has %d fields, want %d", typ.NumField(), len(allKeys)+1)
+	ringVars := []string{keyJWTKeys, keyJWTActive, keyChallengePeppers, keyChallengeActivePepper, keyDeliveryEncrypterKeys, keyDeliveryEncrypterActiveKey, keyTokenEncrypterKeys, keyTokenEncrypterActiveKey}
+	if typ.NumField() != len(allKeys)+1+len(ringVars) {
+		t.Fatalf("KeysInput has %d fields, want %d", typ.NumField(), len(allKeys)+1+len(ringVars))
 	}
 	if got := typ.Field(len(allKeys)).Tag.Get("env"); got != keyTOTPActive {
 		t.Errorf("KeysInput.TOTPActiveKey env tag = %q, want %q", got, keyTOTPActive)
+	}
+	for i, name := range ringVars {
+		if got := typ.Field(len(allKeys) + 1 + i).Tag.Get("env"); got != name {
+			t.Errorf("KeysInput.%s env tag = %q, want %q", typ.Field(len(allKeys)+1+i).Name, got, name)
+		}
 	}
 	for i, name := range allKeys {
 		if got := typ.Field(i).Tag.Get("env"); got != string(name) {

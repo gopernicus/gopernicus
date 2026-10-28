@@ -61,6 +61,14 @@ func TestReferenceIDs(t *testing.T) {
 	})
 }
 
+// TestReferencePasswordHashUpgrade runs the hash-upgrade suite, separate from
+// Run, against the reference implementation.
+func TestReferencePasswordHashUpgrade(t *testing.T) {
+	RunPasswordHashUpgrade(t, func(t *testing.T) auth.Repositories {
+		return newReference().repositories()
+	})
+}
+
 // TestReferenceDelegatedRotationFence runs the delegated-row rotation fence,
 // separate from Run, against the reference implementation.
 func TestReferenceDelegatedRotationFence(t *testing.T) {
@@ -817,6 +825,22 @@ func (r refPasswords) Set(ctx context.Context, userID, hash string) error {
 	defer r.mu.Unlock()
 	_, err := r.changePasswordLocked(userID, user.PasswordChange{NewHash: hash, Now: time.Now().UTC()}, false)
 	return err
+}
+
+// UpgradeHash is the compare-and-swap user.PasswordHashUpgrader: it touches
+// only the hash, never the revision or the sessions.
+func (r refPasswords) UpgradeHash(ctx context.Context, userID, oldHash, newHash string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current, ok := r.passwords[userID]
+	if !ok || current != oldHash {
+		return false, nil
+	}
+	r.passwords[userID] = newHash
+	return true, nil
 }
 
 func (r refPasswords) Get(_ context.Context, userID string) (string, error) {

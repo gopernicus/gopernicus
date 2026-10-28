@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
@@ -156,6 +157,14 @@ func NewHMACChallengeProtector(ring HMACKeyRing) (*HMACChallengeProtector, error
 
 // ActiveKeyID reports the key ID new issues are digested under.
 func (p *HMACChallengeProtector) ActiveKeyID() string { return p.activeKeyID }
+
+// KeyIDs reports every accepted key ID, sorted. Key IDs are configuration, not
+// secrets; the authentication boot line prints them.
+func (p *HMACChallengeProtector) KeyIDs() []string { return slices.Clone(p.keyIDs) }
+
+// LegacyKeyID is always empty: every challenge row and recovery-code digest
+// stores the key ID it was digested under, so there is no unkeyed legacy form.
+func (p *HMACChallengeProtector) LegacyKeyID() string { return "" }
 
 // DigestCode returns the HMAC-SHA-256 digest of a code under keyID, domain-
 // separated and bound to userID + purpose + code. keyID must name an accepted

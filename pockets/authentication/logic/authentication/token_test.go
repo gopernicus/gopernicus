@@ -272,7 +272,7 @@ func TestAccessTokenAssuranceClaim(t *testing.T) {
 		if _, present := claims["aal"]; present != want {
 			t.Errorf("level %q: aal present = %v, want %v", level, present, want)
 		}
-		if _, cred, ok := parseAccessClaims(claims); !ok || cred.Assurance != level {
+		if _, cred, ok := (&Service{}).parseAccessClaims(claims); !ok || cred.Assurance != level {
 			t.Errorf("level %q parsed as %q, %v", level, cred.Assurance, ok)
 		}
 	}
@@ -280,17 +280,17 @@ func TestAccessTokenAssuranceClaim(t *testing.T) {
 		return map[string]any{"user_id": "u1", "session_id": "s1", "session_profile": "first_party", "aal": aal}
 	}
 	for _, bad := range []any{"aal3", "AAL2", "", 2, nil} {
-		if _, _, ok := parseAccessClaims(firstParty(bad)); ok {
+		if _, _, ok := (&Service{}).parseAccessClaims(firstParty(bad)); ok {
 			t.Errorf("first-party aal %#v admitted", bad)
 		}
 	}
 	delegated := map[string]any{"user_id": "u1", "session_id": "s1", "session_profile": "delegated",
 		"exp": float64(time.Now().Add(time.Minute).Unix()), "iss": "https://as.example.test", "client_id": "client", "aud": "https://rs.example.test"}
-	if _, _, ok := parseAccessClaims(delegated); !ok {
+	if _, _, ok := (&Service{}).parseAccessClaims(delegated); !ok {
 		t.Fatal("the delegated fixture does not parse")
 	}
 	delegated["aal"] = "aal2"
-	if _, _, ok := parseAccessClaims(delegated); ok {
+	if _, _, ok := (&Service{}).parseAccessClaims(delegated); ok {
 		t.Error("a delegated token carrying aal was admitted")
 	}
 
@@ -333,7 +333,7 @@ func TestAccessTokenMethodsClaim(t *testing.T) {
 	if got, ok := claims["methods"].([]any); !ok || len(got) != 2 || got[0] != "password" || got[1] != "totp" {
 		t.Fatalf("methods claim = %#v", claims["methods"])
 	}
-	if _, cred, ok := parseAccessClaims(claims); !ok || !slices.Equal(cred.Methods, []session.MethodKind{session.MethodPassword, session.MethodTOTP}) {
+	if _, cred, ok := (&Service{}).parseAccessClaims(claims); !ok || !slices.Equal(cred.Methods, []session.MethodKind{session.MethodPassword, session.MethodTOTP}) {
 		t.Fatalf("parsed methods = %v, %v", cred.Methods, ok)
 	}
 	bare, _, err := h.svc.signAccessToken("u1", "s1", session.AuthenticationMetadata{Assurance: session.AssuranceAAL1})
@@ -347,14 +347,14 @@ func TestAccessTokenMethodsClaim(t *testing.T) {
 		return map[string]any{"user_id": "u1", "session_id": "s1", "session_profile": "first_party", "aal": "aal2", "methods": methods}
 	}
 	for _, bad := range []any{[]any{}, []any{"sms_push"}, []any{"external"}, []any{"totp", "totp"}, []any{2}, "totp", nil} {
-		if _, _, ok := parseAccessClaims(firstParty(bad)); ok {
+		if _, _, ok := (&Service{}).parseAccessClaims(firstParty(bad)); ok {
 			t.Errorf("first-party methods %#v admitted", bad)
 		}
 	}
 	delegated := map[string]any{"user_id": "u1", "session_id": "s1", "session_profile": "delegated",
 		"exp": float64(time.Now().Add(time.Minute).Unix()), "iss": "https://as.example.test", "client_id": "client", "aud": "https://rs.example.test",
 		"methods": []any{"password"}}
-	if _, _, ok := parseAccessClaims(delegated); ok {
+	if _, _, ok := (&Service{}).parseAccessClaims(delegated); ok {
 		t.Error("a delegated token carrying methods was admitted")
 	}
 

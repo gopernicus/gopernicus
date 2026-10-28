@@ -187,8 +187,11 @@ func TestPasswordCompromisedCheckerFailClosed(t *testing.T) {
 	if err == nil {
 		t.Fatal("Register with an unavailable checker succeeded under fail-closed policy")
 	}
-	if !errors.Is(err, down) {
-		t.Errorf("fail-closed error does not wrap the checker cause: %v", err)
+	if !errors.Is(err, ErrPasswordBreachCheckUnavailable) || !errors.Is(err, sdk.ErrUnavailable) {
+		t.Errorf("fail-closed error = %v, want ErrPasswordBreachCheckUnavailable (sdk.ErrUnavailable)", err)
+	}
+	if errors.Is(err, down) || strings.Contains(err.Error(), down.Error()) {
+		t.Errorf("fail-closed error carries the checker's error: %v", err)
 	}
 	if _, err := h.idents.GetLogin(context.Background(), string(identifier.KindEmail), "closed@example.com"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Error("account created despite an unavailable breach checker (fail closed)")

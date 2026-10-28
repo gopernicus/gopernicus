@@ -250,3 +250,15 @@ var (
 	// SessionsConfig.AccessTokenTTL exceeds RefreshTTL (after defaults).
 	ErrAccessTokenTTLExceedsRefreshTTL = authlogic.ErrAccessTokenTTLExceedsRefreshTTL
 )
+
+// The S4d part 3 first-party token issuer sentinels, re-exported from the
+// logic package.
+var (
+	// ErrTokenIssuerInvalid is returned by New when SessionsConfig.Issuer or
+	// Audience carries surrounding whitespace or is whitespace only.
+	ErrTokenIssuerInvalid = authlogic.ErrTokenIssuerInvalid
+	// ErrTokenAudienceCollides is returned by New when SessionsConfig.Issuer
+	// equals OAuth2Config's issuer, or Audience equals its MCP or API
+	// resource: the same signer mints delegated tokens with those values.
+	ErrTokenAudienceCollides = authlogic.ErrTokenAudienceCollides
+)

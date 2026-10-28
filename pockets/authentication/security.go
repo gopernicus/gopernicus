@@ -593,6 +593,52 @@ func validateOAuthConfig(cfg constructorConfig) error {
 	return nil
 }
 
+// validateTokenAudience refuses a SessionsConfig.Audience equal to the OAuth2
+// MCP or API resource: the same signer mints delegated tokens with that aud.
+// The issuer collision and the whitespace rule are the logic constructor's.
+func validateTokenAudience(cfg constructorConfig) error {
+	if cfg.OAuth2 == nil || cfg.TokenAudience == "" {
+		return nil
+	}
+	if cfg.TokenAudience == cfg.OAuth2.Server.MCPResource || cfg.TokenAudience == cfg.OAuth2.Server.APIResource {
+		return fmt.Errorf("%w: SessionsConfig.Audience equals an OAuth2Config resource", ErrTokenAudienceCollides)
+	}
+	return nil
+}
+
+// logKeyPosture logs, in production only, one
+// posture_warning=legacy_key_read_enabled WARN per role whose ring still
+// reads pre-ring values under a legacy id, so the migration window gets
+// closed. Single-key and opaque roles log nothing: rotation is a procedure,
+// not a misconfiguration.
+func logKeyPosture(cfg constructorConfig, roles []keyRole, log *slog.Logger) {
+	if !cfg.RuntimeMode.IsProduction() {
+		return
+	}
+	for _, r := range roles {
+		if r.legacy != "" {
+			log.Warn("auth: a key ring still reads values written before the ring; unset the single-key variable once the rotation window has passed", "posture_warning", "legacy_key_read_enabled", "key", r.role, "legacy_key_id", r.legacy)
+		}
+	}
+}
+
+// logPasswordPosture logs, in production only and while password flows are
+// on, posture_warning=password_breach_check_none when no
+// CompromisedPasswordChecker is wired, and posture_warning=password_hash_cost_low
+// when the hasher reports (authlogic.CostReporter) a cost below
+// authlogic.RecommendedHashCost. They WARN, never refuse.
+func logPasswordPosture(cfg constructorConfig, log *slog.Logger) {
+	if !cfg.RuntimeMode.IsProduction() || cfg.PasswordFlowsDisabled || nilDependency(cfg.Hasher) {
+		return
+	}
+	if nilDependency(cfg.CompromisedPasswordChecker) {
+		log.Warn("auth: password flows are on with no breach check; wire PasswordConfig.CompromisedPasswordChecker (the hibp integration or protection.NewBlocklistChecker)", "posture_warning", "password_breach_check_none")
+	}
+	if c, ok := cfg.Hasher.(authlogic.CostReporter); ok && c.Cost() < authlogic.RecommendedHashCost {
+		log.Warn("auth: the password hasher's cost is below the recommendation", "posture_warning", "password_hash_cost_low", "cost", c.Cost(), "recommended", authlogic.RecommendedHashCost)
+	}
+}
+
 // postureCondition is one acknowledgeable production-posture requirement.
 type postureCondition struct {
 	present      bool

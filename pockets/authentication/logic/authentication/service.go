@@ -128,6 +128,23 @@ var ErrPasswordResetInvalid = fmt.Errorf("password reset token is invalid or exp
 // the fail-closed/fail-open policy, not this error.
 var ErrPasswordCompromised = fmt.Errorf("password is known to be compromised: %w", sdk.ErrInvalidInput)
 
+// ErrPasswordBreachCheckUnavailable is returned by the password policy when a
+// wired CompromisedPasswordChecker cannot complete and the policy fails closed
+// (the default). It wraps sdk.ErrUnavailable so the transport answers 503, and
+// it carries neither the checker's error text nor anything derived from the
+// password.
+var ErrPasswordBreachCheckUnavailable = fmt.Errorf("password breach check unavailable: %w", sdk.ErrUnavailable)
+
+// RecommendedHashCost is the hasher work factor below which a production New
+// logs posture_warning=password_hash_cost_low for a hasher that reports one
+// (CostReporter). It is bcrypt's scale.
+const RecommendedHashCost = 12
+
+// dummyPassword is hashed once at construction so a login for an unknown
+// identifier still pays one VerifyPassword, keeping the miss path's latency
+// close to a wrong password's.
+const dummyPassword = "gopernicus-authentication-timing-equalizer"
+
 // passwordResetPurgePurposes are the outstanding challenge purposes a successful
 // reset purges for the user in the same transaction (design §5.9): the just-
 // consumed reset row (idempotent) plus any live remove-password challenge, so a
@@ -138,6 +155,35 @@ var passwordResetPurgePurposes = []string{challenge.PurposePasswordReset, challe
 type Hasher interface {
 	HashPassword(password string) (string, error)
 	VerifyPassword(hash, password string) error
+}
+
+// KeyRingReporter is the optional interface a key-ring signer, encrypter or
+// protector implements so the authentication boot line can name its keys:
+// the id that signs or seals, every id it accepts (sorted), and the id that
+// reads values written before the ring existed ("" when none). Key ids are
+// configuration, never key material. A collaborator that does not implement
+// it is reported as opaque, and a legacy read it performs gets no WARN.
+type KeyRingReporter interface {
+	ActiveKeyID() string
+	KeyIDs() []string
+	LegacyKeyID() string
+}
+
+// CostReporter is the optional interface a Hasher implements to report its
+// work factor for new hashes on the bcrypt work-factor scale (log2 rounds),
+// so production can WARN below RecommendedHashCost. A hasher on another
+// scale should not implement it.
+type CostReporter interface {
+	Cost() int
+}
+
+// Rehasher is the optional interface a Hasher implements to report that a
+// stored hash was made at a lower work factor than the hasher now uses. After a
+// successful login or step-up the service then re-hashes the just-verified
+// password and stores it through user.PasswordHashUpgrader, so old hashes are
+// upgraded as users sign in.
+type Rehasher interface {
+	NeedsRehash(hash string) bool
 }
 
 // CompromisedPasswordChecker reports whether a candidate password is known-compromised
@@ -225,6 +271,8 @@ type constructorConfig struct {
 	AccessTokenTTL          time.Duration
 	RefreshTTL              time.Duration
 	IdleTimeout             time.Duration
+	TokenIssuer             string
+	TokenAudience           string
 	Passwordless            []string
 	PublicAuthBaseURL       string
 	PasswordResetURL        string
@@ -285,6 +333,10 @@ type Service struct {
 	// no breach check. compromisedFailOpen selects the outcome when it errors.
 	compromised         CompromisedPasswordChecker
 	compromisedFailOpen bool
+	// dummyHash is dummyPassword hashed once at construction; provePassword
+	// verifies against it on every miss path. Empty when the hasher is absent
+	// or could not hash.
+	dummyHash string
 	// deliver is the shared kind-aware delivery renderer/router (DeliveryConfig.Deliver): send
 	// sites render an envelope through it and enqueue it on queue. Nil until wired.
 	deliver *delivery.Router
@@ -333,8 +385,12 @@ type Service struct {
 	// refreshTTL is the fixed refresh/session horizon (rotation never extends it).
 	tokenSigner     cryptids.JWTSigner
 	delegatedTokens DelegatedTokensConfig
-	accessTTL       time.Duration
-	refreshTTL      time.Duration
+	// tokenIssuer and tokenAudience are SessionsConfig.Issuer and Audience:
+	// stamped on every first-party access token and required on one when set.
+	tokenIssuer   string
+	tokenAudience string
+	accessTTL     time.Duration
+	refreshTTL    time.Duration
 	// idleTimeout is SessionsConfig.IdleTimeout; activity is the sessions
 	// store's ActivityRepository, non-nil exactly when idleTimeout is set, so
 	// an unwired refresh never reads or writes the activity column.
@@ -459,6 +515,14 @@ func newService(d constructorConfig) *Service {
 	if d.IdleTimeout > 0 {
 		activity, _ = d.Sessions.(session.ActivityRepository)
 	}
+	var dummyHash string
+	if !d.PasswordFlowsDisabled && !nilDependency(d.Hasher) {
+		var err error
+		if dummyHash, err = d.Hasher.HashPassword(dummyPassword); err != nil {
+			dummyHash = ""
+			logger.Warn("auth: the hasher could not hash the timing dummy; unknown-identifier logins will answer faster than wrong passwords", "warning", "password_timing_dummy_unavailable", "error_kind", ErrorKind(err))
+		}
+	}
 	return &Service{
 		authenticationLimits: d.AuthenticationLimits.withDefaults(),
 		users:                d.Users,
@@ -478,6 +542,7 @@ func newService(d constructorConfig) *Service {
 		passwordValidator:    d.ValidatePassword,
 		compromised:          d.Compromised,
 		compromisedFailOpen:  d.CompromisedFailOpen,
+		dummyHash:            dummyHash,
 		deliver:              d.Deliver,
 		queue:                d.Queue,
 		identifierKeyer:      d.IdentifierKeyer,
@@ -504,6 +569,8 @@ func newService(d constructorConfig) *Service {
 		apiKeys:            d.APIKeys,
 		tokenSigner:        d.TokenSigner,
 		delegatedTokens:    d.DelegatedTokens,
+		tokenIssuer:        d.TokenIssuer,
+		tokenAudience:      d.TokenAudience,
 		accessTTL:          accessTTL,
 		refreshTTL:         refreshTTL,
 		idleTimeout:        d.IdleTimeout,
@@ -1178,29 +1245,68 @@ func (s *Service) provePassword(ctx context.Context, normalized, password string
 	}
 	ident, err := s.identifiers.GetLogin(ctx, string(identifier.KindEmail), normalized)
 	if err != nil {
+		s.equalizeMissTiming(password)
 		return user.User{}, identifier.Identifier{}, invalidCredentials()
 	}
 	u, err := s.users.Get(ctx, ident.UserID)
 	if err != nil {
+		s.equalizeMissTiming(password)
 		return user.User{}, identifier.Identifier{}, invalidCredentials()
 	}
 	// Re-read after the revision: a retired/reassigned address cannot authorize a
 	// login merely because its old row was read before a concurrent mutation.
 	current, err := s.identifiers.GetLogin(ctx, string(identifier.KindEmail), normalized)
 	if err != nil || current.ID != ident.ID || current.UserID != u.ID {
+		s.equalizeMissTiming(password)
 		return u, identifier.Identifier{}, invalidCredentials()
 	}
 	hash, err := s.passwords.Get(ctx, u.ID)
 	if err != nil {
+		s.equalizeMissTiming(password)
 		return u, current, invalidCredentials()
 	}
 	if err := s.hasher.VerifyPassword(hash, password); err != nil {
 		return u, current, invalidCredentials()
 	}
+	s.rehashIfNeeded(ctx, u.ID, hash, password)
 	if s.requireVerifiedEmail && !current.Verified() {
 		return u, current, ErrEmailNotVerified
 	}
 	return u, current, nil
+}
+
+// rehashIfNeeded upgrades a just-verified password's stored hash when the
+// hasher reports it below its work factor (Rehasher) and the store offers the
+// compare-and-swap user.PasswordHashUpgrader. It runs only after a successful
+// verification, never on a miss path. A failure logs one WARN and never fails
+// the caller; no security event is recorded, as nothing about the credential
+// changed.
+func (s *Service) rehashIfNeeded(ctx context.Context, userID, hash, password string) {
+	rehasher, ok := s.hasher.(Rehasher)
+	if !ok || !rehasher.NeedsRehash(hash) {
+		return
+	}
+	upgrader, ok := s.passwords.(user.PasswordHashUpgrader)
+	if !ok {
+		return
+	}
+	fresh, err := s.hasher.HashPassword(password)
+	if err == nil {
+		_, err = upgrader.UpgradeHash(ctx, userID, hash, fresh)
+	}
+	if err != nil {
+		s.logger.WarnContext(ctx, "auth: re-hashing a password at the current work factor failed; the old hash still verifies", "warning", "password_rehash_failed", "user_id", userID, "error_kind", ErrorKind(err))
+	}
+}
+
+// equalizeMissTiming spends one VerifyPassword against the construction-time
+// dummy hash on a login miss path, so an unknown identifier costs what a wrong
+// password does. The result is ignored.
+func (s *Service) equalizeMissTiming(password string) {
+	if s.hasher == nil || s.dummyHash == "" {
+		return
+	}
+	_ = s.hasher.VerifyPassword(s.dummyHash, password)
 }
 
 // primaryAuthentication builds the session authentication metadata for a primary
@@ -1231,6 +1337,12 @@ func (s *Service) signAccessToken(userID, sessionID string, auth session.Authent
 		tokenClaimUserID:    userID,
 		tokenClaimSessionID: sessionID,
 		tokenClaimProfile:   string(session.ProfileFirstParty),
+	}
+	if s.tokenIssuer != "" {
+		claims["iss"] = s.tokenIssuer
+	}
+	if s.tokenAudience != "" {
+		claims["aud"] = s.tokenAudience
 	}
 	if auth.Assurance != session.AssuranceUnknown {
 		claims[tokenClaimAssurance] = string(auth.Assurance)
@@ -1328,16 +1440,35 @@ func (s *Service) validatePassword(ctx context.Context, pw string) error {
 	}
 	bad, err := s.compromised.IsCompromised(ctx, pw)
 	if err != nil {
+		outcome := "refused"
 		if s.compromisedFailOpen {
-			s.logger.Warn("compromised-password check failed open", "error_kind", ErrorKind(err))
+			outcome = "allowed"
+		}
+		s.logger.WarnContext(ctx, "auth: the password breach check could not complete", "warning", "password_breach_check_unavailable", "outcome", outcome, "error_kind", breachCheckErrorKind(err))
+		if s.compromisedFailOpen {
 			return nil
 		}
-		return fmt.Errorf("compromised-password check unavailable: %w", err)
+		return ErrPasswordBreachCheckUnavailable
 	}
 	if bad {
 		return ErrPasswordCompromised
 	}
 	return nil
+}
+
+// breachCheckErrorKind labels a checker failure for the WARN: the outage
+// kinds a remote checker reports, then the shared ErrorKind labels. It never
+// carries the error's text.
+func breachCheckErrorKind(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, sdk.ErrUnavailable):
+		return "unavailable"
+	}
+	return ErrorKind(err)
 }
 
 func validatePasswordLength(_ context.Context, pw string) error {

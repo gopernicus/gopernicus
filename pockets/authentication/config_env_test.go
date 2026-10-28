@@ -23,6 +23,8 @@ func TestConfigEnvTags(t *testing.T) {
 	t.Setenv("AUTH_SERVICE_ACCOUNT_STATUS", "true")
 	t.Setenv("AUTH_API_KEY_MAX_TTL", "2160h")
 	t.Setenv("AUTH_IDLE_TIMEOUT", "2h")
+	t.Setenv("AUTH_TOKEN_ISSUER", "https://auth.example.com")
+	t.Setenv("AUTH_TOKEN_AUDIENCE", "app")
 
 	var cfg constructorConfig
 	if err := environment.ParseEnvTags("", &cfg); err != nil {
@@ -59,6 +61,9 @@ func TestConfigEnvTags(t *testing.T) {
 	if cfg.IdleTimeout != 2*time.Hour {
 		t.Errorf("IdleTimeout = %v, want 2h", cfg.IdleTimeout)
 	}
+	if cfg.TokenIssuer != "https://auth.example.com" || cfg.TokenAudience != "app" {
+		t.Errorf("TokenIssuer/TokenAudience = %q/%q", cfg.TokenIssuer, cfg.TokenAudience)
+	}
 
 	// The group structs carry the same keys, so a host embedding them parses
 	// them alike.
@@ -75,6 +80,9 @@ func TestConfigEnvTags(t *testing.T) {
 	}
 	if groups.IdleTimeout != 2*time.Hour {
 		t.Errorf("groups.IdleTimeout = %v, want 2h", groups.IdleTimeout)
+	}
+	if groups.Issuer != "https://auth.example.com" || groups.Audience != "app" {
+		t.Errorf("groups.Issuer/Audience = %q/%q", groups.Issuer, groups.Audience)
 	}
 }
 

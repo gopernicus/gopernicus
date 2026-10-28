@@ -3169,15 +3169,16 @@ host builds them from `NewKeys` (below), whose **ephemeral per-boot** fallback w
 a WARN exists only in development.
 Multi-instance production MUST set and SHARE every key. There is deliberately **no separate CSRF or
 magic-link/reset secret**: CSRF is a per-render random double-submit token (no
-managed key), and magic-link / reset tokens are digested by the challenge pepper
-above. **Rotation consequence per key:** only the challenge pepper supports
-continuity (the `HMACKeyRing` retains older keys, so a rotation keeps pending
-codes/links valid until the old key is dropped). The other four are single-key and
-disruptive — rotating the JWT signer invalidates every outstanding access JWT
-(401 until the client refreshes), the delivery key
-must be drained-first (in-flight sealed payloads dead-letter), the provider-token
-key loses stored OAuth tokens (users re-link), and the identifier key resets
-rate-limit/idempotency buckets once (transient). **JWT-secret rotation does not end
+managed key), and magic-link / reset tokens are high-entropy and digested with
+unkeyed SHA-256 (`DigestToken`); the challenge pepper keys only the short codes
+and recovery codes. **Rotation consequence per key:** the JWT signer, the
+challenge pepper and both encrypters take a ring form (below) that rotates with
+overlap; the identifier key stays single and a rotation resets
+rate-limit/idempotency buckets once (transient). Rotated as single keys instead,
+the JWT signer invalidates every outstanding access JWT (401 until the client
+refreshes), the delivery key must be drained first (in-flight sealed payloads
+dead-letter) and the provider-token key loses stored OAuth tokens (users
+re-link). **JWT-secret rotation does not end
 sessions:** refresh never consults the signer, so a client holding a refresh token
 mints a new access token under the new key. To end sessions, revoke them —
 deactivate the user, log out, or, for every session in the fleet,
@@ -3223,6 +3224,93 @@ if keys.TokenEncrypterKey != nil {
 	tokenEncrypter, err = cryptids.NewAESGCM(keys.TokenEncrypterKey)
 }
 ```
+
+With the ring forms (below) wired, branch on the ring first. **A set ring nils
+the single field**, so code that checks only `keys.TokenEncrypterKey` silently
+stops storing provider tokens once `AUTH_TOKEN_ENCRYPTER_KEYS` is set. The
+legacy option needs sdk ≥ v0.23.0 (`cryptids.WithLegacyKeyID`) and golang-jwt ≥
+v0.4.0 (`golangjwt.NewRing`); an older `NewAESGCMRing` treats `legacy` as an
+ordinary key, writes `v1.legacy.…` and cannot open single-key ciphertext.
+
+```go
+var tokenEncrypter cryptids.Encrypter // nil: provider tokens are not stored
+switch {
+case len(keys.TokenEncrypterRing.Keys) > 0:
+	var opts []cryptids.RingOption
+	if keys.TokenLegacyKeyID != "" {
+		opts = append(opts, cryptids.WithLegacyKeyID(keys.TokenLegacyKeyID))
+	}
+	tokenEncrypter, err = cryptids.NewAESGCMRing(keys.TokenEncrypterRing, opts...)
+case keys.TokenEncrypterKey != nil:
+	tokenEncrypter, err = cryptids.NewAESGCM(keys.TokenEncrypterKey)
+}
+// The delivery encrypter follows the same shape with DeliveryEncrypterRing and
+// DeliveryLegacyKeyID; the JWT signer uses golangjwt.NewRing(keys.JWTRing, …)
+// with golangjwt.WithLegacyKeyID(keys.JWTLegacyKeyID) when that id is set; the
+// pepper ring converts: protection.HMACKeyRing(keys.ChallengeRing).
+```
+
+### Key rings and the `auth: keys` boot line (SOC 2 S4d part 3)
+
+| key | single variable | ring variables | where its output lives | after a rotation |
+|---|---|---|---|---|
+| JWT signer | `AUTH_JWT_SECRET` | `AUTH_JWT_KEYS` + `AUTH_JWT_ACTIVE_KEY` (each key ≥ 32 bytes) | the access JWT, ≤ `AccessTokenTTL` | a ring signer stamps `kid` and verifies under any ring key; the single secret beside the ring is the `legacy` key for `kid`-less tokens |
+| challenge pepper | `AUTH_CHALLENGE_PEPPER` | `AUTH_CHALLENGE_PEPPERS` + `AUTH_CHALLENGE_ACTIVE_PEPPER` (each ≥ 32 bytes) | `challenges.code_digest` + `protector_key_id` (minutes); recovery-code digests + key id (long-lived) | every challenge and recovery code stores its key id, so the ring names the CURRENT id itself (`AUTH_CHALLENGE_PEPPERS="<current id>:<hex>,p2:<new hex>"`); setting both forms is refused. Regenerate recovery codes before dropping an id |
+| identifier key | `AUTH_IDENTIFIER_KEY` | — | rate-limit and idempotency keys (minutes); `identifier_digest` on audit rows (correlation only) | rotate freely: budgets reset once and digests on earlier audit rows no longer match recomputed ones (nothing is looked up by them) |
+| delivery encrypter | `AUTH_DELIVERY_ENCRYPTER_KEY` | `AUTH_DELIVERY_ENCRYPTER_KEYS` + `AUTH_DELIVERY_ENCRYPTER_ACTIVE_KEY` (each exactly 32 bytes) | sealed delivery envelopes, seconds to minutes | an AES-GCM ring with the single key as `legacy` opens envelopes the single key sealed |
+| provider-token encrypter | `AUTH_TOKEN_ENCRYPTER_KEY` | `AUTH_TOKEN_ENCRYPTER_KEYS` + `AUTH_TOKEN_ENCRYPTER_ACTIVE_KEY` (each exactly 32 bytes) | `oauth_accounts.access_token` / `refresh_token` | as delivery; a row sealed under `legacy` stays so until the user unlinks and relinks or the host re-seals it (a returning login never rewrites the row) |
+| TOTP encrypter | — | `AUTH_TOTP_KEYS` + `AUTH_TOTP_ACTIVE_KEY` (each exactly 32 bytes) | `totp_credentials` sealed secrets | unchanged: keep an id while any secret is sealed under it |
+
+Per key, `NewKeys` resolves the two forms: the single variable alone fills the
+single field as before; the ring pair alone fills `JWTRing`, `ChallengeRing`,
+`DeliveryEncrypterRing` or `TokenEncrypterRing` (and satisfies `need`, so
+development mints nothing beside it); both, for the JWT and the two encrypters,
+fill the ring with the single key joined under the reserved id
+`authentication.LegacyKeyID` (`legacy`) and set `JWTLegacyKeyID`,
+`DeliveryLegacyKeyID` or `TokenLegacyKeyID`. The join comes before validation,
+so `…_ACTIVE_KEY=legacy` is legal: that is phase (a) of a rolling rotation — the
+ring reads both shapes and the ring adapters write the single-key shape while
+`legacy` is active, so instances not yet reconfigured keep working. Phase (b)
+activates the new id once every instance runs phase (a); phase (c) unsets the
+single variable after the window. A ring entry named `legacy` beside the single
+variable is `ErrKeyRequired`. When a ring field is filled its single field is nil:
+build from the ring. The pepper ring converts by plain conversion,
+`protection.NewHMACChallengeProtector(protection.HMACKeyRing(keys.ChallengeRing))`.
+
+`New` logs one INFO line naming every key-bearing collaborator, never a key:
+
+```
+msg="auth: keys" jwt_signer=ring jwt_active_key_id=k1 jwt_key_ids=k1,legacy jwt_legacy=yes delivery_encrypter=single token_encrypter=none challenge_protector=ring challenge_active_key_id=dev challenge_key_ids=dev totp_encrypter=ring totp_active_key_id=t1 totp_key_ids=t0,t1 totp_legacy=no identifier_keyer=single token_issuer=none token_audience=none
+```
+
+A role is `ring` when it reports its keys — the named optional interface
+`authlogic.KeyRingReporter` (`ActiveKeyID`, `KeyIDs`, `LegacyKeyID`), which
+sdk v0.23.0's `AESGCMRing`, golang-jwt v0.4.0's `RingSigner` and the bundled
+challenge protector implement; an older `AESGCMRing` or a third-party ring that
+reports only an active id prints `_active_key_id` alone, with no `_key_ids` and
+no legacy state —
+`single` for the sdk's `*cryptids.AESGCM`, `none` when unwired and `opaque`
+otherwise (the core cannot see inside a third-party signer, and a signer that
+does not implement `KeyRingReporter` gets no legacy WARN). A single-key role logs
+no WARN: rotation is a procedure, not a misconfiguration. In production every
+role with a legacy id set logs one `posture_warning=legacy_key_read_enabled
+key=<role>` so the window gets closed. **That WARN is never acceptable during a
+compromise:** rotate a compromised key with no legacy id and accept the cost.
+
+**First-party `iss`/`aud`.** `SessionsConfig.Issuer` (`AUTH_TOKEN_ISSUER`) and
+`SessionsConfig.Audience` (`AUTH_TOKEN_AUDIENCE`) are optional. Set, every
+first-party access token carries them and one without them (or with other
+values) is refused with the generic 401, so enabling them costs every client
+one refresh. Unset, a first-party token carrying `iss` or `aud` is refused, as
+before. Either may be set alone. The same signer mints delegated OAuth2 tokens,
+so `New` refuses an `Issuer` equal to `OAuth2Config`'s issuer or an `Audience`
+equal to its MCP or API resource (`ErrTokenAudienceCollides`), and a value
+with surrounding whitespace (`ErrTokenIssuerInvalid`). Logout with an expired
+first-party token still works under an issuer: the logout check reads
+`session_profile` first and treats only `client_id`, `origin_client_id`, `act`
+or, with `session_profile` absent, any `iss`/`aud` as delegated. A first-party
+token refused only because `Issuer`/`Audience` changed since it was minted
+(enable, change or rollback) still logs out with its refresh token.
 
 **Moving to hex without losing continuity.** A host that set raw (non-hex) values
 before `NewKeys` sets each variable to the hex of its OLD bytes —
@@ -3279,6 +3367,64 @@ out existing credentials. `PasswordConfig.Hasher` selects the algorithm, and
 `bcrypt.New(bcrypt.WithCost(n))` sets bcrypt's cost. Bcrypt additionally enforces its
 72-byte algorithm limit during hashing and verification. A too-long new password
 returns an invalid-input error; a login failure remains a generic credential denial.
+
+**Breach checks (SOC 2 S4d part 3).** Two checkers satisfy
+`CompromisedPasswordChecker`: the `integrations/passwords/hibp` module (the
+k-anonymity range API, fail-closed by default) and the bundled
+`protection.NewBlocklistChecker(r io.Reader)`, which reads one entry per line and
+compares after `strings.TrimSpace` + `strings.ToLower` (no Unicode normalization;
+an empty list is refused; a leading UTF-8 BOM is stripped; the whole list is
+held in memory, so prefer a top-N extract). The pocket ships no list: read your own file, such as
+a top-N extract of a breach corpus or a common-password list. In production,
+password flows on with no checker log one `posture_warning=password_breach_check_none`
+(a WARN, not a refusal). When a checker cannot complete, both policies log one
+`password_breach_check_unavailable outcome=refused|allowed` WARN carrying neither
+the password nor the checker's error text; the fail-closed default refuses the
+password with `ErrPasswordBreachCheckUnavailable` (`sdk.ErrUnavailable`, 503) and
+`CompromisedPasswordFailOpen` accepts it.
+
+**Hash cost.** A hasher that reports its work factor (`authlogic.CostReporter`,
+`Cost() int`; bcrypt from v0.3.0) below `authlogic.RecommendedHashCost` (12) logs
+one production `posture_warning=password_hash_cost_low cost=<n> recommended=12`.
+A login for an unknown identifier (and every other login miss path) spends one
+`VerifyPassword` against a hash minted once at construction, so it costs what a
+wrong password does; a hasher that cannot mint that hash logs one
+`password_timing_dummy_unavailable` WARN. The dummy is hashed at the
+**configured** cost, so after a host raises bcrypt to 12, users whose stored
+hashes are still cost 10 answer faster than the dummy: a residual timing
+signal until those hashes are rehashed.
+
+**Rehash on login.** A hasher implementing `authlogic.Rehasher`
+(`NeedsRehash(hash) bool`; bcrypt from v0.3.0 reports a stored cost below its
+own) gets each old hash upgraded after a SUCCESSFUL login or password step-up:
+the just-verified password is hashed at the current cost and stored through the
+optional compare-and-swap `user.PasswordHashUpgrader` (`UpgradeHash(ctx,
+userID, oldHash, newHash)`), which, unlike `Set`/`Change`, bumps no revision and
+revokes nothing. A failure logs one `password_rehash_failed` WARN (no password,
+no hash) and never fails the login; no security event is recorded. A store
+without `UpgradeHash` is never rehashed; `storetest.RunPasswordHashUpgrade` is
+the conformance suite a store adopts (outside `Run`), and the pgx and turso
+stores add it in the release after core v0.35.0. The timing residual closes as users
+log in; accounts that never log in keep their old hashes until a host sweep
+(for example forcing a reset).
+
+**On repin (v0.35.0).** A fail-closed breach check now returns
+`ErrPasswordBreachCheckUnavailable` (503) instead of wrapping the checker's
+error, so matching the checker's own error with `errors.Is` no longer works; the
+fail-open WARN changed message and keys (`warning=password_breach_check_unavailable
+outcome=allowed error_kind=<kind>`). Every login miss path now pays one
+`VerifyPassword`, and every `New` with password flows pays one `HashPassword` at
+boot (about 250 ms at bcrypt cost 12).
+
+**Per-account attempt limit — no lockout.** The pocket builds no account
+lockout (a lockout on a known username is a denial lever). The per-account
+control is the login budget: `AuthenticationLimits.Login.PerSubject` keys on the
+normalized identifier (default 5 a minute) beside `PerIP` (default 30 a minute),
+and an exhausted budget answers 429 before any password is checked. It counts
+every attempt for the identifier, not only failures. For an hourly ceiling on a
+shared limiter set, for example,
+`WithAbuseProtection(AbuseProtectionConfig{RateLimiter: shared, AuthenticationLimits: authlogic.AuthenticationLimits{Login: authlogic.RequestBudget{PerSubject: ratelimiter.Limit{Requests: 20, Window: time.Hour}}}})`;
+the in-process limiter's budget is per instance.
 
 ## Mail content — host-owned data, subjects, and SMS bodies
 

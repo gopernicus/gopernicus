@@ -113,6 +113,9 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if err := validateOAuthConfig(cfg); err != nil {
 		return nil, err
 	}
+	if err := validateTokenAudience(cfg); err != nil {
+		return nil, err
+	}
 	cfg.MFARequired, cfg.mfaRequiredSource = resolveMFARequired(cfg)
 	cfg.registrationSource = resolveRegistrationSource(cfg)
 	apiKeyMaxTTL, apiKeyMaxTTLSource, err := resolveAPIKeyMaxTTL(cfg)
@@ -586,7 +589,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	}
 	logicOptions := []authlogic.Option{
 		authlogic.WithPassword(authlogic.PasswordConfig{Hasher: cfg.Hasher, ValidatePassword: cfg.ValidatePassword, Compromised: cfg.CompromisedPasswordChecker, CompromisedFailOpen: cfg.CompromisedPasswordFailOpen, PasswordFlowsDisabled: cfg.PasswordFlowsDisabled, RequireVerifiedEmail: cfg.RequireVerifiedEmail}),
-		authlogic.WithSessions(authlogic.SessionsConfig{AccessTokenTTL: cfg.AccessTokenTTL, RefreshTTL: cfg.RefreshTTL, IdleTimeout: cfg.IdleTimeout}),
+		authlogic.WithSessions(authlogic.SessionsConfig{AccessTokenTTL: cfg.AccessTokenTTL, RefreshTTL: cfg.RefreshTTL, IdleTimeout: cfg.IdleTimeout, Issuer: cfg.TokenIssuer, Audience: cfg.TokenAudience}),
 		authlogic.WithIdentity(authlogic.IdentityConfig{Normalizer: cfg.IdentifierNormalizer, IdentifierKeyer: cfg.IdentifierKeyer, CredentialPolicy: cfg.CredentialPolicy, Registration: cfg.Registration}),
 		authlogic.WithMachine(authlogic.MachineConfig{APIKeyMaxTTL: cfg.APIKeyMaxTTL, ServiceAccountStatus: cfg.ServiceAccountStatus}),
 		authlogic.WithDelivery(logicDelivery),
@@ -730,6 +733,10 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	logMFAPosture(cfg, transportLog)
 	logAccountPosture(cfg, repos, transportLog)
 	logSessionLifetime(cfg, authService.SessionPolicy(), transportLog)
+	roles := keyRoles(cfg)
+	logKeys(cfg, roles, transportLog)
+	logKeyPosture(cfg, roles, transportLog)
+	logPasswordPosture(cfg, transportLog)
 	logLivenessFloor(cfg, transportLog)
 	return &Components{Authentication: authService, External: authService.ExternalAuthenticator(), OAuth2: oauthService, Invitations: invSvc, HTTP: adapter, Delivery: deliveryRuntime, SecurityEvents: securityEvents, Maintenance: maintenanceService}, nil
 
