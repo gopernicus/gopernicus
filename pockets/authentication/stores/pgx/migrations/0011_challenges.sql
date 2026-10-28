@@ -12,10 +12,11 @@
 -- an opaque JSON binding blob (a code flow's context digest, or a token flow's
 -- identifier binding) — a pure validator, never a payload channel. attempt_count is
 -- the wrong-code counter; version is the row schema version.
--- id defaults DB-side (empty id on Replace → the schema default generates it).
+-- id is Go-minted UUIDv7 by default; this default is the raw-SQL backstop (empty
+-- id on Replace → the schema default generates it).
 CREATE TABLE IF NOT EXISTS challenges (
-    id               TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    user_id          TEXT NOT NULL,
+    id               TEXT COLLATE "C" PRIMARY KEY DEFAULT uuidv7()::text,
+    user_id          TEXT COLLATE "C" NOT NULL,
     purpose          TEXT NOT NULL,
     secret_digest    TEXT NOT NULL,
     protector_key_id TEXT,

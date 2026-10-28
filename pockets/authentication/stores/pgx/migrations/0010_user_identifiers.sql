@@ -9,13 +9,15 @@
 -- boolean, is kept for lifecycle/risk policy). replaced_at NULL is the active
 -- sentinel; retirement is history-preserving, not a hard delete, so active reads
 -- filter replaced_at IS NULL. Booleans are native BOOLEAN.
--- id defaults DB-side (empty id on Create → the schema default generates it;
--- RETURNING reads it back). user_id references users.id by convention (no enforced
--- FK — matching every other auth table's logged decision; the aggregate atomicity
+-- id is Go-minted UUIDv7 by default; this default is the raw-SQL backstop (empty id
+-- on Create → the schema default generates it; RETURNING reads it back). id and
+-- user_id carry COLLATE "C": user_id joins users.id ("C"), and an index serves a
+-- join key only under the key's collation. user_id references users.id by
+-- convention (no enforced FK — matching every other auth table's logged decision; the aggregate atomicity
 -- lives in CreateWithPrimaryIdentifier/ApplyVerifiedChange transactions, not a FK).
 CREATE TABLE IF NOT EXISTS user_identifiers (
-    id                   TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    user_id              TEXT NOT NULL,
+    id                   TEXT COLLATE "C" PRIMARY KEY DEFAULT uuidv7()::text,
+    user_id              TEXT COLLATE "C" NOT NULL,
     kind                 TEXT NOT NULL CHECK (kind IN ('email', 'phone')),
     normalized_value     TEXT NOT NULL,
     verified_at          TIMESTAMPTZ,

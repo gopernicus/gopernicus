@@ -13,17 +13,18 @@
 -- One pending change per (user_id, kind): Create is delete-before-create and this
 -- unique index is the backstop. Consume is a single-use get-and-delete; an expired
 -- row is deleted and returns sdk.ErrExpired.
--- id defaults DB-side; user_id references users.id by convention (no enforced FK).
+-- id is Go-minted UUIDv7 by default; this default is the raw-SQL backstop.
+-- user_id references users.id by convention (no enforced FK).
 CREATE TABLE IF NOT EXISTS contact_changes (
-    id                     TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    user_id                TEXT NOT NULL,
+    id                     TEXT COLLATE "C" PRIMARY KEY DEFAULT uuidv7()::text,
+    user_id                TEXT COLLATE "C" NOT NULL,
     kind                   TEXT NOT NULL CHECK (kind IN ('email', 'phone')),
     new_value              TEXT NOT NULL,
     login_enabled          BOOLEAN NOT NULL DEFAULT FALSE,
     recovery_enabled       BOOLEAN NOT NULL DEFAULT FALSE,
     notification_enabled   BOOLEAN NOT NULL DEFAULT TRUE,
     make_primary           BOOLEAN NOT NULL DEFAULT FALSE,
-    replaces_identifier_id TEXT NOT NULL DEFAULT '',
+    replaces_identifier_id TEXT COLLATE "C" NOT NULL DEFAULT '',
     expires_at             TIMESTAMPTZ NOT NULL,
     created_at             TIMESTAMPTZ NOT NULL
 );

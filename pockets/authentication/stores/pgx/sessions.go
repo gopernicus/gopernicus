@@ -166,7 +166,7 @@ func (s *SessionStore) GetByRefreshHash(ctx context.Context, hash string) (sessi
 func (s *SessionStore) Rotate(ctx context.Context, id, expectedCurrentHash, newHash string) error {
 	q := `UPDATE ` + s.table(sessionsTable) + `
 		SET refresh_token_hash = @new_hash, previous_refresh_token_hash = @expected, previous_used = false, rotation_count = rotation_count + 1
-		WHERE id = @id AND refresh_token_hash = @expected`
+		WHERE id = @id AND refresh_token_hash = @expected AND session_profile IN ('', 'first_party')`
 	n, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{
 		"new_hash": newHash,
 		"expected": expectedCurrentHash,
@@ -187,7 +187,7 @@ func (s *SessionStore) Rotate(ctx context.Context, id, expectedCurrentHash, newH
 func (s *SessionStore) ConsumeGrace(ctx context.Context, id, previousHash string) error {
 	q := `UPDATE ` + s.table(sessionsTable) + `
 		SET previous_used = true
-		WHERE id = @id AND previous_refresh_token_hash = @previous_hash AND previous_used = false`
+		WHERE id = @id AND previous_refresh_token_hash = @previous_hash AND previous_used = false AND session_profile IN ('', 'first_party')`
 	n, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{
 		"id":            id,
 		"previous_hash": previousHash,

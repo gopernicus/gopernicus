@@ -36,7 +36,7 @@ EMULATOR_TAG_MODULES = integrations/authentication/firebase
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
 	guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
 	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger guard-rail-no-dml guard-auth-maintenance-leaf \
-	guard-credential-fields-secret
+	guard-credential-fields-secret guard-store-uuidv7-sites
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -194,7 +194,7 @@ guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-leg
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
 	guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
 	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger guard-rail-no-dml guard-auth-maintenance-leaf \
-	guard-credential-fields-secret
+	guard-credential-fields-secret guard-store-uuidv7-sites
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -726,3 +726,24 @@ guard-credential-fields-secret:
 	@test "$$(printf '\t%s\n' 'Password string' 'DBPassword  string' 'CredentialsJSON []byte' 'Password sdk.Secret' 'URL string' 'apiKey string' | grep -E '$(G37_PATTERN)' | tr -d '\t' | tr '\n' ',')" = 'Password string,DBPassword  string,CredentialsJSON []byte,' || { echo "ERROR (G37): the pattern no longer matches exactly the three canonical credential-field samples — the guard would check nothing"; exit 1; }
 	@hits=$$({ grep -rnE --include='*.go' --exclude='*_test.go' '$(G37_PATTERN)' integrations sdk || true; } | grep -v 'json:"' | grep -v '^sdk/capabilities/oauth/oauth.go:'); \
 		if [ -n "$$hits" ]; then echo "ERROR (G37): a credential-named field is a plain string or []byte — make it sdk.Secret (it renders [redacted] through fmt, slog and encoding/json; Reveal() is the one read):"; echo "$$hits"; exit 1; fi
+
+# G38 (default ids, plan D4): uuidv7() is PostgreSQL 18-only, and the canonical
+# migrations are where the floor is enforced (pgxdb.RunMigrations refuses below
+# 18). Store SQL outside migrations/ calls it at ONE reviewed site — the
+# recovery-code empty-id backstop in the authentication pgx TOTP store — so the
+# release record can say exactly which runtime path needs PostgreSQL 18. The
+# allow-list is PER LINE, by file and exact text; comment lines are skipped, and
+# the pattern must still match the allow-listed line, so a grep that stops
+# matching cannot pass silently.
+G38_PATTERN = uuidv7\(\)
+G38_ALLOWED = \
+	-e "pockets/authentication/stores/pgx/totp.go:SELECT COALESCE(NULLIF(c.id, ''), uuidv7()::text), @user_id, c.key_id, c.digest, c.generated_at"
+guard-store-uuidv7-sites:
+	@echo "== guard: store SQL outside migrations/ calls uuidv7() only at the allow-listed site (G38) =="
+	@grep -qE '$(G38_PATTERN)' pockets/authentication/stores/pgx/totp.go || { echo "ERROR (G38): the pattern no longer matches the allow-listed totp.go line — the guard would check nothing"; exit 1; }
+	@{ grep -rnE --include='*.go' --exclude='*_test.go' '$(G38_PATTERN)' pockets/*/stores || true; } | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' | { \
+		fail=0; while IFS= read -r hit; do \
+			file=$${hit%%:*}; rest=$${hit#*:}; text=$$(printf '%s' "$${rest#*:}" | sed -E 's/^[[:space:]]+//'); \
+			if printf '%s\n' "$$file:$$text" | grep -qxF $(G38_ALLOWED); then continue; fi; \
+			echo "ERROR (G38): $$hit — uuidv7() needs PostgreSQL 18: mint the id in Go (the record generator) or put the default in a canonical migration; a new runtime site is a reviewed allow-list line here"; fail=1; \
+		done; exit $$fail; }

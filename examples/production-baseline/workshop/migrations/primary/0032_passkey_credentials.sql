@@ -10,8 +10,8 @@ SET LOCAL lock_timeout = '5s';
 -- enforced FK). A new, empty table: it touches no existing one, so its indexes
 -- build in place.
 CREATE TABLE IF NOT EXISTS passkey_credentials (
-    id              TEXT COLLATE "C" PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    user_id         TEXT NOT NULL,
+    id              TEXT COLLATE "C" PRIMARY KEY DEFAULT uuidv7()::text,
+    user_id         TEXT COLLATE "C" NOT NULL,
     name            TEXT NOT NULL,
     credential_id   BYTEA NOT NULL,
     public_key      BYTEA NOT NULL,

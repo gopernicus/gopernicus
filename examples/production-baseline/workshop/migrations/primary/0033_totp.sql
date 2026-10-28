@@ -15,7 +15,7 @@ SET LOCAL lock_timeout = '5s';
 CREATE TABLE IF NOT EXISTS totp_credentials (
     user_id         TEXT COLLATE "C" PRIMARY KEY,
     secret          TEXT NOT NULL,
-    session_id      TEXT NOT NULL DEFAULT '',
+    session_id      TEXT COLLATE "C" NOT NULL DEFAULT '',
     tier            TEXT NOT NULL DEFAULT '',
     auth_revision   BIGINT NOT NULL DEFAULT 0,
     expires_at      TIMESTAMPTZ,
@@ -34,8 +34,8 @@ CREATE TABLE IF NOT EXISTS totp_credentials (
 -- Both tables are new and empty: they touch no existing one, so their indexes
 -- build in place.
 CREATE TABLE IF NOT EXISTS recovery_codes (
-    id           TEXT COLLATE "C" PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    user_id      TEXT NOT NULL,
+    id           TEXT COLLATE "C" PRIMARY KEY DEFAULT uuidv7()::text,
+    user_id      TEXT COLLATE "C" NOT NULL,
     key_id       TEXT NOT NULL,
     code_digest  TEXT NOT NULL,
     generated_at TIMESTAMPTZ NOT NULL,

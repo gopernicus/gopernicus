@@ -11,11 +11,12 @@
 -- can satisfy it without an extra prompt. authenticated_at is when the proving
 -- authentication happened; consumed_at NULL is the unspent sentinel. Consume decides
 -- expiry, single-use, session binding, and context match in one atomic operation.
--- id defaults DB-side; session_id/user_id reference by convention (no enforced FK).
+-- id is Go-minted UUIDv7 by default; this default is the raw-SQL backstop.
+-- session_id/user_id reference by convention (no enforced FK).
 CREATE TABLE IF NOT EXISTS authentication_grants (
-    id               TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    session_id       TEXT NOT NULL,
-    user_id          TEXT NOT NULL,
+    id               TEXT COLLATE "C" PRIMARY KEY DEFAULT uuidv7()::text,
+    session_id       TEXT COLLATE "C" NOT NULL,
+    user_id          TEXT COLLATE "C" NOT NULL,
     purpose          TEXT NOT NULL,
     context_digest   TEXT NOT NULL,
     methods          TEXT NOT NULL DEFAULT '',
