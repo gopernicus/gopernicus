@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -31,8 +32,8 @@ import (
 	listing "github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-// ids is the suite's entity-ID generator: the default nanoid strategy, matching
-// the pocket's zero-value Config.IDs.
+// ids is the suite's entity-ID generator: the default nanoid strategy (the
+// zero IDGenerator; the pocket itself resolves a zero Config.IDs to UUIDv7).
 var ids = sdk.IDGenerator{}
 
 // dbIDs is the sdk.DatabaseID strategy: entities reach Create with an empty
@@ -87,6 +88,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) cms.Repositories) {
 		t.Run("AbsentNotFound", func(t *testing.T) { testTermsAbsent(t, newRepos(t)) })
 		t.Run("KindSlugUniqueness", func(t *testing.T) { testTermsUniqueness(t, newRepos(t)) })
 		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testTermsDBGeneratedID(t, newRepos(t)) })
+		t.Run("SuppliedIDStoredVerbatim", func(t *testing.T) { testTermsSuppliedID(t, newRepos(t)) })
 		t.Run("ListByKindOrdered", func(t *testing.T) { testTermsListByKind(t, newRepos(t)) })
 	})
 
@@ -96,6 +98,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) cms.Repositories) {
 		t.Run("SlugUniqueness", func(t *testing.T) { testMenusUniqueness(t, newRepos(t)) })
 		t.Run("Items", func(t *testing.T) { testMenuItems(t, newRepos(t)) })
 		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testMenusDBGeneratedID(t, newRepos(t)) })
+		t.Run("SuppliedIDStoredVerbatim", func(t *testing.T) { testMenusSuppliedID(t, newRepos(t)) })
 	})
 
 	t.Run("Media", func(t *testing.T) {
@@ -103,11 +106,13 @@ func Run(t *testing.T, newRepos func(t *testing.T) cms.Repositories) {
 		t.Run("AbsentNotFound", func(t *testing.T) { testMediaAbsent(t, newRepos(t)) })
 		t.Run("ListNewestFirst", func(t *testing.T) { testMediaListOrder(t, newRepos(t)) })
 		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testMediaDBGeneratedID(t, newRepos(t)) })
+		t.Run("SuppliedIDStoredVerbatim", func(t *testing.T) { testMediaSuppliedID(t, newRepos(t)) })
 	})
 
 	t.Run("Inquiries", func(t *testing.T) {
 		t.Run("CreateAndListNewestFirst", func(t *testing.T) { testInquiries(t, newRepos(t)) })
 		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testInquiriesDBGeneratedID(t, newRepos(t)) })
+		t.Run("SuppliedIDStoredVerbatim", func(t *testing.T) { testInquiriesSuppliedID(t, newRepos(t)) })
 		t.Run("DeleteAbsentNotFound", func(t *testing.T) { testInquiriesDeleteAbsent(t, newRepos(t)) })
 		t.Run("DeleteByEmailCaseInsensitive", func(t *testing.T) { testInquiriesDeleteByEmail(t, newRepos(t)) })
 		t.Run("PurgeBeforeBounded", func(t *testing.T) { testInquiriesPurgeBefore(t, newRepos(t)) })
@@ -1101,6 +1106,125 @@ func testInquiriesDBGeneratedID(t *testing.T, repos cms.Repositories) {
 	}
 	if !found {
 		t.Errorf("inquiry with generated key %q not found in List", created.ID)
+	}
+}
+
+// The tests below prove the other side of Config.IDs: a key the pocket mints
+// (a host generator or the UUIDv7 default) reaches the store and is stored and
+// read back verbatim, never replaced by the schema default. Entries carry the
+// same proof in CRUDRoundTrip.
+
+// countingIDs mints prefix-1, prefix-2, …: distinct keys, so every row in a
+// case gets its own primary key.
+func countingIDs(prefix string) sdk.IDGenerator {
+	n := 0
+	return sdk.NewIDGenerator(func() (string, error) {
+		n++
+		return prefix + "-" + strconv.Itoa(n), nil
+	})
+}
+
+func testTermsSuppliedID(t *testing.T, repos cms.Repositories) {
+	ctx := context.Background()
+	term, err := taxonomy.NewTerm(countingIDs("verbatim-term"), taxonomy.KindCategory, "Supplied", "", suiteBase)
+	if err != nil {
+		t.Fatalf("NewTerm: %v", err)
+	}
+	created, err := repos.Terms.Create(ctx, term)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ID != "verbatim-term-1" {
+		t.Fatalf("Create returned id %q, want the supplied verbatim-term-1", created.ID)
+	}
+	got, err := repos.Terms.Get(ctx, "verbatim-term-1")
+	if err != nil {
+		t.Fatalf("Get by supplied id: %v", err)
+	}
+	if got.ID != "verbatim-term-1" || got.Name != "Supplied" {
+		t.Errorf("Get by supplied id = %+v", got)
+	}
+}
+
+func testMenusSuppliedID(t *testing.T, repos cms.Repositories) {
+	ctx := context.Background()
+	repo := repos.Menus
+	gen := countingIDs("verbatim-menu")
+
+	menu, err := menus.NewMenu(gen, "Supplied", suiteBase)
+	if err != nil {
+		t.Fatalf("NewMenu: %v", err)
+	}
+	createdMenu, err := repo.CreateMenu(ctx, menu)
+	if err != nil {
+		t.Fatalf("CreateMenu: %v", err)
+	}
+	if createdMenu.ID != "verbatim-menu-1" {
+		t.Fatalf("CreateMenu returned id %q, want the supplied verbatim-menu-1", createdMenu.ID)
+	}
+	gotMenu, err := repo.GetMenu(ctx, "verbatim-menu-1")
+	if err != nil || gotMenu.ID != "verbatim-menu-1" || gotMenu.Name != "Supplied" {
+		t.Fatalf("GetMenu by supplied id = %+v (err=%v)", gotMenu, err)
+	}
+
+	item, err := menus.NewMenuItem(gen, createdMenu.ID, "Home", "/", "", 0, suiteBase)
+	if err != nil {
+		t.Fatalf("NewMenuItem: %v", err)
+	}
+	createdItem, err := repo.AddItem(ctx, item)
+	if err != nil {
+		t.Fatalf("AddItem: %v", err)
+	}
+	if createdItem.ID != "verbatim-menu-2" {
+		t.Fatalf("AddItem returned id %q, want the supplied verbatim-menu-2", createdItem.ID)
+	}
+	gotItem, err := repo.GetItem(ctx, "verbatim-menu-2")
+	if err != nil || gotItem.ID != "verbatim-menu-2" || gotItem.MenuID != "verbatim-menu-1" || gotItem.Label != "Home" {
+		t.Fatalf("GetItem by supplied id = %+v (err=%v)", gotItem, err)
+	}
+}
+
+func testMediaSuppliedID(t *testing.T, repos cms.Repositories) {
+	ctx := context.Background()
+	asset, err := media.NewAsset(countingIDs("verbatim-asset"), "photo.jpg", "image/jpeg", 1024, suiteBase)
+	if err != nil {
+		t.Fatalf("NewAsset: %v", err)
+	}
+	created, err := repos.Media.Create(ctx, asset)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ID != "verbatim-asset-1" {
+		t.Fatalf("Create returned id %q, want the supplied verbatim-asset-1", created.ID)
+	}
+	got, err := repos.Media.Get(ctx, "verbatim-asset-1")
+	if err != nil {
+		t.Fatalf("Get by supplied id: %v", err)
+	}
+	if got.ID != "verbatim-asset-1" || got.StorageKey != asset.StorageKey {
+		t.Errorf("Get by supplied id = %+v, want storage key %q", got, asset.StorageKey)
+	}
+}
+
+func testInquiriesSuppliedID(t *testing.T, repos cms.Repositories) {
+	ctx := context.Background()
+	in, err := messaging.NewInquiry(countingIDs("verbatim-inquiry"), "Jane", "jane@example.com", "Supplied", suiteBase)
+	if err != nil {
+		t.Fatalf("NewInquiry: %v", err)
+	}
+	created, err := repos.Inquiries.Create(ctx, in)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ID != "verbatim-inquiry-1" {
+		t.Fatalf("Create returned id %q, want the supplied verbatim-inquiry-1", created.ID)
+	}
+	list, err := repos.Inquiries.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != "verbatim-inquiry-1" || list[0].Message != "Supplied" {
+		t.Errorf("List = %+v, want the one inquiry under verbatim-inquiry-1", list)
 	}
 }
 
