@@ -339,6 +339,16 @@ The Redis adapter holds one complete hash on one shard, so Redis Cluster is
 unsupported. Oversized reads fall back to SQL rather than returning a partial
 result. Constructors start no goroutines; shutdown is yours.
 
+If the authorization database is recreated or repointed under a running
+process, the store returns `tuplecache.ErrSourceIdentity` and the relay detaches
+for the life of the process: checks fall back to SQL, `Stats().Detached` turns
+true, and `Poll` returns `workers.ErrPoolShutdown` around the cause, so a
+`workers.Pool` logs one ERROR naming the fix, stops, and `Run` returns the
+cause. Restart the process; do not rebuild the pool (the flag is sticky).
+Readiness keeps checking the database only and reports `"tuple_cache":"detached"`
+in its 200 body, never a 503, or a recreate pulls every replica. Liveness may
+answer 503 on `Detached`, or exit when `errors.Is(relayErr, tuplecache.ErrSourceIdentity)`.
+
 ## Bundled role administration
 
 Optionally mount `POST /authorization/roles`, `POST /authorization/roles/unassign`,

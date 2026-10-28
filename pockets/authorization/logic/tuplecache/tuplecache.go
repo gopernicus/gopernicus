@@ -17,6 +17,9 @@ var (
 	ErrConflict       = fmt.Errorf("tuple cache publication changed: %w", sdk.ErrConflict)
 	ErrBinding        = fmt.Errorf("tuple cache store or freshness policy binding mismatch: %w", sdk.ErrInvalidInput)
 	ErrSnapshotClosed = tuples.ErrSnapshotClosed
+	// ErrSourceIdentity is terminal for this process: the source's identity no
+	// longer matches the one bound at boot, so it can never publish again.
+	ErrSourceIdentity = fmt.Errorf("tuple cache source identity changed since this process started (the database was recreated or repointed); restart the process: %w", ErrUnavailable)
 )
 
 // State is a delivery receipt, never a cache-key namespace. An empty State

@@ -1190,6 +1190,39 @@ fallbacks, capacity failures, publication conflicts, timings and captured counts
 `ScheduledRebuilds`, `ScheduledRebuildFailures` and `LastFullRebuild` show the
 cadence.
 
+**A recreated or repointed authorization database detaches the relay.** The
+binding captures the source identity at boot, and a new identity can never
+publish under it, so a store that sees the change returns
+`tuplecache.ErrSourceIdentity` (it wraps `ErrUnavailable`) from `Snapshot` or
+`Acknowledge`. The runtime then detaches for the life of the process:
+`Stats().Detached` turns true, every check falls back to SQL (`Fallbacks`), and
+`Poll` returns `workers.ErrPoolShutdown` wrapped around the cause. Under a
+`workers.Pool` that is one ERROR, `worker requesting pool shutdown`, whose
+`error` names the fix ("restart the process"), then the pool stops and `Run`
+returns the cause. Later `Poll` calls return the same error without touching
+the source or the counters; `Rebuild` returns `ErrSourceIdentity` alone. The
+fix is restarting the process. Do not rebuild the pool: the flag is sticky, so
+a new pool stops on its first poll. If the relay pool uses `WithHeartbeat`,
+the heartbeat line going missing is a free alert.
+
+Every replica on that database detaches on its next poll, so wire the probes
+by role:
+
+- **Readiness** keeps checking the database only, and reports the flag in the
+  200 body (`"tuple_cache":"detached"`) for alerting. Never answer 503 on
+  `Detached`: a recreate would pull every replica out of rotation while SQL
+  reads still work.
+- **Liveness** may answer 503 on `Detached`, or the host exits when the relay
+  stops, so the orchestrator restarts it:
+
+```go
+relayErr := relay.Run(ctx)
+if errors.Is(relayErr, tuplecache.ErrSourceIdentity) {
+    logger.Error("tuple cache relay detached; exiting for restart", "error", relayErr)
+    stop() // begin the host's graceful shutdown; exit non-zero
+}
+```
+
 **Upgrade note.** `tuplecache.State` gained `FullAt`: an unkeyed literal
 (`State{binding, receipt}`) no longer compiles, and a custom `Backend` or test
 that compares a `State()` result with `==` against a constructed value now
