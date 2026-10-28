@@ -159,8 +159,10 @@ func (j Job) Leased(now time.Time) bool {
 
 // Enqueue is the input for inserting one job.
 type Enqueue struct {
-	// ID is optional; when set it is the UNIQUE EXECUTION key (a duplicate ID yields
-	// sdk.ErrAlreadyExists). The scheduler's deterministic refire relies on it.
+	// ID is the UNIQUE EXECUTION key (a duplicate ID yields sdk.ErrAlreadyExists).
+	// It is optional at the Service, which mints an empty one (WithIDs); a
+	// repository requires it and rejects an empty ID with sdk.ErrInvalidInput. The
+	// scheduler's deterministic refire relies on a caller-supplied ID.
 	ID   string
 	Kind string
 	// TenantID is the OPTIONAL host-defined boundary to stamp on the job (see
@@ -195,9 +197,10 @@ type ListFilter struct {
 // filter, and the runtime adapts the port to the kernel by closing over the
 // kinds it registered handlers for.
 type QueueRepository interface {
-	// Enqueue inserts one job; a duplicate ID yields sdk.ErrAlreadyExists. Callers
-	// provide valid JSON payloads; the public service validates and supplies {} for
-	// empty input before calling this repository.
+	// Enqueue inserts one job; a duplicate ID yields sdk.ErrAlreadyExists and an
+	// empty ID yields sdk.ErrInvalidInput (the service mints ids; stores never do).
+	// Callers provide valid JSON payloads; the public service validates and
+	// supplies {} for empty input before calling this repository.
 	Enqueue(ctx context.Context, in Enqueue) (Job, error)
 	// Claim atomically transitions exactly one due job to running for workerID
 	// and returns it, or returns workers.ErrNoWork when none is due. "Due" means

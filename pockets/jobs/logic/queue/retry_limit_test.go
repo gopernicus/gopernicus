@@ -45,7 +45,7 @@ func TestRuntimeHonorsPersistedRetryLimit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			in := queueapi.Enqueue{Kind: "kind", MaxAttempts: tc.persisted}
+			in := queueapi.Enqueue{ID: "retry-limit", Kind: "kind", MaxAttempts: tc.persisted}
 			var inserted queueapi.Job
 			if tc.persisted == 0 {
 				inserted, err = queue.Enqueue(ctx, in)

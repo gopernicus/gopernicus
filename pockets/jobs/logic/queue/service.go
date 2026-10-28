@@ -19,6 +19,7 @@ type Service struct {
 	wake           chan struct{}
 	maxAttempts    int
 	now            func() time.Time
+	ids            sdk.IDGenerator
 }
 
 // NewService validates the queue ports and resolves admission defaults. It starts no workers.
@@ -44,7 +45,7 @@ func NewService(repos Repositories, opts ...Option) (*Service, error) {
 	}
 	purger, _ := repos.Queue.(TerminalPurger)
 	logTerminalPurge(repos, purger != nil)
-	return &Service{repo: repos.Queue, fencedQueue: repos.FencedQueue, terminalPurger: purger, wake: make(chan struct{}, 1), maxAttempts: cfg.maxAttempts, now: cfg.clock}, nil
+	return &Service{repo: repos.Queue, fencedQueue: repos.FencedQueue, terminalPurger: purger, wake: make(chan struct{}, 1), maxAttempts: cfg.maxAttempts, now: cfg.clock, ids: cfg.ids.Or(sdk.UUIDv7())}, nil
 }
 
 // logTerminalPurge is the construction-time record of the ordinary-queue
@@ -74,7 +75,7 @@ func (s *Service) Enqueue(ctx context.Context, kind string, payload json.RawMess
 }
 
 // EnqueueJob is the full-fidelity enqueue: it validates the kind, applies the
-// MaxAttempts and ScheduledFor defaults, inserts the job, and — only on a
+// ID, MaxAttempts and ScheduledFor defaults, inserts the job, and — only on a
 // successful insert — signals the wake channel. A duplicate ID surfaces
 // sdk.ErrAlreadyExists from the store and does not signal (nothing new ran).
 func (s *Service) EnqueueJob(ctx context.Context, in Enqueue) (Job, error) {
@@ -95,6 +96,13 @@ func (s *Service) EnqueueJob(ctx context.Context, in Enqueue) (Job, error) {
 	if in.ScheduledFor.IsZero() {
 		in.ScheduledFor = s.now()
 	}
+	if in.ID == "" {
+		id, err := s.mintID()
+		if err != nil {
+			return Job{}, err
+		}
+		in.ID = id
+	}
 	j, err := s.repo.Enqueue(ctx, in)
 	if err != nil {
 		return Job{}, err
@@ -111,4 +119,13 @@ func (s *Service) signal() {
 	case s.wake <- struct{}{}:
 	default:
 	}
+}
+
+// mintID returns a fresh job id from the service's generator.
+func (s *Service) mintID() (string, error) {
+	id, err := s.ids.Generate()
+	if err != nil {
+		return "", fmt.Errorf("jobs: mint job id: %w", err)
+	}
+	return id, nil
 }

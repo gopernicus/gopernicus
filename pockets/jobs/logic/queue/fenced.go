@@ -52,8 +52,9 @@ type FencedQueueRepository interface {
 	// EnqueueOnce inserts in as a new StatusPending execution UNLESS a non-terminal
 	// job already holds in.LogicalKey, in which case that active job is returned
 	// unchanged and no second execution is created (idempotent admission). A
-	// duplicate explicit in.ID yields sdk.ErrAlreadyExists; an empty in.ID is
-	// generated. An empty in.LogicalKey disables the once semantics (plain insert).
+	// duplicate in.ID yields sdk.ErrAlreadyExists; an empty in.ID yields
+	// sdk.ErrInvalidInput (the service mints ids; stores never do). An empty
+	// in.LogicalKey disables the once semantics (plain insert).
 	EnqueueOnce(ctx context.Context, in Enqueue) (Job, error)
 
 	// Replace atomically supersedes: it marks every non-terminal generation holding

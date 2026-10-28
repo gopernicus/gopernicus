@@ -28,10 +28,14 @@ func NewSchedules() *Schedules {
 	return &Schedules{byID: map[string]schedule.Schedule{}, pending: map[string]schedule.Occurrence{}}
 }
 
-// Ensure upserts by Name: it creates the schedule (enabled, next_run_at = next)
-// or updates the existing one's kind, spec, and payload, advancing next_run_at
-// to next only when the spec changed.
+// Ensure upserts by Name: it creates the schedule with in.ID (enabled,
+// next_run_at = next) or updates the existing one's kind, spec, and payload,
+// keeping its id and advancing next_run_at to next only when the spec changed.
+// An empty in.ID yields sdk.ErrInvalidInput.
 func (s *Schedules) Ensure(_ context.Context, in schedule.Ensure, next time.Time) (schedule.Schedule, error) {
+	if in.ID == "" {
+		return schedule.Schedule{}, errIDRequired
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -53,7 +57,7 @@ func (s *Schedules) Ensure(_ context.Context, in schedule.Ensure, next time.Time
 	}
 
 	sch := schedule.Schedule{
-		ID:        newID("sched"),
+		ID:        in.ID,
 		Name:      in.Name,
 		Kind:      in.Kind,
 		TenantID:  in.TenantID,

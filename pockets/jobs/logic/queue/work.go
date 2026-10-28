@@ -60,7 +60,12 @@ func (s *Service) EnqueueOnceIn(ctx context.Context, in EnqueueOnceInput) (strin
 	if in.Kind == "" {
 		return "", fmt.Errorf("jobs: kind is required: %w", sdk.ErrInvalidInput)
 	}
+	id, err := s.mintID()
+	if err != nil {
+		return "", err
+	}
 	j, err := s.fencedQueue.EnqueueOnce(ctx, Enqueue{
+		ID:         id,
 		Kind:       in.Kind,
 		TenantID:   in.TenantID,
 		LogicalKey: in.LogicalKey,
@@ -82,7 +87,12 @@ func (s *Service) ReplaceIn(ctx context.Context, in ReplaceInput) (string, error
 	if in.Kind == "" {
 		return "", fmt.Errorf("jobs: kind is required: %w", sdk.ErrInvalidInput)
 	}
+	id, err := s.mintID()
+	if err != nil {
+		return "", err
+	}
 	j, err := s.fencedQueue.Replace(ctx, Enqueue{
+		ID:         id,
 		Kind:       in.Kind,
 		TenantID:   in.TenantID,
 		LogicalKey: in.LogicalKey,

@@ -18,7 +18,7 @@ func RunQueueOwnership(t *testing.T, newRepo func(*testing.T) job.QueueRepositor
 		ctx := context.Background()
 		repo := newRepo(t)
 		payload := []byte(`{"n":1}`)
-		inserted, err := repo.Enqueue(ctx, job.Enqueue{Kind: "owned", Payload: payload})
+		inserted, err := repo.Enqueue(ctx, withJobID(job.Enqueue{Kind: "owned", Payload: payload}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -67,7 +67,7 @@ func RunQueueOwnership(t *testing.T, newRepo func(*testing.T) job.QueueRepositor
 		ctx := context.Background()
 		repo := newRepo(t)
 		now := time.Now().UTC()
-		completed, err := repo.Enqueue(ctx, job.Enqueue{Kind: "done"})
+		completed, err := repo.Enqueue(ctx, withJobID(job.Enqueue{Kind: "done"}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -88,7 +88,7 @@ func RunQueueOwnership(t *testing.T, newRepo func(*testing.T) job.QueueRepositor
 		if after.JobStatus != job.StatusCompleted || after.Retries != before.Retries || !after.CompletedAt.Equal(*before.CompletedAt) || !after.UpdatedAt.Equal(before.UpdatedAt) {
 			t.Fatalf("terminal completion changed: before=%+v after=%+v", before, after)
 		}
-		dead, err := repo.Enqueue(ctx, job.Enqueue{Kind: "dead"})
+		dead, err := repo.Enqueue(ctx, withJobID(job.Enqueue{Kind: "dead"}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -119,13 +119,13 @@ func RunFencedOwnership(t *testing.T, newRepo func(*testing.T) job.FencedQueueRe
 		ctx := context.Background()
 		repo := requireFenced(t, newRepo)
 		payload := []byte("original")
-		inserted, err := repo.EnqueueOnce(ctx, job.Enqueue{Kind: "owned", LogicalKey: "key", Payload: payload})
+		inserted, err := repo.EnqueueOnce(ctx, withJobID(job.Enqueue{Kind: "owned", LogicalKey: "key", Payload: payload}))
 		if err != nil {
 			t.Fatal(err)
 		}
 		payload[0] = 'A'
 		inserted.Payload[0] = 'B'
-		again, err := repo.EnqueueOnce(ctx, job.Enqueue{Kind: "owned", LogicalKey: "key"})
+		again, err := repo.EnqueueOnce(ctx, withJobID(job.Enqueue{Kind: "owned", LogicalKey: "key"}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -171,7 +171,7 @@ func RunFencedOwnership(t *testing.T, newRepo func(*testing.T) job.FencedQueueRe
 		}
 		assertPayload(t, repo, inserted.JobID, "rendered")
 		payload = []byte("replacement")
-		replacement, err := repo.Replace(ctx, job.Enqueue{Kind: "owned", LogicalKey: "key", Payload: payload})
+		replacement, err := repo.Replace(ctx, withJobID(job.Enqueue{Kind: "owned", LogicalKey: "key", Payload: payload}))
 		if err != nil {
 			t.Fatal(err)
 		}

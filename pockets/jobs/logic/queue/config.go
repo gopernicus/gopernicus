@@ -3,6 +3,8 @@ package queue
 import (
 	"errors"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 const defaultWorkers = 4
@@ -48,6 +50,7 @@ type Option func(*serviceConfig)
 type serviceConfig struct {
 	maxAttempts int
 	clock       func() time.Time
+	ids         sdk.IDGenerator
 }
 
 // WithMaxAttempts replaces the admission retry limit. Nonpositive values select three attempts.
@@ -58,4 +61,10 @@ func WithMaxAttempts(n int) Option {
 // WithClock replaces the admission clock. Nil selects time.Now in UTC.
 func WithClock(clock func() time.Time) Option {
 	return func(c *serviceConfig) { c.clock = clock }
+}
+
+// WithIDs replaces the job-id generator used when an admission carries no ID.
+// The zero value selects the record default, UUIDv7; a configured generator wins.
+func WithIDs(ids sdk.IDGenerator) Option {
+	return func(c *serviceConfig) { c.ids = ids }
 }

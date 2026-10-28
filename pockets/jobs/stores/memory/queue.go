@@ -16,8 +16,6 @@ package memory
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"sort"
 	"sync"
@@ -37,6 +35,11 @@ const DefaultLease = 15 * time.Minute
 // orderField is the keyset order column List paginates by; it must match the
 // cursor's order field so a stale cursor from a different sort is ignored.
 const orderField = "created_at"
+
+// errIDRequired rejects an empty job or schedule id: the jobs services mint ids
+// and the store never does, so an empty-id generator fails loudly instead of
+// turning the next insert into a false sdk.ErrAlreadyExists.
+var errIDRequired = fmt.Errorf("jobs memory: id required; the jobs service mints it: %w", sdk.ErrInvalidInput)
 
 // Compile-time seams: the Queue fills the exact job.QueueRepository port and the
 // optional job.TerminalPurger retention capability.
@@ -85,7 +88,8 @@ func NewQueue(opts ...Option) *Queue {
 }
 
 // Enqueue inserts one job. A caller-supplied ID that already exists yields
-// sdk.ErrAlreadyExists (the idempotency key); an empty ID is generated. The job
+// sdk.ErrAlreadyExists (the idempotency key); an empty ID yields
+// sdk.ErrInvalidInput. The job
 // is stored pending with the input's scheduled_for, priority, and max_attempts
 // verbatim — the store invents no defaults (that is the service's job).
 func (q *Queue) Enqueue(_ context.Context, in job.Enqueue) (job.Job, error) {
@@ -94,7 +98,7 @@ func (q *Queue) Enqueue(_ context.Context, in job.Enqueue) (job.Job, error) {
 
 	id := in.ID
 	if id == "" {
-		id = newID("job")
+		return job.Job{}, errIDRequired
 	}
 	if _, ok := q.jobs[id]; ok {
 		return job.Job{}, sdk.ErrAlreadyExists
@@ -439,11 +443,4 @@ func afterCursor[T any](it T, cv time.Time, cpk string, asc bool, key func(T) (t
 		return id > cpk
 	}
 	return id < cpk
-}
-
-// newID returns a random, collision-free identifier with the given prefix.
-func newID(prefix string) string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	return prefix + "_" + hex.EncodeToString(b[:])
 }

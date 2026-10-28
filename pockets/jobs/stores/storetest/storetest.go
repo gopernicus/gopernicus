@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -53,6 +54,10 @@ const Lease = 3 * time.Second
 // suiteBase is a fixed reference instant the schedule cases stamp next_run_at
 // values from; the queue cases that turn on real elapsed time use time.Now.
 var suiteBase = time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+// suiteIDs numbers the ids the suite mints for inputs that leave ID empty,
+// standing in for the jobs services (the repositories require an id).
+var suiteIDs atomic.Uint64
 
 // RunQueue exercises the job.QueueRepository contract against a clean, isolated
 // queue obtained from newRepo for each leaf subtest. newRepo MUST return a
@@ -154,19 +159,6 @@ func testEnqueueIdempotency(t *testing.T, repo job.QueueRepository) {
 	}
 	if _, err := repo.Enqueue(ctx, job.Enqueue{ID: "dup", Kind: "demo"}); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("duplicate id Enqueue: err=%v, want ErrAlreadyExists", err)
-	}
-
-	// An empty id is generated, so two empty-id enqueues never collide.
-	a, err := repo.Enqueue(ctx, job.Enqueue{Kind: "demo"})
-	if err != nil {
-		t.Fatalf("empty-id Enqueue a: %v", err)
-	}
-	b, err := repo.Enqueue(ctx, job.Enqueue{Kind: "demo"})
-	if err != nil {
-		t.Fatalf("empty-id Enqueue b: %v", err)
-	}
-	if a.ID() == "" || b.ID() == "" || a.ID() == b.ID() {
-		t.Errorf("empty-id enqueues must get distinct non-empty ids, got %q and %q", a.ID(), b.ID())
 	}
 }
 
@@ -633,7 +625,7 @@ func testEnsureUpsert(t *testing.T, repo schedule.Repository) {
 	ctx := context.Background()
 	next := suiteBase.Add(time.Hour)
 
-	created, err := repo.Ensure(ctx, schedule.Ensure{Name: "nightly", Kind: "demo.print", Spec: schedule.Spec{Every: time.Hour}}, next)
+	created, err := repo.Ensure(ctx, withScheduleID(schedule.Ensure{Name: "nightly", Kind: "demo.print", Spec: schedule.Spec{Every: time.Hour}}), next)
 	if err != nil {
 		t.Fatalf("Ensure create: %v", err)
 	}
@@ -651,7 +643,7 @@ func testEnsureUpsert(t *testing.T, repo schedule.Repository) {
 
 	// Upsert by Name with the SAME spec keeps the id and NextRunAt, updates
 	// kind/payload.
-	sameSpec, err := repo.Ensure(ctx, schedule.Ensure{Name: "nightly", Kind: "demo.other", Spec: schedule.Spec{Every: time.Hour}, Payload: []byte(`{"a":1}`)}, next.Add(time.Hour))
+	sameSpec, err := repo.Ensure(ctx, withScheduleID(schedule.Ensure{Name: "nightly", Kind: "demo.other", Spec: schedule.Spec{Every: time.Hour}, Payload: []byte(`{"a":1}`)}), next.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("Ensure same-spec: %v", err)
 	}
@@ -667,7 +659,7 @@ func testEnsureUpsert(t *testing.T, repo schedule.Repository) {
 
 	// Upsert with a CHANGED spec advances NextRunAt to the new next.
 	newNext := next.Add(2 * time.Hour)
-	changed, err := repo.Ensure(ctx, schedule.Ensure{Name: "nightly", Kind: "demo.other", Spec: schedule.Spec{Every: 30 * time.Minute}}, newNext)
+	changed, err := repo.Ensure(ctx, withScheduleID(schedule.Ensure{Name: "nightly", Kind: "demo.other", Spec: schedule.Spec{Every: 30 * time.Minute}}), newNext)
 	if err != nil {
 		t.Fatalf("Ensure changed-spec: %v", err)
 	}
@@ -726,7 +718,7 @@ func testSchedulesTenant(t *testing.T, repo schedule.Repository) {
 	}
 
 	// The upsert updates the tenant alongside kind/payload.
-	moved, err := repo.Ensure(ctx, schedule.Ensure{Name: "scoped", Kind: "demo", TenantID: "globex", Spec: schedule.Spec{Every: time.Hour}}, suiteBase)
+	moved, err := repo.Ensure(ctx, withScheduleID(schedule.Ensure{Name: "scoped", Kind: "demo", TenantID: "globex", Spec: schedule.Spec{Every: time.Hour}}), suiteBase)
 	if err != nil {
 		t.Fatalf("Ensure upsert: %v", err)
 	}
@@ -964,9 +956,27 @@ func testSchedulesDelete(t *testing.T, repo schedule.Repository) {
 
 // --- helpers ---
 
+// withJobID fills an empty in.ID the way the jobs service does before it calls a
+// repository (stores never mint). An explicit ID is kept.
+func withJobID(in job.Enqueue) job.Enqueue {
+	if in.ID == "" {
+		in.ID = fmt.Sprintf("st-job-%d", suiteIDs.Add(1))
+	}
+	return in
+}
+
+// withScheduleID fills an empty create-only in.ID the way the schedules service
+// does before it calls Ensure. An explicit ID is kept.
+func withScheduleID(in schedule.Ensure) schedule.Ensure {
+	if in.ID == "" {
+		in.ID = fmt.Sprintf("st-sched-%d", suiteIDs.Add(1))
+	}
+	return in
+}
+
 func mustEnqueue(t *testing.T, repo job.QueueRepository, in job.Enqueue) job.Job {
 	t.Helper()
-	j, err := repo.Enqueue(context.Background(), in)
+	j, err := repo.Enqueue(context.Background(), withJobID(in))
 	if err != nil {
 		t.Fatalf("Enqueue %q: %v", in.ID, err)
 	}
@@ -975,7 +985,7 @@ func mustEnqueue(t *testing.T, repo job.QueueRepository, in job.Enqueue) job.Job
 
 func mustEnsure(t *testing.T, repo schedule.Repository, in schedule.Ensure, next time.Time) schedule.Schedule {
 	t.Helper()
-	s, err := repo.Ensure(context.Background(), in, next)
+	s, err := repo.Ensure(context.Background(), withScheduleID(in), next)
 	if err != nil {
 		t.Fatalf("Ensure %q: %v", in.Name, err)
 	}

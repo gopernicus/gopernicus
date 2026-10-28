@@ -39,7 +39,7 @@ func TestPendingOccurrenceRecoversAfterRestart(t *testing.T) {
 			repo := memory.NewSchedules()
 			q := memory.NewQueue()
 			enq := &recoveringEnqueuer{queue: q, fail: !uncertain, uncertain: uncertain}
-			sch, err := repo.Ensure(ctx, schedulesapi.Ensure{Name: "recovery", Kind: "a", Spec: schedulesapi.Spec{Every: time.Hour}}, now)
+			sch, err := repo.Ensure(ctx, schedulesapi.Ensure{ID: "sched-recovery", Name: "recovery", Kind: "a", Spec: schedulesapi.Spec{Every: time.Hour}}, now)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -115,7 +115,7 @@ func TestDispatchFailureBoundaries(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	repo := &ackFailureSchedules{Repository: memory.NewSchedules(), failAttempt: true}
-	_, err := repo.Ensure(ctx, schedulesapi.Ensure{Name: "a", Kind: "a", Spec: schedulesapi.Spec{Every: time.Hour}}, now)
+	_, err := repo.Ensure(ctx, schedulesapi.Ensure{ID: "sched-a", Name: "a", Kind: "a", Spec: schedulesapi.Spec{Every: time.Hour}}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestFailedOccurrenceDoesNotStarveNextBatch(t *testing.T) {
 	now := time.Now().UTC()
 	repo := memory.NewSchedules()
 	for i, kind := range []string{"broken", "healthy"} {
-		if _, err := repo.Ensure(ctx, schedulesapi.Ensure{Name: kind, Kind: kind, Spec: schedulesapi.Spec{Every: time.Hour}}, now.Add(time.Duration(i-1)*time.Second)); err != nil {
+		if _, err := repo.Ensure(ctx, schedulesapi.Ensure{ID: "sched-" + kind, Name: kind, Kind: kind, Spec: schedulesapi.Spec{Every: time.Hour}}, now.Add(time.Duration(i-1)*time.Second)); err != nil {
 			t.Fatal(err)
 		}
 	}

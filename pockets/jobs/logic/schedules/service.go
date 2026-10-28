@@ -37,6 +37,7 @@ type serviceConfig struct {
 	cron     CronParser
 	batch    int
 	clock    func() time.Time
+	ids      sdk.IDGenerator
 }
 
 // WithEnqueuer replaces the occurrence admission port. Nil selects management-only
@@ -61,6 +62,14 @@ func WithClock(clock func() time.Time) Option {
 	return func(c *serviceConfig) { c.clock = clock }
 }
 
+// WithIDs replaces the schedule-id generator EnsureSchedule mints a create-only
+// candidate from on every call with an empty Ensure.ID (an update keeps the
+// existing id, so a counter-style generator skips values). The zero value
+// selects the record default, UUIDv7; a configured generator wins.
+func WithIDs(ids sdk.IDGenerator) Option {
+	return func(c *serviceConfig) { c.ids = ids }
+}
+
 // Service implements the schedule use cases over the schedule repository port.
 type Service struct {
 	repo     Repository
@@ -68,6 +77,7 @@ type Service struct {
 	cron     CronParser
 	batch    int
 	now      func() time.Time
+	ids      sdk.IDGenerator
 }
 
 // NewService builds a schedule Service from its dependencies, applying a
@@ -97,6 +107,7 @@ func NewService(repo Repository, opts ...Option) (*Service, error) {
 		cron:     d.cron,
 		batch:    batch,
 		now:      clock,
+		ids:      d.ids.Or(sdk.UUIDv7()),
 	}, nil
 }
 
@@ -115,6 +126,11 @@ func (s *Service) EnsureSchedule(ctx context.Context, in Ensure) (Schedule, erro
 	next, err := s.nextRun(in.Spec, s.now())
 	if err != nil {
 		return Schedule{}, err
+	}
+	if in.ID == "" {
+		if in.ID, err = s.ids.Generate(); err != nil {
+			return Schedule{}, fmt.Errorf("jobs: mint schedule id: %w", err)
+		}
 	}
 	return s.repo.Ensure(ctx, in, next)
 }
