@@ -7,11 +7,21 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 )
 
 // Middleware wraps an http.Handler. Compatible with any standard Go middleware.
 type Middleware func(http.Handler) http.Handler
+
+// Route is one registration recorded by WebHandler: the upper-cased method
+// ("" for any method), the final pattern path including any group prefix, and
+// whether it came from HandleRaw. It never carries the handler or middleware.
+type Route struct {
+	Method  string
+	Pattern string
+	Raw     bool
+}
 
 // WebHandler is an HTTP handler built on the standard library ServeMux
 // with support for global and per-route middleware.
@@ -19,6 +29,7 @@ type WebHandler struct {
 	mux              *http.ServeMux
 	globalMiddleware []Middleware
 	dispatch         http.Handler
+	routes           []Route
 }
 
 // NewWebHandler creates a ServeMux handler. Install host middleware with Use.
@@ -63,6 +74,7 @@ func (h *WebHandler) Handle(method, path string, handler http.HandlerFunc, middl
 		pattern = fmt.Sprintf("%s %s", strings.ToUpper(method), path)
 	}
 	h.mux.Handle(pattern, final)
+	h.routes = append(h.routes, Route{Method: strings.ToUpper(method), Pattern: path})
 }
 
 // HandleRaw registers an http.Handler against a raw ServeMux pattern, for the
@@ -72,6 +84,16 @@ func (h *WebHandler) Handle(method, path string, handler http.HandlerFunc, middl
 // request IDs, logging, CORS — still applies. It takes no per-route middleware.
 func (h *WebHandler) HandleRaw(pattern string, handler http.Handler) {
 	h.mux.Handle(pattern, handler)
+	h.routes = append(h.routes, Route{Pattern: pattern, Raw: true})
+}
+
+// Routes returns a copy of every registration made through Handle (and so the
+// method helpers and RouteGroup) and HandleRaw, in registration order, so a
+// host test can inventory what the server mounted. Like Use, it is boot-time
+// only and not synchronized. A HandleRaw entry records its raw pattern
+// verbatim; routes served behind a HandleRaw subtree are invisible to it.
+func (h *WebHandler) Routes() []Route {
+	return slices.Clone(h.routes)
 }
 
 // ServeHTTP runs the global middleware stack around the underlying ServeMux.
