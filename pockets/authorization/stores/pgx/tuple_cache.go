@@ -21,6 +21,8 @@ var TupleCacheMigrationsFS embed.FS
 const TupleCacheMigrationsDir = "tuple_cache_migrations"
 const TupleCacheMigrationSource = "authorization-cache-v2"
 
+var errHeadRowCount = fmt.Errorf("tuple cache head row missing or duplicated (apply the tuple cache migration once): %w", tuplecache.ErrUnavailable)
+
 func ExportTupleCacheMigrations(dst string) error {
 	return pgxdb.ExportMigrations(TupleCacheMigrationsFS, TupleCacheMigrationsDir, dst)
 }
@@ -242,15 +244,24 @@ func (s *tupleSource) readReceipt(ctx context.Context, q pgxdb.Querier) (string,
 			return "", "", err
 		}
 		count++
-		if count != 1 || slot != 1 || protocol != 2 || len(identity) != 32 || strings.Trim(identity, "0123456789abcdef") != "" || s.identity != "" && s.identity != identity {
-			return "", "", tuplecache.ErrUnavailable
+		if count != 1 {
+			return "", "", errHeadRowCount
+		}
+		if slot != 1 || protocol != 2 {
+			return "", "", fmt.Errorf("tuple cache head row has slot %d protocol %d, want 1/2: %w", slot, protocol, tuplecache.ErrUnavailable)
+		}
+		if len(identity) != 32 || strings.Trim(identity, "0123456789abcdef") != "" {
+			return "", "", fmt.Errorf("tuple cache head identity is not 32 lowercase hex: %w", tuplecache.ErrUnavailable)
+		}
+		if s.identity != "" && s.identity != identity {
+			return "", "", tuplecache.ErrSourceIdentity
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return "", "", err
 	}
 	if count != 1 {
-		return "", "", tuplecache.ErrUnavailable
+		return "", "", errHeadRowCount
 	}
 	return identity, receipt, nil
 }

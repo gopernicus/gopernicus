@@ -150,6 +150,9 @@ func (s *tupleSource) Acknowledge(ctx context.Context, expectedReceipt, receipt 
 			return err
 		}
 		if result.RowsAffected() != 1 {
+			if _, _, err := s.readReceipt(ctx, tx); err != nil {
+				return err
+			}
 			return tuplecache.ErrConflict
 		}
 		if len(ids) == 0 {

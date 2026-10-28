@@ -27,6 +27,8 @@ var TupleCacheMigrationsFS embed.FS
 const TupleCacheMigrationsDir = "tuple_cache_migrations"
 const TupleCacheMigrationSource = "authorization-cache-v2"
 
+var errHeadRowCount = fmt.Errorf("tuple cache head row missing or duplicated (apply the tuple cache migration once): %w", tuplecache.ErrUnavailable)
+
 func ExportTupleCacheMigrations(dst string) error {
 	return tursodb.ExportMigrations(TupleCacheMigrationsFS, TupleCacheMigrationsDir, dst)
 }
@@ -95,18 +97,27 @@ func (s *tupleSource) readHead(ctx context.Context, q tursodb.Querier) (binding,
 			return "", "", fmt.Errorf("%w: %v", tuplecache.ErrUnavailable, err)
 		}
 		count++
-		if count != 1 || slot != 1 || protocol != 2 || slotType != "integer" || protocolType != "integer" || bindingType != "text" || receiptType != "text" {
-			return "", "", tuplecache.ErrUnavailable
+		if count != 1 {
+			return "", "", errHeadRowCount
+		}
+		if slot != 1 || protocol != 2 {
+			return "", "", fmt.Errorf("tuple cache head row has slot %d protocol %d, want 1/2: %w", slot, protocol, tuplecache.ErrUnavailable)
+		}
+		if slotType != "integer" || protocolType != "integer" || bindingType != "text" || receiptType != "text" {
+			return "", "", fmt.Errorf("tuple cache head row column storage types are not integer/integer/text/text: %w", tuplecache.ErrUnavailable)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return "", "", err
 	}
-	if count != 1 || len(binding) != 32 || strings.Trim(binding, "0123456789abcdef") != "" {
-		return "", "", tuplecache.ErrUnavailable
+	if count != 1 {
+		return "", "", errHeadRowCount
+	}
+	if len(binding) != 32 || strings.Trim(binding, "0123456789abcdef") != "" {
+		return "", "", fmt.Errorf("tuple cache head binding is not 32 lowercase hex: %w", tuplecache.ErrUnavailable)
 	}
 	if s.binding != "" && binding != s.binding {
-		return "", "", tuplecache.ErrBinding
+		return "", "", tuplecache.ErrSourceIdentity
 	}
 	return binding, receipt, nil
 }

@@ -32,15 +32,23 @@ func cacheFixture(t testing.TB, install bool, poolSize ...int) (*tursodb.DB, con
 	cfg := config{}
 
 	if install {
-		data, err := TupleCacheMigrationsFS.ReadFile(TupleCacheMigrationsDir + "/0002_iam_tuple_cache.sql")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := db.InTx(ctx, func(tx *tursodb.Tx) error { _, err := tx.Exec(ctx, string(data)); return err }); err != nil {
-			t.Fatal(err)
-		}
+		installTupleCache(t, db)
 	}
 	return db, cfg
+}
+
+// installTupleCache applies the tuple cache migration, as a host would after
+// the primary authorization migrations.
+func installTupleCache(t testing.TB, db *tursodb.DB) {
+	t.Helper()
+	ctx := context.Background()
+	data, err := TupleCacheMigrationsFS.ReadFile(TupleCacheMigrationsDir + "/0002_iam_tuple_cache.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InTx(ctx, func(tx *tursodb.Tx) error { _, err := tx.Exec(ctx, string(data)); return err }); err != nil {
+		t.Fatal(err)
+	}
 }
 func cacheOptions(cfg config) []Option {
 	return []Option{func(c *config) { *c = cfg }, WithTupleCache()}
