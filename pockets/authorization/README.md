@@ -616,6 +616,16 @@ permission. Bundled role handlers supply authenticated attribution themselves.
 Records use `tuple/v2`, with event grouping, source and time. Hosts own retention
 and audit access.
 
+**Event ids.** One `EventID` groups the records of one write; each record `ID` is
+`<EventID>:<20-digit ordinal>`. `audit.NewRecordsWith(ctx, changes, now, ids)`
+mints the event id from `ids`; the zero `sdk.IDGenerator` selects the record
+default, `sdk.UUIDv7()`, and `audit.NewRecords` is that zero-value call. A
+generator that returns an empty id (`sdk.DatabaseID`) is refused with
+`sdk.ErrInvalidInput`, because every row id would collide with the next write's.
+The memory store uses the default. A custom adapter that takes a host generator
+runs `storetest.RunAuditIDs` beside `storetest.RunAudit`, passing a counting
+generator, never a constant one.
+
 ## The authorization protocol
 
 `sdk/capabilities/authorization` (imported here as `sdkauthorization`) is the

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,6 +20,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
+
+var uuidV7 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 // RunAudit exercises optional change recording on all three write surfaces.
 // factory returns a fresh bundle with an empty integrity policy and recording
@@ -94,6 +98,20 @@ func RunAudit(t *testing.T, factory func(*testing.T, bool) Repositories) {
 		}
 	})
 	t.Run("RawChanges", func(t *testing.T) { specRawAudit(t, factory(t, true)) })
+	t.Run("DefaultEventID", func(t *testing.T) {
+		r := factory(t, true)
+		requireAudit(t, r)
+		ctx := audit.WithSource(t.Context(), audit.Source{System: "default-ids"})
+		rows := []relationships.CreateRelationship{ct("doc", "d", "viewer", "user", "a"), ct("doc", "d", "viewer", "user", "b")}
+		if err := r.Relationships.CreateRelationships(ctx, rows); err != nil {
+			t.Fatal(err)
+		}
+		got := readAudit(t, r.Audit)
+		if len(got) != 2 || !uuidV7.MatchString(got[0].EventID) {
+			t.Fatalf("default event id is not a version-7 UUID: %+v", got)
+		}
+		requireEventRows(t, got, got[0].EventID)
+	})
 	t.Run("OneDeltaAcrossFacades", func(t *testing.T) {
 		r := factory(t, true)
 		ctx := audit.WithSource(t.Context(), audit.Source{System: "canonical-fixture"})
@@ -141,6 +159,93 @@ func RunAudit(t *testing.T, factory func(*testing.T, bool) Repositories) {
 	t.Run("PurgeBound", func(t *testing.T) { specAuditPurgeBound(t, factory(t, true)) })
 	t.Run("PagingAndOwnership", func(t *testing.T) { specAuditPaging(t, factory(t, true)) })
 	t.Run("CorrelationIDs", func(t *testing.T) { specAuditCorrelation(t, factory(t, true)) })
+}
+
+// RunAuditIDs proves a host generator reaches every recorded event ID.
+// factory returns a fresh recording bundle (as RunAudit's factory does with
+// recording enabled) whose store was built with ids. A COUNTING generator is
+// supplied, never a constant one: a constant id collides on the row key.
+func RunAuditIDs(t *testing.T, factory func(*testing.T, sdk.IDGenerator) Repositories) {
+	t.Run("HostGenerator", func(t *testing.T) {
+		var (
+			mu sync.Mutex
+			n  int
+		)
+		r := factory(t, sdk.NewIDGenerator(func() (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			n++
+			return "fixed-" + strconv.Itoa(n), nil
+		}))
+		requireAudit(t, r)
+		ctx := audit.WithSource(t.Context(), audit.Source{System: "host-ids"})
+		writes := []func() error{
+			func() error {
+				return r.Relationships.CreateRelationships(ctx, []relationships.CreateRelationship{ct("doc", "raw", "viewer", "user", "a"), ct("doc", "raw", "viewer", "user", "b")})
+			},
+			func() error {
+				return assignRole(ctx, r.Tuples, roles.Assignment{SubjectType: "user", SubjectID: "u", Role: "editor", Scope: fixtureScope("doc", "role")})
+			},
+			func() error {
+				_, err := r.Mutations.Apply(ctx, grant("command", "viewer", "u"), nil)
+				return err
+			},
+		}
+		seen := map[string]bool{}
+		for i, write := range writes {
+			before := map[string]bool{}
+			for _, row := range readAudit(t, r.Audit) {
+				before[row.ID] = true
+			}
+			if err := write(); err != nil {
+				t.Fatalf("write %d: %v", i, err)
+			}
+			var added []audit.Record
+			for _, row := range readAudit(t, r.Audit) {
+				if !before[row.ID] {
+					added = append(added, row)
+				}
+			}
+			if len(added) == 0 || !strings.HasPrefix(added[0].EventID, "fixed-") || seen[added[0].EventID] {
+				t.Fatalf("write %d did not record a fresh host event id: %+v", i, added)
+			}
+			seen[added[0].EventID] = true
+			requireEventRows(t, added, added[0].EventID)
+		}
+	})
+	t.Run("EmptyMintRefused", func(t *testing.T) {
+		r := factory(t, sdk.NewIDGenerator(sdk.DatabaseID))
+		requireAudit(t, r)
+		ctx := audit.WithSource(t.Context(), audit.Source{System: "empty-ids"})
+		row := ct("doc", "empty", "viewer", "user", "u")
+		if err := r.Relationships.CreateRelationships(ctx, []relationships.CreateRelationship{row}); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("raw write with an empty event id: %v", err)
+		}
+		if result, err := r.Mutations.Apply(ctx, grant("empty", "viewer", "u"), nil); result != nil || !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("command with an empty event id: %+v %v", result, err)
+		}
+		if relationExists(t, r, "empty", "viewer", "u") || len(readAudit(t, r.Audit)) != 0 {
+			t.Fatal("refused write published state")
+		}
+	})
+}
+
+// requireEventRows asserts rows are one event's whole record set: every row
+// carries eventID and the IDs are eventID:<ordinal> for ordinals 1..len(rows).
+func requireEventRows(t *testing.T, rows []audit.Record, eventID string) {
+	t.Helper()
+	var ids, want []string
+	for i, row := range rows {
+		if row.EventID != eventID {
+			t.Fatalf("one write split into events %q and %q", eventID, row.EventID)
+		}
+		ids = append(ids, row.ID)
+		want = append(want, fmt.Sprintf("%s:%020d", eventID, i+1))
+	}
+	slices.Sort(ids)
+	if !slices.Equal(ids, want) {
+		t.Fatalf("row ids = %q, want %q", ids, want)
+	}
 }
 func requireAudit(t *testing.T, r Repositories) {
 	t.Helper()

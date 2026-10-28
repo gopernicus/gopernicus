@@ -20,6 +20,10 @@ const MaxReasonLen = 1024
 // MaxCorrelationIDLen bounds Source.RequestID and Source.TraceID in bytes.
 const MaxCorrelationIDLen = 128
 
+// recordIDs is the record-class default. One shared generator keeps event IDs
+// minted in this process in mint order.
+var recordIDs = sdk.UUIDv7()
+
 // Source attributes a change to exactly one complete actor pair or an explicit
 // system source. Reason is optional UTF-8 context of at most MaxReasonLen bytes;
 // NUL is forbidden so all bundled stores can persist it directly. RequestID and
@@ -171,11 +175,19 @@ type RecordingReporter interface {
 	AuditRecording() bool
 }
 
-// NewRecords validates and owns actual deltas, removes duplicate changes and
-// cancels opposing changes to the same fact, then sorts by fact identity. One
-// generated EventID groups all remaining changes. No net change yields no records.
-// OccurredAt is UTC microsecond precision for consistent datastore round trips.
+// NewRecords is NewRecordsWith using the record default generator (UUIDv7).
 func NewRecords(ctx context.Context, changes []Change, now time.Time) ([]Record, error) {
+	return NewRecordsWith(ctx, changes, now, sdk.IDGenerator{})
+}
+
+// NewRecordsWith validates and owns actual deltas, removes duplicate changes and
+// cancels opposing changes to the same fact, then sorts by fact identity. One
+// EventID minted from ids groups all remaining changes; the zero IDGenerator
+// selects sdk.UUIDv7. An empty mint is refused with sdk.ErrInvalidInput: every
+// row ID would be ":<ordinal>" and collide with the next write's. No net change
+// yields no records and mints nothing. OccurredAt is UTC microsecond precision
+// for consistent datastore round trips.
+func NewRecordsWith(ctx context.Context, changes []Change, now time.Time, ids sdk.IDGenerator) ([]Record, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -218,9 +230,12 @@ func NewRecords(ctx context.Context, changes []Change, now time.Time) ([]Record,
 	if len(keys) == 0 {
 		return []Record{}, nil
 	}
-	eventID, err := (sdk.IDGenerator{}).Generate()
+	eventID, err := ids.Or(recordIDs).Generate()
 	if err != nil {
 		return nil, err
+	}
+	if eventID == "" {
+		return nil, fmt.Errorf("audit event id required; the generator returned none: %w", sdk.ErrInvalidInput)
 	}
 	occurredAt := now.UTC().Truncate(time.Microsecond)
 	out := make([]Record, 0, len(keys))
