@@ -589,3 +589,25 @@ func TestAdminResendReportsRealState(t *testing.T) {
 		}
 	})
 }
+
+// TestResendGenerationIgnoresTheEntityIDs pins the resend generation token to
+// the unconditional secret generator: under WithIDs(sdk.DatabaseID) every
+// resend still gets its own non-empty generation, so a later resend never
+// collapses into an earlier command's idempotency key.
+func TestResendGenerationIgnoresTheEntityIDs(t *testing.T) {
+	h := newResendHarness(t, ratelimiter.NewMemory())
+	useIDs(h.svc, h.events, sdk.NewIDGenerator(sdk.DatabaseID))
+	q := h.captureRequestPath()
+	if err := h.svc.ResendVerification(context.Background(), "pin-target@example.com"); err != nil {
+		t.Fatalf("ResendVerification: %v", err)
+	}
+	enqueued, _ := q.commands()
+	if len(enqueued) != 1 {
+		t.Fatalf("submitted %d commands, want 1", len(enqueued))
+	}
+	key := enqueued[0].IdempotencyKey
+	generation := key[strings.LastIndex(key, ":")+1:]
+	if !isNanoID(generation) {
+		t.Errorf("resend generation %q (key %q) is not a full NanoID", generation, key)
+	}
+}

@@ -99,7 +99,10 @@ type extStore struct {
 	userGets       atomic.Int64
 	provisionCalls atomic.Int64
 	provisioned    []user.InitialCredentials
-	seq            int
+	// proposed keeps each user as the engine handed it to Provision, before
+	// this fake assigns its own id.
+	proposed []user.User
+	seq      int
 }
 
 func newExtStore() *extStore {
@@ -115,6 +118,7 @@ func (s extUsers) Provision(_ context.Context, u user.User, ident identifier.Ide
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.provisioned = append(s.provisioned, creds)
+	s.proposed = append(s.proposed, u)
 	if creds.External != nil {
 		if _, taken := s.subjects[creds.External.Provider+"|"+creds.External.Subject]; taken {
 			return user.User{}, identifier.Identifier{}, sdk.ErrAlreadyExists
@@ -280,7 +284,7 @@ type extHarness struct {
 	clock       *extClock
 }
 
-func newExtHarness(t *testing.T, configure func(*ExternalConfig)) *extHarness {
+func newExtHarness(t *testing.T, configure func(*ExternalConfig), opts ...ExternalOption) *extHarness {
 	t.Helper()
 	h := &extHarness{
 		store:       newExtStore(),
@@ -304,7 +308,7 @@ func newExtHarness(t *testing.T, configure func(*ExternalConfig)) *extHarness {
 		ExternalSubjects: extSubjects{h.store},
 		SecurityEvents:   h.events,
 		Invitations:      h.invitations,
-	}, cfg, environment.ModeDevelopment, WithExternalClock(h.clock.Now))
+	}, cfg, environment.ModeDevelopment, append([]ExternalOption{WithExternalClock(h.clock.Now)}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -153,3 +153,20 @@ func TestAuthorizationValidationBeforeAnyIdentityLookup(t *testing.T) {
 		t.Fatal("PKCE verifier validation")
 	}
 }
+
+// TestFallbackRecorderMintsTheRecordDefault pins the OAuth2 fallback recorder:
+// built with the zero generator when no WithSecurityEventRecorder is supplied,
+// it still mints UUIDv7 event ids because NewRecorder resolves the record-class
+// default itself.
+func TestFallbackRecorderMintsTheRecordDefault(t *testing.T) {
+	events := &auditEvents{}
+	s := auditService(t, events)
+	s.audit(context.Background(), TypeConsentApproved, "u-1", "sess-1", "https://client.example")
+	if len(events.created) != 1 {
+		t.Fatalf("recorded %d rows, want 1", len(events.created))
+	}
+	id := events.created[0].ID
+	if len(id) != 36 || id[14] != '7' || strings.Trim(id, "0123456789abcdef-") != "" {
+		t.Errorf("fallback event id %q is not a UUIDv7", id)
+	}
+}

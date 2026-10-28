@@ -100,8 +100,8 @@ func (u Uses) requiresVerification() bool {
 // boolean) needed by lifecycle and future risk policy; its zero value means
 // unverified. ReplacedAt's zero value means active.
 type Identifier struct {
-	// ID is the app-minted primary key, empty under the greenfield DB-generated
-	// convention (sdk.DatabaseID) so the store assigns it inline (design §2.1).
+	// ID is the primary key: the service mints it from the record-class
+	// generator; empty (sdk.DatabaseID) leaves it to the store (design §2.1).
 	ID string
 	// UserID is the owning subject. It may be empty at construction for the
 	// initial registration identifier, whose owning user is inserted in the same

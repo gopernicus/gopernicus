@@ -222,7 +222,12 @@ func (s *Service) issueChallenge(ctx context.Context, userID, purpose string, op
 		}
 	}
 
+	id, err := s.recordIDs.Generate()
+	if err != nil {
+		return "", challenge.Challenge{}, err
+	}
 	ch := challenge.Challenge{
+		ID:             id,
 		SubjectKey:     o.subjectKey,
 		UserID:         userID,
 		Purpose:        purpose,

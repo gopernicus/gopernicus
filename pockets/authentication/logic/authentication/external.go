@@ -83,6 +83,7 @@ type ExternalAuthenticator struct {
 	normalizer  identifier.Normalizer
 	keyer       identifierKeyer
 	ids         sdk.IDGenerator
+	recordIDs   sdk.IDGenerator
 	now         func() time.Time
 	logger      *slog.Logger
 	// registration is the host's IdentityConfig.Registration (open for an
@@ -211,6 +212,7 @@ func newExternalAuthenticator(repos ExternalRepositories, cfg ExternalConfig, mo
 		normalizer:  o.normalizer,
 		keyer:       o.keyer,
 		ids:         o.ids,
+		recordIDs:   o.ids.Or(sdk.UUIDv7()),
 		now:         o.clock,
 		logger:      o.logger,
 		ttl:         cfg.RevocationCacheTTL,
@@ -833,7 +835,7 @@ func (e *ExternalAuthenticator) provision(ctx context.Context, p externalProvide
 	if verified {
 		verifiedAt = now
 	}
-	ident, err := identifier.New(e.ids, e.normalizer, "", kind, value, identifier.Uses{Notification: true}, true, verifiedAt, now)
+	ident, err := identifier.New(e.recordIDs, e.normalizer, "", kind, value, identifier.Uses{Notification: true}, true, verifiedAt, now)
 	if err != nil {
 		return externalsubject.ExternalSubject{}, e.deny(ctx, p, "", externalReasonInvalidIdentifier)
 	}

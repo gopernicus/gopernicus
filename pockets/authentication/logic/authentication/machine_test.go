@@ -667,3 +667,28 @@ func TestMachineLifecycleAuditFailureNeverFailsOp(t *testing.T) {
 		t.Errorf("a failing repo recorded %d events, want 0", h.events.count())
 	}
 }
+
+// TestAPIKeySecretIgnoresTheEntityIDs pins the API-key prefix and secret to the
+// unconditional secret generator: under WithIDs(sdk.DatabaseID) the key's record
+// id is left to the store, but the prefix and secret are still minted in full.
+func TestAPIKeySecretIgnoresTheEntityIDs(t *testing.T) {
+	h := newMachineHarness(t)
+	ctx := context.Background()
+	sa, err := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
+	if err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+	useIDs(h.svc, h.events, sdk.NewIDGenerator(sdk.DatabaseID))
+	key, raw, err := h.svc.MintAPIKey(ctx, sa.ID, "deploy", time.Time{})
+	if err != nil {
+		t.Fatalf("MintAPIKey: %v", err)
+	}
+	if key.ID != "" {
+		t.Errorf("key id = %q, want the DatabaseID empty id", key.ID)
+	}
+	prefix, secret, ok := strings.Cut(raw, "_")
+	if !ok || prefix != key.KeyPrefix || len(prefix) != apiKeyPrefixLen || len(secret) != 2*sdk.DefaultIDLength ||
+		strings.Trim(prefix+secret, sdk.DefaultIDAlphabet) != "" {
+		t.Errorf("raw key %q (prefix %q) is not a full-entropy secret", raw, key.KeyPrefix)
+	}
+}

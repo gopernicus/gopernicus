@@ -402,8 +402,11 @@ func (f *fakeIdentifiers) ApplyVerifiedChange(_ context.Context, input identifie
 			}
 		}
 	}
-	f.seq++
-	id := "id" + itoa(f.seq)
+	id := input.ID
+	if id == "" {
+		f.seq++
+		id = "id" + itoa(f.seq)
+	}
 	it := identifier.Identifier{
 		ID:                  id,
 		UserID:              input.UserID,

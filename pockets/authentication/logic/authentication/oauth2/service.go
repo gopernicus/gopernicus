@@ -96,6 +96,8 @@ func New(repos Repositories, signer cryptids.JWTSigner, resolver ClientResolver,
 	cfg.ConfidentialSecretHashes = slices.Clone(cfg.ConfidentialSecretHashes)
 	events := o.recorder
 	if events == nil {
+		// The zero generator selects the record-class default (UUIDv7) inside
+		// NewRecorder; a host wanting its own ids supplies WithSecurityEventRecorder.
 		events = securityevent.NewRecorder(repos.SecurityEvents, sdk.IDGenerator{}, o.now, o.logger)
 	}
 	return &Service{repos: repos, signer: signer, resolver: resolver, verifier: verifier, config: cfg, now: o.now, logger: o.logger, events: events}, nil

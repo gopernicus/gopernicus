@@ -411,7 +411,7 @@ func TestObjectKeysNeverOverwrite(t *testing.T) {
 	repo.seedRail(3, testNow.Add(-500*24*time.Hour))
 	sink, events := newFakeSink(), &fakeEvents{}
 	svc, _ := newTestService(t, Repositories{Maintenance: repo, SecurityEvents: events}, Config{ArchiveSink: sink}, newClock())
-	ids := []string{"taken", "taken", "fresh", "row-id"}
+	ids := []string{"taken", "taken", "fresh"}
 	svc.objectID = func() (string, error) {
 		id := ids[0]
 		ids = ids[1:]
@@ -618,5 +618,47 @@ func TestStartJitterIsAtMostATenth(t *testing.T) {
 	}
 	if startJitter(5*time.Nanosecond) != 0 {
 		t.Error("a sub-tenth interval must not jitter")
+	}
+}
+
+// TestArchiveObjectKeysAreSecrets pins the archive object keys to the
+// unconditional secret generator: maintenance takes no entity-ID strategy, so
+// no WithIDs (sdk.DatabaseID included) can empty or shorten a key.
+func TestArchiveObjectKeysAreSecrets(t *testing.T) {
+	svc, _ := newTestService(t, Repositories{Maintenance: newFakeRepo()}, Config{}, newClock())
+	a, errA := svc.objectID()
+	b, errB := svc.objectID()
+	if errA != nil || errB != nil {
+		t.Fatalf("objectID: %v, %v", errA, errB)
+	}
+	for _, key := range []string{a, b} {
+		if len(key) != sdk.DefaultIDLength || strings.Trim(key, sdk.DefaultIDAlphabet) != "" {
+			t.Errorf("archive key %q is not a full NanoID", key)
+		}
+	}
+	if a == b {
+		t.Errorf("two archive keys repeated: %q", a)
+	}
+}
+
+// TestArchivedRowIDIsARecordID pins the archive marker row to the record class:
+// its security_events.id is a UUIDv7 from the row generator, never the secret
+// generator that mints the object key it points at.
+func TestArchivedRowIDIsARecordID(t *testing.T) {
+	repo := newFakeRepo()
+	repo.seedRail(3, testNow.Add(-450*24*time.Hour))
+	sink, events := newFakeSink(), &fakeEvents{}
+	svc, _ := newTestService(t, Repositories{Maintenance: repo, SecurityEvents: events}, Config{ArchiveSink: sink}, newClock())
+	rep, _ := svc.Pass(context.Background())
+	if st := stepOf(t, rep, StepSecurityEvents); st.Err != nil {
+		t.Fatal(st.Err)
+	}
+	archived := events.archived()
+	if len(archived) != 1 {
+		t.Fatalf("archived rows = %d, want 1", len(archived))
+	}
+	id := archived[0].ID
+	if len(id) != 36 || id[14] != '7' || strings.Trim(id, "0123456789abcdef-") != "" {
+		t.Errorf("archived row id %q is not a UUIDv7", id)
 	}
 }

@@ -167,7 +167,10 @@ func WithExternalLogger(value *slog.Logger) ExternalOption {
 	return func(o *externalOptions) { o.logger = value }
 }
 
-// WithExternalIDs supplies the entity-ID strategy for provisioned rows.
+// WithExternalIDs supplies the entity-ID strategy for provisioned rows. The
+// zero value selects the class default: NanoID for users (identities), UUIDv7
+// for identifiers and security events (records); a configured generator wins
+// for both.
 func WithExternalIDs(value sdk.IDGenerator) ExternalOption {
 	return func(o *externalOptions) { o.ids = value }
 }
