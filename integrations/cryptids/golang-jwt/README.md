@@ -45,6 +45,47 @@ method before returning the key. Different HMAC variants, asymmetric methods,
 and `alg=none` are rejected. Strict base64url decoding rejects padding and
 noncanonical signature padding bits.
 
+## Key rings and rotation
+
+`NewRing(ring cryptids.KeyRing, opts ...RingOption) (*RingSigner, error)` builds
+an HS256-only signer over an sdk key ring (parse one with
+`cryptids.ParseKeyRingMinimum(keys, active, 32)`). Every key must be at least
+32 bytes; keys are copied at construction. `RingSigner` implements
+`cryptids.JWTSigner`.
+
+| Member | Behavior |
+|---|---|
+| `RingSigner.Sign` | Signs under the active key and writes its id as the `kid` header. Claims, `exp` and `iat` behave exactly as `Signer.Sign`. |
+| `RingSigner.Verify` | Selects the key by `kid` and then applies exactly `Signer.Verify`'s method, encoding and time checks (one shared code path). The HS256 pin runs before `kid` is read. |
+| `WithLegacyKeyID(id string) RingOption` | Names the ring key that verifies a token with no `kid`, which is what a single-key `Signer` writes. The id must be in the ring (`cryptids.ErrLegacyKeyMissing`). While that key is also active, `Sign` writes no `kid`. |
+| `ActiveKeyID()`, `KeyIDs()`, `LegacyKeyID()` | Report the ring's configuration: `KeyIDs` is a sorted copy, and `LegacyKeyID` is `""` without the option. This is the authentication pocket's `KeyRingReporter` shape. |
+| `ErrUnknownKeyID` | The `kid` is not a string, is malformed, or names a key that is not in the ring. No other key is tried. The error repeats the id only when it has key-id syntax. |
+| `ErrMissingKeyID` | The token has no `kid` and the ring has no legacy key. |
+
+To move a host from `New(secret)` to a ring without logging anyone out, roll out
+in three phases:
+
+1. **Phase (a).** Join the old secret under an id such as `legacy`, add the new
+   key, keep `legacy` active, and pass `WithLegacyKeyID("legacy")`. The ring
+   writes what `Signer` writes and reads both shapes, so instances that have not
+   been reconfigured yet keep working.
+2. **Phase (b).** Once the whole fleet runs (a), make the new key active.
+   Tokens now carry its `kid`, and tokens without a `kid` still verify under
+   `legacy`.
+3. **Phase (c).** When the longest-lived token signed before (b) has expired,
+   drop `legacy` and the option. Tokens without a `kid` are then refused.
+
+Rolling back code below this version after phase (b) is lossy: a single-key
+`Signer` ignores `kid` and rejects every token signed under the new key.
+
+Rings support HS256 only. A host whose `Signer` was built with
+`WithMethod(HS384|HS512)` cannot read its old tokens through a ring. It must stay
+on `Signer` or accept that every session signs in again once.
+
+`RingSigner` formats and logs its method, active id, key count, and whether a
+legacy id is set. It never prints a key. Its errors never contain key bytes or
+token contents.
+
 ## Claims and time checks
 
 Claims must be a JSON object containing numeric `exp`. This expiration
@@ -71,7 +112,8 @@ audience, identity, session, and authorization requirements.
 Run `go test ./...`. Tests cover method/key boundaries, zero-value use,
 authoritative signing times, malformed/null claims, clock tolerance, wrong keys,
 algorithm confusion, strict encoding, and upstream interoperability for all
-three supported methods.
+three supported methods, plus the ring's three rotation phases, `kid` selection,
+legacy reads, and redaction.
 
 A [saved legacy SDK token](testdata/README.md) proves compatibility with ordinary
 HS256 tokens minted before the SDK implementation was retired. The fixture uses
