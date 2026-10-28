@@ -45,7 +45,7 @@ const (
 	erasePageSize    = 100
 )
 
-func authzSchema() decisions.Model {
+func authorizationModel() decisions.Model {
 	return decisions.NewSchema([]decisions.ResourceSchema{
 		{Name: "document", Def: decisions.ResourceTypeDef{
 			Relations: map[string]decisions.RelationDef{
@@ -80,7 +80,7 @@ func authzSchema() decisions.Model {
 	})
 }
 
-// authzIntegrityPolicy is the host's integrity invariant: the ratified owner minimum
+// authorizationIntegrityPolicy is the host's integrity invariant: the ratified owner minimum
 // (DefaultIntegrityPolicy's owner, min-1 direct anchor) applied to the ownable `project`
 // resource type. It deliberately does NOT extend to `platform` — the honest documented
 // reason for narrowing the default: `platform` is a flat admin-list type with no `owner`
@@ -92,7 +92,7 @@ func authzSchema() decisions.Model {
 // disabled last-owner protection entirely to let member invitations precede an owner) is
 // gone, replaced by a boot-time owner seed + this real invariant.
 // mutations.DefaultIntegrityPolicyFor(model) derives the same per-type owner rules from a model.
-func authzIntegrityPolicy() mutations.IntegrityPolicy {
+func authorizationIntegrityPolicy() mutations.IntegrityPolicy {
 	return mutations.IntegrityPolicy{
 		Rules: []mutations.IntegrityRule{{ResourceType: demoResourceType, Relation: "owner", MinSubjects: 1}},
 	}
@@ -108,7 +108,7 @@ func authzIntegrityPolicy() mutations.IntegrityPolicy {
 // records none. The role routes and GET /authorization/audit share the one
 // gate; a role write naming the caller itself is refused before host policy.
 func newAuthorization(roleRoutesGate web.Middleware, securityEvents securityevents.Recorder, mode environment.Mode, logger *slog.Logger) (authorization.Components, error) {
-	store := authzmem.New(authzmem.WithIntegrityPolicy(authzIntegrityPolicy()), authzmem.WithAudit())
+	store := authzmem.New(authzmem.WithIntegrityPolicy(authorizationIntegrityPolicy()), authzmem.WithAudit())
 	var observer decisions.DecisionObserver
 	var auditReads authorizationhttp.AuditReadObserver
 	if securityEvents != nil {
@@ -124,7 +124,7 @@ func newAuthorization(roleRoutesGate web.Middleware, securityEvents securityeven
 			Audit:           store.Audit(),
 		},
 		authorization.WithLogger(logger),
-		authorization.WithModel(authzSchema()),
+		authorization.WithModel(authorizationModel()),
 		authorization.WithRuntimeMode(mode),
 		authorization.WithDecisionObserver(observer),
 	)
@@ -207,7 +207,7 @@ func guardRank(policy mutations.IntegrityPolicy, a roles.Assignment) int {
 //  2. browserSafe — the auth pocket's RequireBrowserSafeMutation: a cookie POST
 //     needs an allowlisted Origin and the X-CSRF-Token double-submit; GETs and
 //     bearer-only calls pass.
-//  3. authorize — the platform-admin coordinate already declared in authzSchema
+//  3. authorize — the platform-admin coordinate already declared in authorizationModel
 //     (platform/admin on platform:main), the same one MachineRoutesGate names.
 func roleAdministrationGate(authenticate, browserSafe, authorize web.Middleware) web.Middleware {
 	return func(next http.Handler) http.Handler {

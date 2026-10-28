@@ -320,7 +320,7 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	// The bundled machine-identity lifecycle routes (/auth/service-accounts*,
 	// /auth/api-keys/{id}/revoke) mint and revoke credentials, so the pocket refuses to
 	// guess a policy: with MachineRoutesGate nil they are NOT mounted (404) and NewService
-	// WARNs. This host names the platform-admin coordinate already declared in authzSchema
+	// WARNs. This host names the platform-admin coordinate already declared in authorizationModel
 	// (platform/admin on platform:main), so each route runs the pocket's
 	// MachineLifecycle authenticator, then this gate — human credential, live
 	// session, platform admin. Set here rather than
@@ -336,7 +336,7 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	// The erase revokes the person's role assignments and relationships in every
 	// scope first, through the audited unassign command with the administrator
 	// as actor; the last project owner refuses it as 409 with nothing erased.
-	authCfg.BeforeErase = beforeErase(authzComponents.Roles, authzComponents.Mutations, authzIntegrityPolicy())
+	authCfg.BeforeErase = beforeErase(authzComponents.Roles, authzComponents.Mutations, authorizationIntegrityPolicy())
 	// The security-event listing (SOC 2 S7), behind the same check with the
 	// action UserAdminReadAudit; each page read records one audit_read row.
 	authCfg.SecurityEventsRoute = true

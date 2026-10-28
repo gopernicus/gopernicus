@@ -35,7 +35,7 @@ var apiKeySearchNames = []string{
 // machineHost is newLinkHost's composition plus the authorization engine whose
 // platform-admin gate the machine-identity lifecycle routes run behind. The host's
 // run() sets authenticationConfig.MachineRoutesGate from the same coordinate
-// (platform/admin on platform:main, declared in authzSchema); with the gate unset the
+// (platform/admin on platform:main, declared in authorizationModel); with the gate unset the
 // five routes are not mounted at all, so every test below would 404.
 type machineHost struct {
 	*linkHost
