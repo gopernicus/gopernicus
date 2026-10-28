@@ -17,7 +17,8 @@ import (
 // EraseTimeout bounds the erase transaction. EraseUser runs the store call
 // detached from the caller's cancellation — a client that disconnects cannot
 // roll back an erasure a moment from commit and make every retry repeat it —
-// so this is what stops a hung store from holding the request.
+// so this is what stops a hung store from holding the request. It also bounds
+// a BeforeErase hook, which runs under the request context instead.
 const EraseTimeout = 30 * time.Second
 
 // ErrUserAdminUnavailable is returned by the user-administration service methods
@@ -35,10 +36,24 @@ var ErrUserErasureUnavailable = fmt.Errorf("auth: user erasure repository is not
 // It wraps sdk.ErrInvalidInput (400).
 var ErrEraseSelf = fmt.Errorf("auth: an administrator cannot erase their own account: %w", sdk.ErrInvalidInput)
 
+// ErrEraseRefusedByHook is returned by EraseUser, wrapped together with the
+// hook's own error, when the host's BeforeErase hook refuses the erase. It has
+// no sdk kind of its own: the hook error's kind governs the status, so an
+// unkinded hook error is a 500. Checked with errors.Is.
+var ErrEraseRefusedByHook = errors.New("auth: erase refused by the host's BeforeErase hook")
+
 // ErrSecurityEventsUnavailable is returned by ListSecurityEvents when the
 // security-event repository is not wired. It wraps sdk.ErrNotFound: an unwired
 // capability is absent, not forbidden.
 var ErrSecurityEventsUnavailable = fmt.Errorf("auth: security-event repository is not wired: %w", sdk.ErrNotFound)
+
+// EraseHook is the host's pre-erase step (AdministrationConfig.BeforeErase):
+// EraseUser calls it after its own checks and before the store transaction,
+// with the administrator and the target id. A non-nil error refuses the erase
+// with nothing erased. It is written over sdk.Principal so a host function
+// needs no import of this package; an unnamed func of the same shape is
+// assignable.
+type EraseHook func(ctx context.Context, actor sdk.Principal, userID string) error
 
 // UserAdminEnabled reports whether the administration repository is wired. The
 // transport registers the bundled admin routes only when this is true AND a host
@@ -264,6 +279,18 @@ func (s *Service) UserErasureEnabled() bool { return s.userErasure != nil }
 // provider subject signing in again provisions a fresh user. Deactivate to bar
 // a subject.
 //
+// With a BeforeErase hook (WithErasure) the order is: the checks above, then
+// the hook under the request context bounded by EraseTimeout, then the store
+// transaction. The two are never atomic; the hook runs first because its work
+// (an authorization cleanup, say) is reversible and the erase is not. A hook
+// error refuses the erase with nothing erased, as ErrEraseRefusedByHook wrapped
+// with the hook's error, and logs one WARN with the ids and the error kind. The
+// hook runs on every call, a repeat included, so a re-run completes a
+// half-finished erase and sweeps anything granted after the last one. The
+// accepting-claim check and an unknown id are answered by the store, AFTER the
+// hook: a store refusal after a successful hook logs a WARN, and the operator
+// settles the cause and re-runs.
+//
 // TRUSTED: it applies NO authorization — see ListUsers.
 func (s *Service) EraseUser(ctx context.Context, actor Principal, id string) (user.Summary, user.Erasure, error) {
 	if s.userErasure == nil {
@@ -278,8 +305,12 @@ func (s *Service) EraseUser(ctx context.Context, actor Principal, id string) (us
 	if actor.ID == id {
 		return user.Summary{}, user.Erasure{}, ErrEraseSelf
 	}
+	if err := s.runBeforeErase(ctx, actor, id); err != nil {
+		return user.Summary{}, user.Erasure{}, err
+	}
 	keys, err := s.magicLinkSubjectKeys(ctx, id)
 	if err != nil {
+		s.warnRefusedAfterHook(actor, id, err)
 		return user.Summary{}, user.Erasure{}, err
 	}
 	evt, _ := s.securityEvents.Prepare(ctx, securityevent.Input{
@@ -292,6 +323,7 @@ func (s *Service) EraseUser(ctx context.Context, actor Principal, id string) (us
 	defer cancel()
 	erasure, err := s.userErasure.Erase(storeCtx, user.EraseInput{ID: id, Now: s.now().UTC(), SubjectKeys: keys, Event: evt, TOTP: s.TOTPEnabled(), Passkeys: s.PasskeysEnabled()})
 	if err != nil {
+		s.warnRefusedAfterHook(actor, id, err)
 		return user.Summary{}, user.Erasure{}, err
 	}
 	if s.TOTPEnabled() {
@@ -304,6 +336,32 @@ func (s *Service) EraseUser(ctx context.Context, actor Principal, id string) (us
 		return user.Summary{}, erasure, err
 	}
 	return summary, erasure, nil
+}
+
+// runBeforeErase calls the host's BeforeErase hook, when one is set, under the
+// request context bounded by EraseTimeout: a dropped request stops it, and
+// nothing irreversible has happened yet. The WARN carries the ids and the
+// error kind only, never the hook's text.
+func (s *Service) runBeforeErase(ctx context.Context, actor Principal, id string) error {
+	if s.beforeErase == nil {
+		return nil
+	}
+	hookCtx, cancel := context.WithTimeout(ctx, EraseTimeout)
+	defer cancel()
+	if err := s.beforeErase(hookCtx, actor, id); err != nil {
+		s.logger.Warn("auth: erase refused by BeforeErase", "user_id", id, "actor_id", actor.ID, "error_kind", ErrorKind(err))
+		return fmt.Errorf("%w: %w", ErrEraseRefusedByHook, err)
+	}
+	return nil
+}
+
+// warnRefusedAfterHook makes the state a successful hook leaves behind a
+// refused erase visible: the hook's work is done and the user is not erased.
+func (s *Service) warnRefusedAfterHook(actor Principal, id string, err error) {
+	if s.beforeErase == nil {
+		return
+	}
+	s.logger.Warn("auth: erase refused after BeforeErase ran", "user_id", id, "actor_id", actor.ID, "error_kind", ErrorKind(err))
 }
 
 // magicLinkSubjectKeys returns the challenge subject keys of id's active

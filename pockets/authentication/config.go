@@ -172,6 +172,7 @@ type constructorConfig struct {
 	Maintenance                   maintenance.Config
 	MaintenanceRunnerAcknowledged bool
 	UserErasureRoute              bool
+	BeforeErase                   authlogic.EraseHook
 	SecurityEventsRoute           bool
 	MFARequired                   MFARequirement
 	MFAMethods                    []MFAMethod
@@ -1088,6 +1089,26 @@ type AdministrationConfig struct {
 	// without both → ErrUserErasureRouteRequires. A step-up requirement is host
 	// policy, keyed on the action.
 	UserErasureRoute bool
+	// BeforeErase is the host's pre-erase hook (#256): EraseUser, the route
+	// included, calls it after its own checks (the port, the directory, the id,
+	// self-erase) and before the store transaction, with the administrator and
+	// the target id, under the request context bounded by EraseTimeout. A
+	// non-nil error refuses the erase with nothing erased; the route maps it by
+	// its sdk kind (an unkinded error is a 500). Typical: revoke the target's
+	// authorization role assignments in every scope.
+	//
+	// The hook and the erase are two transactions, never atomic: the hook runs
+	// first because its work is reversible and the erase is not. It runs on
+	// every call, a repeat included, so re-running the erase completes a
+	// half-finished one and sweeps a grant that raced in. The store answers the
+	// accepting-claim check and an unknown id AFTER the hook: a 409 after the
+	// roles vanished means the hook ran — settle the claim, re-run. The hook
+	// must be idempotent, cover every scope, attempt integrity-protected
+	// relations first, stamp the administrator as the audit actor, return the
+	// pocket error unwrapped, and never run inside a transaction of its own
+	// store. Set without Repositories.UserErasure →
+	// ErrBeforeEraseWithoutErasure. Nil runs no hook.
+	BeforeErase authlogic.EraseHook
 	// SecurityEventsRoute opts in to GET /auth/admin/security-events (SOC 2 S7),
 	// the cursor-paged security-event listing, mounted under the admin gates with
 	// the action UserAdminReadAudit; each page read records one audit_read row.
@@ -1138,6 +1159,7 @@ func WithAdministration(value AdministrationConfig) Option {
 		c.UserAdminCheck = value.UserAdminCheck
 		c.ListStrategy = value.ListStrategy
 		c.UserErasureRoute = value.UserErasureRoute
+		c.BeforeErase = value.BeforeErase
 		c.SecurityEventsRoute = value.SecurityEventsRoute
 		c.GlobalSessionRevocationRoute = value.GlobalSessionRevocationRoute
 		c.ServiceAccountStatus = value.ServiceAccountStatus

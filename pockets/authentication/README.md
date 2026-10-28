@@ -4188,8 +4188,60 @@ refresh, and hydration → idempotent replay → reactivate → log in again) is
 ### Erasure
 
 `Repositories.UserErasure` (`user.EraseRepository`, OPTIONAL) erases a person in
-**one store transaction**, through `EraseUser` or the opt-in route. The order
-is the contract, because each step depends on the locks the earlier ones took:
+**one store transaction**, through `EraseUser` or the opt-in route.
+
+**Before the transaction: `BeforeErase`.** `AdministrationConfig.BeforeErase`
+(`func(ctx, actor sdk.Principal, userID string) error`, OPTIONAL) is the host's
+pre-erase step, typically revoking the person's authorization role assignments.
+`EraseUser` (the route included) calls it after its own checks (the port, the
+directory, the id, self-erase) and before the store transaction, under the
+request context bounded by `EraseTimeout`. A non-nil error refuses the erase
+with nothing erased: the error is `authlogic.ErrEraseRefusedByHook` wrapped with
+the hook's own, and the route maps it by the hook error's sdk kind
+(`sdk.ErrConflict` 409, `sdk.ErrForbidden` 403, `sdk.ErrInvalidInput` 400, an
+unkinded error 500). A hook refusal and a claim refusal both render `conflict`;
+a hook that must tell its own apart returns a `web.SafeDomainError`. Set without
+`Repositories.UserErasure` it is `ErrBeforeEraseWithoutErasure`.
+
+The hook and the erase are two transactions, on two stores, never atomic. The
+hook runs first because its work is reversible and the erase is not, and it
+runs on every call, a repeat included. The states and their repair:
+
+- the hook fails part-way: 4xx/5xx, the user untouched, the roles removed
+  before the refusal gone (none, when the refusal is the protected anchor and
+  the hook attempts it first); re-run;
+- the hook succeeds and the store refuses with `user.ErrEraseBlockedByClaim`
+  (409): roles gone, user active, one `auth: erase refused after BeforeErase ran`
+  WARN; **a 409 after roles vanished means the hook ran: settle the claim,
+  re-run** (the hook is a no-op, the erase proceeds);
+- the hook succeeds and the process dies before commit: as above without the
+  WARN; re-run;
+- the hook succeeds and the erase commits: done; a re-run is `changed:false`
+  after a no-op hook;
+- a grant races in after the hook: an orphan tuple on an erased user, who can no
+  longer authenticate; **re-run erase to sweep orphans**;
+- an unknown or malformed id: the hook runs first; an unknown id is a no-op and
+  then `ErrNotFound` (404, with the after-hook WARN), and an id the
+  authorization pocket's reference validation refuses (over 256 bytes, a
+  control character) is a 400 from the hook.
+
+The hook contract: idempotent (revoking nothing is success); every scope,
+global roles included (`Roles.ListRoleAssignmentsBySubject`, not
+`Relationships.ListRelationshipsBySubject`, which is resource-only);
+integrity-protected relations (owner, admin) attempted first, so a last-anchor
+refusal fires before lesser roles go; re-read the first page until it is empty
+rather than walking a cursor over rows being deleted; stop at the first error
+and return the pocket error unwrapped so its kind maps; stamp the administrator
+as the audit actor with the request as the reason
+(`audit.WithSource(ctx, audit.Source{ActorType: actor.Type, ActorID: actor.ID, Reason: "user_erase"})`);
+never run inside the host's own `Transact` on the authorization store
+(`ErrMutationInsideTransaction`); finish inside `EraseTimeout` — page in
+batches and re-run to finish. Integrity rules still apply: erasing the last
+holder of a protected relation is refused as 409 with nothing erased.
+`examples/auth-cms` and `examples/production-baseline` wire this recipe.
+
+The store transaction's order is the contract, because each step depends on the
+locks the earlier ones took:
 
 1. lock the user row — already erased returns `changed:false` with the first
    `erased_at`, no statement and no row, so a retried request is a 200;
@@ -4225,7 +4277,8 @@ is the contract, because each step depends on the locks the earlier ones took:
 user's earlier rows keep their IP/UA and age out under the rail's 400-day
 retention ("Retention and the maintenance service" below);
 `oauth_refresh_history` keeps its hashes for reuse detection; authorization
-tuples for `user:<id>` are the host's step through the authorization pocket;
+tuples for `user:<id>` are the host's step through the authorization pocket,
+taken server-side in `BeforeErase` (above);
 archive objects already written are outside erasure's reach — their lifecycle
 is host policy.
 

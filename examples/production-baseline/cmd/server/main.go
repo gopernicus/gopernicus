@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -41,9 +42,12 @@ import (
 	authenticationpgx "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authorizationmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	authorizationpgx "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx"
 	"github.com/gopernicus/gopernicus/sdk"
 	sdkauth "github.com/gopernicus/gopernicus/sdk/capabilities/authentication"
@@ -51,6 +55,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -64,6 +69,12 @@ const (
 	// operationExpiryInterval is how often the retention runner expires
 	// authorization operation records past their 180-day retention.
 	operationExpiryInterval = time.Hour
+	// eraseAuditReason stamps the erase cleanup's role removals; it names the
+	// request, not an outcome the erase may not reach.
+	eraseAuditReason = "user_erase"
+	// erasePageSize is how many role assignments the erase cleanup reads at a
+	// time.
+	erasePageSize = 100
 )
 
 // errArchiveDirRequired refuses a production boot without the security-event
@@ -397,7 +408,7 @@ func mount(router *web.WebHandler, c composition) (mounted, error) {
 			RequireVerifiedEmail:         true,
 			MaxAuthenticationAge:         c.maxAuthenticationAge,
 		}}}),
-		authentication.WithAdministration(authentication.AdministrationConfig{UserAdminCheck: admins.check, UserErasureRoute: true, SecurityEventsRoute: true, GlobalSessionRevocationRoute: c.globalRevokeRoute}),
+		authentication.WithAdministration(authentication.AdministrationConfig{UserAdminCheck: admins.check, UserErasureRoute: true, BeforeErase: admins.beforeErase, SecurityEventsRoute: true, GlobalSessionRevocationRoute: c.globalRevokeRoute}),
 		authentication.WithMFA(authentication.MFAConfig{Required: authentication.MFARequiredAdmins}),
 		authentication.WithMaintenance(authentication.MaintenanceConfig{
 			Config:                        maintenance.Config{ArchiveSink: c.archive.sink, ArchiveLocation: c.archive.location},
@@ -429,6 +440,8 @@ func mount(router *web.WebHandler, c composition) (mounted, error) {
 		return mounted{}, err
 	}
 	admins.decisions = authorizationComponents.Decisions
+	admins.assignments, admins.unassign = authorizationComponents.Roles, authorizationComponents.Mutations
+	admins.policy = c.authorizationRepos.Mutations.IntegrityPolicy()
 	// The role routes' gate ends in this pocket's own guard, so the adapter
 	// serving them is built once the pocket exists.
 	authenticate := authenticationComponents.HTTP.RequirePrincipal(
@@ -489,10 +502,15 @@ func adminWritesAnyRole(context.Context, authorizationhttp.RoleWriteRequest) err
 // userAdmins admits the global admin role to every user-administration
 // action this host names, the irreversible erase, the security-event read and
 // the fleet-wide session revoke included, and refuses any other: an action a
-// later release adds is denied until the check names it. decisions is set once
-// the authorization pocket exists, before any route is served.
+// later release adds is denied until the check names it. Its erase cleanup
+// revokes the person's role assignments before the erase. The authorization
+// fields are set once the authorization pocket exists, before any route is
+// served.
 type userAdmins struct {
-	decisions *decisions.Service
+	decisions   *decisions.Service
+	assignments *roles.Service
+	unassign    *mutations.Service
+	policy      mutations.IntegrityPolicy
 }
 
 func (u *userAdmins) check(ctx context.Context, req authenticationhttp.UserAdminCheckRequest) error {
@@ -512,6 +530,58 @@ func (u *userAdmins) check(ctx context.Context, req authenticationhttp.UserAdmin
 		return fmt.Errorf("user administration requires the global %s role: %w", adminRole, sdk.ErrForbidden)
 	}
 	return nil
+}
+
+// beforeErase is the authentication pocket's BeforeErase hook: it revokes every
+// role assignment of user:<id>, in every scope, through the audited unassign
+// command with the administrator as actor, before the erase transaction runs.
+// It re-reads the first page until it is empty, attempts the
+// integrity-protected relations of each page first (so the last project
+// owner's refusal fires before lesser roles go), stops at the first error and
+// returns it unwrapped so its kind maps (the last owner is a 409, nothing
+// erased). Revoking nothing is success, so a re-run completes a half-finished
+// erase.
+func (u *userAdmins) beforeErase(ctx context.Context, actor sdk.Principal, userID string) error {
+	ctx = audit.WithSource(ctx, audit.Source{ActorType: actor.Type, ActorID: actor.ID, Reason: eraseAuditReason})
+	subject := authorizationmodel.PrincipalRef{Type: sdk.PrincipalTypeUser, ID: userID}
+	for {
+		page, err := u.assignments.ListRoleAssignmentsBySubject(ctx, subject, list.Request{Limit: erasePageSize})
+		if err != nil {
+			return err
+		}
+		if len(page.Items) == 0 {
+			return nil
+		}
+		slices.SortStableFunc(page.Items, func(a, b roles.Assignment) int {
+			return guardRank(u.policy, a) - guardRank(u.policy, b)
+		})
+		removed := 0
+		for _, a := range page.Items {
+			result, err := u.unassign.UnassignRole(ctx, mutations.UnassignRoleCommand{Subject: subject, Role: a.Role, Scope: a.Scope})
+			if err != nil {
+				return err
+			}
+			if result.Outcome == mutations.OutcomeApplied {
+				removed++
+			}
+		}
+		if removed == 0 {
+			return fmt.Errorf("erase cleanup: a page of role assignments did not shrink: %w", sdk.ErrUnavailable)
+		}
+	}
+}
+
+// guardRank orders an assignment an integrity rule protects before the rest.
+func guardRank(policy mutations.IntegrityPolicy, a roles.Assignment) int {
+	if a.Scope.Kind != tuples.ResourceScope {
+		return 1
+	}
+	for _, rule := range policy.Rules {
+		if rule.Relation == a.Role && (rule.ResourceType == "" || rule.ResourceType == a.Scope.Type) {
+			return 0
+		}
+	}
+	return 1
 }
 
 // auditWriteLog is the audit-write observer, throttled so a failing audit

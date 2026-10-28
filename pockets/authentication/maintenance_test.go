@@ -3,6 +3,7 @@ package authentication
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,9 +14,11 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets"
 	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
+	"github.com/gopernicus/gopernicus/sdk"
 	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -184,6 +187,40 @@ func TestUserErasureRouteMountsOnlyOnTheOptIn(t *testing.T) {
 		if mounted != optIn {
 			t.Errorf("opt-in=%v: POST erase = %d (mounted=%v)", optIn, rec.Code, mounted)
 		}
+	}
+}
+
+// storeReachedErasure is an erasure port that reports being reached.
+type storeReachedErasure struct{ user.EraseRepository }
+
+func (storeReachedErasure) Erase(context.Context, user.EraseInput) (user.Erasure, error) {
+	return user.Erasure{}, errors.New("the erasure store was reached")
+}
+
+// TestBeforeEraseWiring: a hook without the erasure port is contradictory
+// wiring; with it, the hook reaches EraseUser.
+func TestBeforeEraseWiring(t *testing.T) {
+	log, _ := bufferLog()
+	var calls []string
+	hook := func(_ context.Context, actor sdk.Principal, id string) error {
+		calls = append(calls, actor.ID+">"+id)
+		return fmt.Errorf("refused by the test hook: %w", sdk.ErrConflict)
+	}
+	if _, err := maintenanceWiring(environment.ModeDevelopment, Repositories{UserAdmin: stubUserAdmin{}}, log,
+		WithAdministration(AdministrationConfig{BeforeErase: hook})); !errors.Is(err, ErrBeforeEraseWithoutErasure) {
+		t.Fatalf("hook without the erasure port: err = %v, want ErrBeforeEraseWithoutErasure", err)
+	}
+	comps, err := maintenanceWiring(environment.ModeDevelopment, Repositories{UserAdmin: stubUserAdmin{}, UserErasure: storeReachedErasure{}}, log,
+		WithAdministration(AdministrationConfig{BeforeErase: hook}))
+	if err != nil {
+		t.Fatalf("hook with the erasure port: %v", err)
+	}
+	_, _, err = comps.Authentication.EraseUser(context.Background(), sdk.Principal{Type: sdk.PrincipalTypeUser, ID: "admin"}, "target")
+	if !errors.Is(err, authlogic.ErrEraseRefusedByHook) || !errors.Is(err, sdk.ErrConflict) {
+		t.Fatalf("EraseUser = %v, want the hook's refusal", err)
+	}
+	if len(calls) != 1 || calls[0] != "admin>target" {
+		t.Fatalf("hook calls = %v", calls)
 	}
 }
 

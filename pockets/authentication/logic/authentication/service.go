@@ -228,6 +228,7 @@ type constructorConfig struct {
 	SessionManagement       session.ManagementRepository
 	UserAdmin               user.AdminRepository
 	UserErasure             user.EraseRepository
+	BeforeErase             EraseHook
 	PasswordlessRedeem      passwordless.Repository
 	ProvisionOnRedeem       bool
 	ActiveSessions          session.ActiveUserRepository
@@ -422,6 +423,9 @@ type Service struct {
 	// userErasure is the optional erasure capability (SOC 2 S3). Nil →
 	// EraseUser refuses with ErrUserErasureUnavailable.
 	userErasure user.EraseRepository
+	// beforeErase is the host's optional pre-erase hook (WithErasure). Nil →
+	// EraseUser runs none.
+	beforeErase EraseHook
 	// activeSessions is the optional fenced session-minting capability (CHAU-1.1):
 	// it inserts a session only while the owning user is atomically proven active.
 	// Nil → mintSession falls back to the ordinary sessions.Create, which cannot
@@ -581,6 +585,7 @@ func newService(d constructorConfig) *Service {
 		oauthLinkBase:      d.OAuthLinkBaseURL,
 		userAdmin:          d.UserAdmin,
 		userErasure:        d.UserErasure,
+		beforeErase:        d.BeforeErase,
 		activeSessions:     d.ActiveSessions,
 		passwordlessRedeem: d.PasswordlessRedeem,
 		provisionOnRedeem:  d.ProvisionOnRedeem,

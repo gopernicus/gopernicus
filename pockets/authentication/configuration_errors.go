@@ -175,6 +175,11 @@ var ErrMaintenanceAcknowledgedWithoutRepository = errors.New("auth: MaintenanceC
 // that could never mount.
 var ErrUserErasureRouteRequires = errors.New("auth: AdministrationConfig.UserErasureRoute requires Repositories.UserErasure and AdministrationConfig.UserAdminCheck")
 
+// ErrBeforeEraseWithoutErasure is returned by New when
+// AdministrationConfig.BeforeErase is set without Repositories.UserErasure: a
+// hook for an erase that can never run is contradictory wiring.
+var ErrBeforeEraseWithoutErasure = errors.New("auth: AdministrationConfig.BeforeErase requires Repositories.UserErasure")
+
 // ErrSecurityEventsRouteRequires is returned by New when
 // AdministrationConfig.SecurityEventsRoute is set without
 // Repositories.SecurityEvents or without AdministrationConfig.UserAdminCheck:

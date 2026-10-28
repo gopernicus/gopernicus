@@ -475,7 +475,18 @@ curl -i -XPOST localhost:8080/auth/admin/users/<user_id>/erase \
 #   200 {"user":{"status":"erased",…},"changed":true,"counts":{…}}
 ```
 
-One transaction marks the user erased, blanks the name, the email and every
+First, server-side, the `BeforeErase` hook (`userAdmins.beforeErase`) revokes
+the person's role assignments in every scope through the audited unassign
+command, with the admin as actor and the reason `user_erase`, a project's
+`owner` before anything else. The integrity policy still holds: erasing a
+project's last owner answers 409 `conflict` with nothing erased and nothing
+revoked; add another owner and erase again. A 409 after the roles vanished
+means a held invitation claim refused the erase after the hook ran: settle the
+claim and erase again. The hook and the erase are two transactions, and the
+hook runs on every erase, so erasing again finishes a half-done erase and
+sweeps a role granted in between.
+
+Then one transaction marks the user erased, blanks the name, the email and every
 identifier, deletes the sessions, grants and the provider mirror
 (`external_subjects`) and appends one `user_erased` row with the counts and the
 admin's client info. A pending invitation addressed to them is deleted; a
@@ -490,10 +501,8 @@ request — the same token included — provisions a fresh, empty user from the
 provider's claims; to keep them out, remove them at the provider. It leaves
 what is out of reach by design: their `security_events` rows keep the IP and
 User-Agent until the rail's 400-day retention removes them, archives already
-written stay, and `iam_operations` fingerprints expire after 180 days.
-Then finish the composition: remove the person's role assignments through
-`/authorization/roles` (an executed step), and sweep — the runbook's "Erase a
-person" has both.
+written stay, and `iam_operations` fingerprints expire after 180 days. The
+runbook's "Erase a person" has the sweep.
 
 ## Production
 
