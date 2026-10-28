@@ -15,7 +15,10 @@ type PasswordStore struct {
 	db *tursodb.DB
 }
 
-var _ user.PasswordRepository = (*PasswordStore)(nil)
+var (
+	_ user.PasswordRepository   = (*PasswordStore)(nil)
+	_ user.PasswordHashUpgrader = (*PasswordStore)(nil)
+)
 
 // NewPasswordStore returns a PasswordStore backed by db.
 // It panics if db is nil; the caller owns the database lifecycle.
@@ -56,4 +59,20 @@ func (s *PasswordStore) Get(ctx context.Context, userID string) (string, error) 
 		return "", tursodb.MapError(err)
 	}
 	return hash, nil
+}
+
+// UpgradeHash replaces the stored hash with newHash only while it still equals
+// oldHash, in one conditional UPDATE so concurrent upgrades have one winner. It
+// is not a credential change: auth_revision, sessions and grants are untouched.
+func (s *PasswordStore) UpgradeHash(ctx context.Context, userID, oldHash, newHash string) (bool, error) {
+	const q = `UPDATE user_passwords SET hash = ? WHERE user_id = ? AND hash = ?`
+	res, err := s.db.Exec(ctx, q, newHash, userID, oldHash)
+	if err != nil {
+		return false, tursodb.MapError(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }

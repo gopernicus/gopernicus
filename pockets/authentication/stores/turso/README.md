@@ -115,6 +115,22 @@ refresh: `datetime('now')` (not the fixed-width encoding) fails every wired
 refresh's scan, and `''` reads as unstamped but misses `DeleteIfIdle`'s
 compare-and-swap, so an idle judgement fails as an internal error.
 
+### Rehash on login
+
+`PasswordStore` implements `user.PasswordHashUpgrader` (no schema change).
+`UpgradeHash` is one compare-and-swap statement, `UPDATE user_passwords SET hash = ? WHERE user_id = ? AND hash = ?`: it reports true
+only when it replaced the row, so concurrent upgrades from the same old hash
+have exactly one winner, and a stale old hash, a user with no password or an
+unknown user report false with a nil error. Unlike `Set` and `Change` it is
+not a credential change: `auth_revision` is untouched and no session, grant or
+challenge is revoked. `storetest.RunPasswordHashUpgrade` is its conformance
+suite.
+
+Rehash-on-login is live with this store tag together with
+`pockets/authentication` v0.35.0 and `integrations/cryptids/bcrypt` v0.3.0:
+after a successful password verification the service re-hashes a password
+stored below the hasher's cost and stores it through `UpgradeHash`.
+
 ### Global session revocation
 
 `OAuth2Store` implements `session.GlobalRevoker`, filled as `GlobalSessions`
