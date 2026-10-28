@@ -344,6 +344,7 @@ func (s *Service) CompleteStepUpWithPassword(ctx context.Context, in StepUpCompl
 		s.recordStepUp(ctx, in.UserID, in.Purpose, securityevent.StatusFailure)
 		return authgrant.Grant{}, ErrStepUpProof
 	}
+	s.rehashIfNeeded(ctx, in.UserID, hash, password)
 	return s.issueGrant(ctx, in, s.primaryAuthentication(session.MethodPassword), owner.AuthRevision)
 }
 

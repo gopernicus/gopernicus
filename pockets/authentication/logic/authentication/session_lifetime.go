@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
@@ -48,6 +49,18 @@ var (
 	// SessionsConfig.RefreshTTL: an access token would outlive its session.
 	ErrAccessTokenTTLExceedsRefreshTTL = fmt.Errorf("authentication: SessionsConfig.AccessTokenTTL exceeds SessionsConfig.RefreshTTL: %w", sdk.ErrInvalidInput)
 
+	// ErrTokenIssuerInvalid is returned by New when SessionsConfig.Issuer or
+	// Audience is set with leading or trailing whitespace (or is whitespace
+	// only): the token parser rejects such a claim, so every token would fail.
+	ErrTokenIssuerInvalid = fmt.Errorf("authentication: SessionsConfig.Issuer (AUTH_TOKEN_ISSUER) and Audience (AUTH_TOKEN_AUDIENCE) must not carry surrounding whitespace: %w", sdk.ErrInvalidInput)
+	// ErrTokenAudienceCollides is returned by New when SessionsConfig.Issuer
+	// equals the delegated-token issuer or a wired external provider's
+	// issuer, or (at the pocket root) Audience
+	// equals the OAuth2 MCP or API resource: the same signer mints delegated
+	// tokens with those values, so first-party and delegated tokens must stay
+	// distinguishable by claim.
+	ErrTokenAudienceCollides = fmt.Errorf("authentication: SessionsConfig.Issuer/Audience collide with the delegated-token issuer or an OAuth2 resource: %w", sdk.ErrInvalidInput)
+
 	// errSessionActivityCASMismatch is the internal error of a DeleteIfIdle
 	// that missed a row which had not moved: a store defect, never reuse. It
 	// wraps no sdk kind, so it answers 500.
@@ -55,15 +68,19 @@ var (
 )
 
 // SessionPolicy reports the resolved session lifetimes: AccessTokenTTL and
-// RefreshTTL after their defaults, and IdleTimeout (zero when off).
+// RefreshTTL after their defaults, and IdleTimeout (zero when off), with the
+// first-party token Issuer and Audience (empty when unset).
 func (s *Service) SessionPolicy() SessionsConfig {
-	return SessionsConfig{AccessTokenTTL: s.accessTTL, RefreshTTL: s.refreshTTL, IdleTimeout: s.idleTimeout}
+	return SessionsConfig{AccessTokenTTL: s.accessTTL, RefreshTTL: s.refreshTTL, IdleTimeout: s.idleTimeout, Issuer: s.tokenIssuer, Audience: s.tokenAudience}
 }
 
 // validateSessionLifetime checks SessionsConfig on its post-default values in
 // every mode — an incoherent pair refuses, a coarse or inert idle timeout
 // WARNs — then, with an idle timeout set, the store's activity capability.
 func validateSessionLifetime(d constructorConfig, log *slog.Logger) error {
+	if err := validateTokenIssuer(d); err != nil {
+		return err
+	}
 	access, refresh, idle := d.AccessTokenTTL, d.RefreshTTL, d.IdleTimeout
 	if access <= 0 {
 		access = defaultAccessTokenTTL
@@ -90,6 +107,34 @@ func validateSessionLifetime(d constructorConfig, log *slog.Logger) error {
 		log.Warn("auth: the idle timeout is not below the refresh horizon, so a session expires before it can idle", "posture_warning", "idle_never_fires", "idle_timeout", idle.String(), "refresh_ttl", refresh.String())
 	}
 	return validateIdleTimeout(d)
+}
+
+// validateTokenIssuer checks SessionsConfig.Issuer and Audience: no
+// surrounding whitespace, and an issuer distinct from the delegated one and
+// from every wired external provider's.
+func validateTokenIssuer(d constructorConfig) error {
+	for _, v := range []string{d.TokenIssuer, d.TokenAudience} {
+		if strings.TrimSpace(v) != v {
+			return ErrTokenIssuerInvalid
+		}
+	}
+	if d.TokenIssuer == "" {
+		return nil
+	}
+	if d.TokenIssuer == d.DelegatedTokens.Issuer {
+		return fmt.Errorf("%w: Issuer equals the delegated-token issuer", ErrTokenAudienceCollides)
+	}
+	// A bearer whose iss names a wired external provider is routed to that
+	// provider's verifier, so a first-party issuer equal to one would 401
+	// every first-party bearer.
+	if d.External != nil {
+		for _, p := range d.External.Providers {
+			if !nilDependency(p.Provider) && p.Provider.Issuer() == d.TokenIssuer {
+				return fmt.Errorf("%w: Issuer equals external provider %q's issuer", ErrTokenAudienceCollides, p.Name)
+			}
+		}
+	}
+	return nil
 }
 
 // idleSince reports the activity instant a first-party refresh is judged

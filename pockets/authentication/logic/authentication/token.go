@@ -37,6 +37,10 @@ const (
 	tokenClaimMethods = "methods"
 )
 
+// firstPartyDelegationMarkers are the claims only a delegated token carries.
+// iss and aud are judged against SessionsConfig.Issuer/Audience instead.
+var firstPartyDelegationMarkers = []string{"client_id", "origin_client_id", "act"}
+
 // ErrDelegatedCredential refuses a delegated credential at a first-party
 // lifecycle boundary without changing either session or browser cookies.
 var ErrDelegatedCredential = fmt.Errorf("credential is not a first-party session: %w", sdk.ErrUnauthorized)
@@ -99,10 +103,13 @@ func (s *Service) verifyAccessClaims(raw string) (string, Credential, bool) {
 	if err != nil {
 		return "", Credential{}, false
 	}
-	return parseAccessClaims(claims)
+	return s.parseAccessClaims(claims)
 }
 
-func parseAccessClaims(claims map[string]any) (string, Credential, bool) {
+// parseAccessClaims reads verified claims. A first-party token must carry
+// exactly the configured iss and aud (SessionsConfig.Issuer/Audience) and no
+// other delegation claim; with neither configured it must carry no iss or aud.
+func (s *Service) parseAccessClaims(claims map[string]any) (string, Credential, bool) {
 	userID, ok := claimString(claims[tokenClaimUserID])
 	if !ok {
 		return "", Credential{}, false
@@ -124,10 +131,13 @@ func parseAccessClaims(claims map[string]any) (string, Credential, bool) {
 	rawAssurance, hasAssurance := claims[tokenClaimAssurance]
 	rawMethods, hasMethods := claims[tokenClaimMethods]
 	if cred.Profile == session.ProfileFirstParty {
-		for _, name := range []string{"iss", "aud", "client_id", "origin_client_id", "act"} {
+		for _, name := range firstPartyDelegationMarkers {
 			if _, present := claims[name]; present {
 				return "", Credential{}, false
 			}
+		}
+		if !s.firstPartyIssuerMatches(claims) {
+			return "", Credential{}, false
 		}
 		if hasAssurance {
 			level, valid := claimString(rawAssurance)
@@ -181,6 +191,26 @@ func parseAccessClaims(claims map[string]any) (string, Credential, bool) {
 		}
 	}
 	return userID, cred, true
+}
+
+// firstPartyIssuerMatches reports whether a first-party token's iss and aud
+// are exactly the configured ones: present and equal when configured, absent
+// when not.
+func (s *Service) firstPartyIssuerMatches(claims map[string]any) bool {
+	rawIssuer, hasIssuer := claims["iss"]
+	if s.tokenIssuer == "" {
+		if hasIssuer {
+			return false
+		}
+	} else if issuer, ok := claimString(rawIssuer); !hasIssuer || !ok || issuer != s.tokenIssuer {
+		return false
+	}
+	rawAudience, hasAudience := claims["aud"]
+	if s.tokenAudience == "" {
+		return !hasAudience
+	}
+	audiences, ok := claimAudiences(rawAudience)
+	return hasAudience && ok && audiences[0] == s.tokenAudience
 }
 
 // claimMethods reads the methods claim: a non-empty array of distinct known
@@ -268,13 +298,22 @@ func (s *Service) firstPartyLogoutToken(raw string) (string, Credential, bool, e
 		}
 		return "", Credential{}, false, nil
 	}
-	userID, cred, ok := parseAccessClaims(claims)
+	userID, cred, ok := s.parseAccessClaims(claims)
 	if !ok || cred.Profile != session.ProfileFirstParty {
-		return "", Credential{}, false, ErrDelegatedCredential
+		// Delegation is decided by shape, not admission: a first-party token
+		// refused only because SessionsConfig.Issuer/Audience changed since it
+		// was minted still lets the refresh token identify the session.
+		if delegatedShape(claims) {
+			return "", Credential{}, false, ErrDelegatedCredential
+		}
+		return "", Credential{}, false, nil
 	}
 	return userID, cred, true, nil
 }
 
+// unverifiedDelegatedShape decodes an unverified payload and applies
+// delegatedShape. An oversized or undecodable payload is not first-party
+// shaped enough to trust, so oversized is delegated and malformed is not.
 func unverifiedDelegatedShape(raw string) bool {
 	const maxTokenBytes = 16 << 10
 	if len(raw) > maxTokenBytes {
@@ -292,13 +331,28 @@ func unverifiedDelegatedShape(raw string) bool {
 	if json.Unmarshal(payload, &claims) != nil {
 		return false
 	}
-	if rawProfile, present := claims[tokenClaimProfile]; present && rawProfile != string(session.ProfileFirstParty) {
+	return delegatedShape(claims)
+}
+
+// delegatedShape is the one shape rule logout uses, verified or not: a
+// session_profile other than first_party, or any delegation marker, is
+// delegated. With session_profile absent, any iss or aud is delegated too;
+// with first_party present, iss and aud are judged by admission (they may be
+// SessionsConfig.Issuer/Audience, current or since changed), never here.
+func delegatedShape(claims map[string]any) bool {
+	rawProfile, hasProfile := claims[tokenClaimProfile]
+	if hasProfile && rawProfile != string(session.ProfileFirstParty) {
 		return true
 	}
-	for _, name := range []string{"iss", "aud", "client_id", "origin_client_id", "act"} {
+	for _, name := range firstPartyDelegationMarkers {
 		if _, present := claims[name]; present {
 			return true
 		}
 	}
-	return false
+	if hasProfile {
+		return false
+	}
+	_, hasIssuer := claims["iss"]
+	_, hasAudience := claims["aud"]
+	return hasIssuer || hasAudience
 }

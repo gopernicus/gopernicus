@@ -149,6 +149,8 @@ type constructorConfig struct {
 	AccessTokenTTL                time.Duration `env:"AUTH_ACCESS_TOKEN_TTL" default:"15m"`
 	RefreshTTL                    time.Duration `env:"AUTH_REFRESH_TTL" default:"168h"`
 	IdleTimeout                   time.Duration `env:"AUTH_IDLE_TIMEOUT"`
+	TokenIssuer                   string        `env:"AUTH_TOKEN_ISSUER"`
+	TokenAudience                 string        `env:"AUTH_TOKEN_AUDIENCE"`
 	Granter                       invitations.Granter
 	InviteCheck                   inbound.InviteCheck
 	ResourcePermissions           map[string]string
@@ -278,6 +280,16 @@ type SessionsConfig struct {
 	// migration 0029_session_activity.sql (ErrIdleTimeoutSchemaMissing): setting
 	// the env var on an unmigrated database refuses boot.
 	IdleTimeout time.Duration `env:"AUTH_IDLE_TIMEOUT"`
+	// Issuer, when set, is stamped as iss on every first-party access token
+	// and required, exactly, on one; Audience does the same for aud (a string
+	// or a one-element array). Either may be set alone. Enabling them makes
+	// every outstanding access token fail once, so each client refreshes once.
+	// Empty (the default) keeps today's rule: a first-party token carrying
+	// iss or aud is refused. Issuer must differ from OAuth2Config's issuer and
+	// Audience from its MCP and API resources (ErrTokenAudienceCollides);
+	// surrounding whitespace is ErrTokenIssuerInvalid.
+	Issuer   string `env:"AUTH_TOKEN_ISSUER"`
+	Audience string `env:"AUTH_TOKEN_AUDIENCE"`
 }
 
 // WithSessions replaces the complete SessionsConfig group, including zero values.
@@ -286,6 +298,8 @@ func WithSessions(value SessionsConfig) Option {
 		c.AccessTokenTTL = value.AccessTokenTTL
 		c.RefreshTTL = value.RefreshTTL
 		c.IdleTimeout = value.IdleTimeout
+		c.TokenIssuer = value.Issuer
+		c.TokenAudience = value.Audience
 	}
 }
 

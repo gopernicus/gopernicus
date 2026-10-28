@@ -3,7 +3,7 @@ package authentication
 func newFixture(repos Repositories, cfg constructorConfig) (*Components, error) {
 	opts := []Option{
 		WithPassword(PasswordConfig{Hasher: cfg.Hasher, ValidatePassword: cfg.ValidatePassword, CompromisedPasswordChecker: cfg.CompromisedPasswordChecker, CompromisedPasswordFailOpen: cfg.CompromisedPasswordFailOpen, PasswordFlowsDisabled: cfg.PasswordFlowsDisabled, RequireVerifiedEmail: cfg.RequireVerifiedEmail}),
-		WithSessions(SessionsConfig{AccessTokenTTL: cfg.AccessTokenTTL, RefreshTTL: cfg.RefreshTTL, IdleTimeout: cfg.IdleTimeout}),
+		WithSessions(SessionsConfig{AccessTokenTTL: cfg.AccessTokenTTL, RefreshTTL: cfg.RefreshTTL, IdleTimeout: cfg.IdleTimeout, Issuer: cfg.TokenIssuer, Audience: cfg.TokenAudience}),
 		WithIdentity(IdentityConfig{ChallengeProtector: cfg.ChallengeProtector, IdentifierNormalizer: cfg.IdentifierNormalizer, IdentifierKeyer: cfg.IdentifierKeyer, CredentialPolicy: cfg.CredentialPolicy, SingleFactorAcknowledged: cfg.SingleFactorAcknowledged}),
 		WithAbuseProtection(AbuseProtectionConfig{AuthenticationLimits: cfg.AuthenticationLimits, PublicRouteLimits: cfg.PublicRouteLimits, RateLimiter: cfg.RateLimiter, PublicRouteLimiterFailOpen: cfg.PublicRouteLimiterFailOpen}),
 		WithDelivery(DeliveryConfig{Mailer: cfg.Mailer, MailFrom: cfg.MailFrom, BodySenders: cfg.BodySenders, DeliveryEncrypter: cfg.DeliveryEncrypter, DeliveryDispatcher: cfg.DeliveryDispatcher, DeliveryEventsEmitter: cfg.DeliveryEventsEmitter, DeliveryJobsAcknowledged: cfg.DeliveryJobsAcknowledged, DeliveryEphemeralAcknowledged: cfg.DeliveryEphemeralAcknowledged, OpportunisticTLSAcknowledged: cfg.OpportunisticTLSAcknowledged, InProcessDelivery: cfg.InProcessDelivery}),

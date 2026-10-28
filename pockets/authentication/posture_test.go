@@ -11,12 +11,15 @@ import (
 
 	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	sdkauth "github.com/gopernicus/gopernicus/sdk/capabilities/authentication"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
+	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
@@ -63,6 +66,10 @@ type postureWiring struct {
 }
 
 func (w postureWiring) build(mode environment.Mode, log *slog.Logger, extra ...Option) (*Components, error) {
+	return w.buildWithSigner(stubSigner{}, mode, log, extra...)
+}
+
+func (w postureWiring) buildWithSigner(signer cryptids.JWTSigner, mode environment.Mode, log *slog.Logger, extra ...Option) (*Components, error) {
 	repos := Repositories{}
 	if w.audit {
 		repos.SecurityEvents = stubSecurityEvents{}
@@ -82,7 +89,7 @@ func (w postureWiring) build(mode environment.Mode, log *slog.Logger, extra ...O
 	if w.auditAcknowledged {
 		opts = append(opts, WithAuditDisabledAcknowledged())
 	}
-	return New(testRepositories(repos), stubSigner{}, mode, delivery.ModeOff, append(opts, extra...)...)
+	return New(testRepositories(repos), signer, mode, delivery.ModeOff, append(opts, extra...)...)
 }
 
 func bufferLog() (*slog.Logger, *bytes.Buffer) {
@@ -453,5 +460,217 @@ func TestExternalUnboundedAuthenticationAgeWarns(t *testing.T) {
 	if logs := build(authlogic.ExternalProvider{MaxAuthenticationAge: time.Hour}); strings.Contains(logs, "external_authentication_age=unbounded") ||
 		!strings.Contains(logs, "max_authentication_age=1h0m0s") {
 		t.Errorf("bounded provider: want no WARN and the bound on the boot line:\n%s", logs)
+	}
+}
+
+// ringSignerFake is a JWT signer reporting a key ring, as a ring signer
+// adapter does.
+type ringSignerFake struct {
+	stubSigner
+	active, legacy string
+	ids            []string
+}
+
+func (s ringSignerFake) ActiveKeyID() string { return s.active }
+func (s ringSignerFake) KeyIDs() []string    { return s.ids }
+func (s ringSignerFake) LegacyKeyID() string { return s.legacy }
+
+// costHasher reports its work factor, as bcrypt v0.3.0 does.
+type costHasher struct {
+	stubHasher
+	cost int
+}
+
+func (h costHasher) Cost() int { return h.cost }
+
+var keysPostureWiring = postureWiring{audit: true, singleFactor: true, opportunisticTLS: true}
+
+// TestKeysBootLine pins the auth: keys line: its attribute order, opaque for a
+// signer that reports no ring (never a guessed single), the ring attributes for
+// one that does, and the issuer and audience.
+func TestKeysBootLine(t *testing.T) {
+	log, buf := bufferLog()
+	if _, err := keysPostureWiring.build(environment.ModeDevelopment, log); err != nil {
+		t.Fatal(err)
+	}
+	if want := `msg="auth: keys" jwt_signer=opaque delivery_encrypter=none token_encrypter=none challenge_protector=none totp_encrypter=none identifier_keyer=opaque token_issuer=none token_audience=none`; strings.Count(buf.String(), want) != 1 {
+		t.Errorf("default keys line missing %q:\n%s", want, buf.String())
+	}
+
+	signer := ringSignerFake{active: "k2", ids: []string{"k1", "k2", "legacy"}, legacy: "legacy"}
+	log, buf = bufferLog()
+	c, err := keysPostureWiring.build(environment.ModeDevelopment, log,
+		WithSessions(SessionsConfig{Issuer: "https://auth.example.test", Audience: "app"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := c.Authentication.SessionPolicy(); p.Issuer != "https://auth.example.test" || p.Audience != "app" {
+		t.Errorf("Issuer/Audience not threaded to the service: %+v", p)
+	}
+	if want := "token_issuer=https://auth.example.test token_audience=app"; !strings.Contains(buf.String(), want) {
+		t.Errorf("keys line lacks %q:\n%s", want, buf.String())
+	}
+	log, buf = bufferLog()
+	if _, err := keysPostureWiring.buildWithSigner(signer, environment.ModeDevelopment, log); err != nil {
+		t.Fatal(err)
+	}
+	if want := `msg="auth: keys" jwt_signer=ring jwt_active_key_id=k2 jwt_key_ids=k1,k2,legacy jwt_legacy=yes delivery_encrypter=none`; strings.Count(buf.String(), want) != 1 {
+		t.Errorf("ring keys line missing %q:\n%s", want, buf.String())
+	}
+	if strings.Contains(buf.String(), "legacy_key_read_enabled") {
+		t.Errorf("development logged the legacy WARN:\n%s", buf.String())
+	}
+}
+
+// TestDescribeKeyRole covers every kind the boot line can report.
+func TestDescribeKeyRole(t *testing.T) {
+	single, err := cryptids.NewAESGCM(bytes.Repeat([]byte{1}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ring, err := cryptids.NewAESGCMRing(cryptids.KeyRing{Active: "d1", Keys: map[string][]byte{"d1": bytes.Repeat([]byte{2}, 32)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	protector, err := protection.NewHMACChallengeProtector(protection.HMACKeyRing{Active: "p2", Keys: map[string][]byte{"dev": bytes.Repeat([]byte{3}, 32), "p2": bytes.Repeat([]byte{4}, 32)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nilSingle *cryptids.AESGCM
+	cases := []struct {
+		name string
+		v    any
+		want keyRole
+	}{
+		{"nil", nil, keyRole{kind: "none"}},
+		{"typed nil", nilSingle, keyRole{kind: "none"}},
+		{"single AESGCM", single, keyRole{kind: "single"}},
+		{"opaque signer", stubSigner{}, keyRole{kind: "opaque"}},
+		{"reporting signer", ringSignerFake{active: "k1", ids: []string{"k1"}}, keyRole{kind: "ring", active: "k1", ids: []string{"k1"}}},
+		{"active-id-only ring (sdk v0.21.0 AESGCMRing)", ring, keyRole{kind: "ring", active: "d1"}},
+		{"challenge protector", protector, keyRole{kind: "ring", active: "p2", ids: []string{"dev", "p2"}}},
+	}
+	for _, tc := range cases {
+		got := describeKeyRole("r", "r", tc.v)
+		if got.kind != tc.want.kind || got.active != tc.want.active || strings.Join(got.ids, ",") != strings.Join(tc.want.ids, ",") || got.legacy != tc.want.legacy {
+			t.Errorf("%s: got %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestLegacyKeyReadWarnsInProduction proves R-5 and the legacy WARN: one
+// posture_warning=legacy_key_read_enabled per role with a legacy id, in
+// production only, and none for a ring without one.
+func TestLegacyKeyReadWarnsInProduction(t *testing.T) {
+	roles := []keyRole{
+		{role: "jwt_signer", kind: "ring", active: "k1", legacy: "legacy"},
+		{role: "delivery_encrypter", kind: "ring", active: "d1", legacy: "legacy"},
+		{role: "token_encrypter", kind: "ring", active: "t1"},
+		{role: "totp_encrypter", kind: "single"},
+	}
+	log, buf := bufferLog()
+	logKeyPosture(constructorConfig{RuntimeMode: environment.ModeProduction}, roles, log)
+	for _, role := range []string{"jwt_signer", "delivery_encrypter"} {
+		if want := "posture_warning=legacy_key_read_enabled key=" + role + " legacy_key_id=legacy"; strings.Count(buf.String(), want) != 1 {
+			t.Errorf("WARN %q not logged once:\n%s", want, buf.String())
+		}
+	}
+	if strings.Count(buf.String(), "level=WARN") != 2 {
+		t.Errorf("want exactly two WARNs:\n%s", buf.String())
+	}
+	log, buf = bufferLog()
+	logKeyPosture(constructorConfig{RuntimeMode: environment.ModeDevelopment}, roles, log)
+	if buf.Len() != 0 {
+		t.Errorf("development logged:\n%s", buf.String())
+	}
+
+	signer := ringSignerFake{active: "k1", ids: []string{"k1", "legacy"}, legacy: "legacy"}
+	log, buf = bufferLog()
+	if _, err := keysPostureWiring.buildWithSigner(signer, environment.ModeProduction, log); err != nil {
+		t.Fatal(err)
+	}
+	if want := "posture_warning=legacy_key_read_enabled key=jwt_signer"; strings.Count(buf.String(), want) != 1 {
+		t.Errorf("production New did not WARN %q once:\n%s", want, buf.String())
+	}
+}
+
+// TestPasswordPostureWarnings proves R-2 and the cost WARN: production with
+// password flows on and no breach checker WARNs password_breach_check_none; a
+// hasher reporting a cost under 12 WARNs password_hash_cost_low; a checker, a
+// cost of 12, a hasher that reports no cost, development and password flows
+// off each log neither.
+func TestPasswordPostureWarnings(t *testing.T) {
+	const none, low = "posture_warning=password_breach_check_none", "posture_warning=password_hash_cost_low cost=10 recommended=12"
+	checker, err := protection.NewBlocklistChecker(strings.NewReader("password123456789\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name      string
+		mode      environment.Mode
+		password  PasswordConfig
+		none, low bool
+	}{
+		{"production no checker", environment.ModeProduction, PasswordConfig{Hasher: stubHasher{}}, true, false},
+		{"production checker", environment.ModeProduction, PasswordConfig{Hasher: stubHasher{}, CompromisedPasswordChecker: checker}, false, false},
+		{"production cost 10", environment.ModeProduction, PasswordConfig{Hasher: costHasher{cost: 10}, CompromisedPasswordChecker: checker}, false, true},
+		{"production cost 12", environment.ModeProduction, PasswordConfig{Hasher: costHasher{cost: 12}, CompromisedPasswordChecker: checker}, false, false},
+		{"development", environment.ModeDevelopment, PasswordConfig{Hasher: costHasher{cost: 10}}, false, false},
+		{"password flows off", environment.ModeProduction, PasswordConfig{Hasher: costHasher{cost: 10}, PasswordFlowsDisabled: true}, false, false},
+	}
+	for _, tc := range cases {
+		log, buf := bufferLog()
+		if _, err := keysPostureWiring.build(tc.mode, log, WithPassword(tc.password)); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := strings.Count(buf.String(), none); got != btoi(tc.none) {
+			t.Errorf("%s: %s logged %d times:\n%s", tc.name, none, got, buf.String())
+		}
+		if got := strings.Count(buf.String(), low); got != btoi(tc.low) {
+			t.Errorf("%s: %s logged %d times:\n%s", tc.name, low, got, buf.String())
+		}
+	}
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// TestTokenIssuerConstruction proves the issuer/audience refusals at the
+// root: surrounding whitespace through New, and Audience equal to an OAuth2
+// resource (the issuer collision is the logic constructor's, tested there).
+func TestTokenIssuerConstruction(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		sessions SessionsConfig
+		want     error
+	}{
+		{"padded issuer", SessionsConfig{Issuer: " https://auth.example.test"}, ErrTokenIssuerInvalid},
+		{"whitespace audience", SessionsConfig{Audience: "  "}, ErrTokenIssuerInvalid},
+		{"audience alone", SessionsConfig{Audience: "app"}, nil},
+	} {
+		log, _ := bufferLog()
+		_, err := keysPostureWiring.build(environment.ModeDevelopment, log, WithSessions(tc.sessions))
+		if (tc.want == nil) != (err == nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
+			t.Errorf("%s: err = %v, want %v", tc.name, err, tc.want)
+		}
+	}
+	oauth := OAuth2Config{Server: oauth2.Config{Issuer: "https://as.example.test", MCPResource: "https://mcp.example.test", APIResource: "https://api.example.test"}}
+	for _, tc := range []struct {
+		name     string
+		sessions SessionsConfig
+	}{
+		{"mcp audience", SessionsConfig{Audience: "https://mcp.example.test"}},
+		{"api audience", SessionsConfig{Audience: "https://api.example.test"}},
+	} {
+		if err := validateTokenAudience(constructorConfig{OAuth2: &oauth, TokenAudience: tc.sessions.Audience}); !errors.Is(err, ErrTokenAudienceCollides) {
+			t.Errorf("%s: err = %v, want ErrTokenAudienceCollides", tc.name, err)
+		}
+	}
+	if err := validateTokenAudience(constructorConfig{OAuth2: &oauth, TokenAudience: "app"}); err != nil {
+		t.Errorf("a distinct audience: %v", err)
 	}
 }

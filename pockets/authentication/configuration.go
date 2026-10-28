@@ -10,8 +10,10 @@ import (
 	"time"
 
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
@@ -183,6 +185,95 @@ func logSessionLifetime(cfg constructorConfig, policy authlogic.SessionsConfig, 
 		floor = "relaxed"
 	}
 	log.Info("auth: session lifetime", "access_token_ttl", policy.AccessTokenTTL.String(), "refresh_ttl", policy.RefreshTTL.String(), "idle_timeout", idle, "idle_source", source, "activity", "refresh_rotation", "idle_scope", "first_party", "live_floor", floor)
+}
+
+// keyRole describes one key-bearing collaborator for the auth: keys boot line:
+// its kind (ring, single, opaque or none) and, for a ring, the ids it reports.
+// Key ids are configuration, never key material.
+type keyRole struct {
+	role   string
+	prefix string
+	kind   string
+	active string
+	ids    []string
+	legacy string
+}
+
+// describeKeyRole classifies v: a KeyRingReporter (sdk v0.23.0's AESGCMRing,
+// the ring signer, the bundled challenge protector) is a ring with its ids and
+// legacy id; any other value with an active key id (an older AESGCMRing, a
+// third-party cryptids.KeyedEncrypter or protection.ChallengeProtector) is a
+// ring with its active id only and no legacy read to report; the sdk's
+// single-key *cryptids.AESGCM is single; nil is none; anything else is opaque,
+// never a guessed single.
+func describeKeyRole(role, prefix string, v any) keyRole {
+	d := keyRole{role: role, prefix: prefix, kind: "opaque"}
+	if nilDependency(v) {
+		d.kind = "none"
+		return d
+	}
+	switch r := v.(type) {
+	case authlogic.KeyRingReporter:
+		d.kind, d.active, d.ids, d.legacy = "ring", r.ActiveKeyID(), r.KeyIDs(), r.LegacyKeyID()
+	case interface{ ActiveKeyID() string }:
+		d.kind, d.active = "ring", r.ActiveKeyID()
+	case *cryptids.AESGCM:
+		d.kind = "single"
+	}
+	return d
+}
+
+// keyRoles describes the pocket's key-bearing collaborators in boot-line
+// order.
+func keyRoles(cfg constructorConfig) []keyRole {
+	return []keyRole{
+		describeKeyRole("jwt_signer", "jwt", cfg.TokenSigner),
+		describeKeyRole("delivery_encrypter", "delivery", cfg.DeliveryEncrypter),
+		describeKeyRole("token_encrypter", "token", cfg.TokenEncrypter),
+		describeKeyRole("challenge_protector", "challenge", cfg.ChallengeProtector),
+		describeKeyRole("totp_encrypter", "totp", cfg.TOTP.Encrypter),
+	}
+}
+
+// logKeys logs the one auth: keys boot line: per role its kind and, for a
+// ring, the active id, the reported ids and whether a legacy id reads
+// pre-ring values; the identifier keyer's kind; and the first-party token
+// issuer and audience (none when unset). It never logs key material.
+func logKeys(cfg constructorConfig, roles []keyRole, log *slog.Logger) {
+	attrs := make([]any, 0, 4*len(roles)+6)
+	for _, r := range roles {
+		attrs = append(attrs, r.role, r.kind)
+		if r.kind != "ring" {
+			continue
+		}
+		attrs = append(attrs, r.prefix+"_active_key_id", r.active)
+		if r.ids != nil {
+			attrs = append(attrs, r.prefix+"_key_ids", strings.Join(r.ids, ","))
+		}
+		if r.role != "challenge_protector" {
+			legacy := "no"
+			if r.legacy != "" {
+				legacy = "yes"
+			}
+			attrs = append(attrs, r.prefix+"_legacy", legacy)
+		}
+	}
+	keyer := "opaque"
+	if _, ok := cfg.IdentifierKeyer.(*protection.HMACIdentifierKeyer); ok {
+		keyer = "single"
+	}
+	if nilDependency(cfg.IdentifierKeyer) {
+		keyer = "none"
+	}
+	issuer, audience := cfg.TokenIssuer, cfg.TokenAudience
+	if issuer == "" {
+		issuer = "none"
+	}
+	if audience == "" {
+		audience = "none"
+	}
+	attrs = append(attrs, "identifier_keyer", keyer, "token_issuer", issuer, "token_audience", audience)
+	log.Info("auth: keys", attrs...)
 }
 
 // nativeMFA reports whether a native AAL2 source is wired: a passkey relying

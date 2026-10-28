@@ -262,6 +262,17 @@ type SessionsConfig struct {
 	// (ErrIdleTimeoutRequires) over a migrated schema
 	// (ErrIdleTimeoutSchemaMissing).
 	IdleTimeout time.Duration
+	// Issuer, when set, is stamped as iss on every first-party access token
+	// and required, exactly, on one: a first-party token without it is
+	// refused. Empty keeps the default, under which a first-party token
+	// carrying iss is refused. It must not equal DelegatedTokensConfig.Issuer
+	// (ErrTokenAudienceCollides) and must carry no surrounding whitespace
+	// (ErrTokenIssuerInvalid).
+	Issuer string
+	// Audience, when set, is stamped as aud on every first-party access token
+	// and required on one, as a string or a one-element array. It may be set
+	// without Issuer; whitespace is ErrTokenIssuerInvalid.
+	Audience string
 }
 
 // WithSessions replaces the complete SessionsConfig group, including zero values.
@@ -270,6 +281,8 @@ func WithSessions(value SessionsConfig) Option {
 		c.AccessTokenTTL = value.AccessTokenTTL
 		c.RefreshTTL = value.RefreshTTL
 		c.IdleTimeout = value.IdleTimeout
+		c.TokenIssuer = value.Issuer
+		c.TokenAudience = value.Audience
 	}
 }
 
