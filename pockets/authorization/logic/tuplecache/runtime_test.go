@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -14,6 +16,7 @@ import (
 	tuplefacts "github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/workers"
 )
 
 type source struct {
@@ -642,6 +645,131 @@ func TestSourceIdentityChangeUsesNewMirror(t *testing.T) {
 	if left, err := backend.State(t.Context(), c.Binding()); err != nil || left != old {
 		t.Fatalf("old mirror changed: %+v/%v", left, err)
 	}
+}
+
+func TestSourceIdentityChangeDetachesTheRelay(t *testing.T) {
+	identity := fmt.Errorf("store: %w", tuplecache.ErrSourceIdentity)
+	terminal := func(t *testing.T, err error) {
+		t.Helper()
+		if !errors.Is(err, tuplecache.ErrSourceIdentity) || !errors.Is(err, workers.ErrPoolShutdown) {
+			t.Fatalf("poll after identity change: %v", err)
+		}
+	}
+	t.Run("snapshot", func(t *testing.T) {
+		c, s := fixture(t, []tuplefacts.Tuple{grant}, memory.NewTupleCache())
+		poll(t, c)
+		allowed(t, c, true)
+		s.snapshotErr = identity
+		terminal(t, c.Poll(t.Context()))
+		first := c.Stats()
+		if !first.Detached || first.PollFailures != 1 || first.LastPoll.FailureStage != "snapshot" {
+			t.Fatalf("identity change did not detach: %+v", first)
+		}
+		snapshots := s.snapshots
+		terminal(t, c.Poll(t.Context()))
+		if again := c.Stats(); again.PollFailures != 1 || again.LastPoll != first.LastPoll || s.snapshots != snapshots {
+			t.Fatalf("detached poll was counted or reached the source: %+v", again)
+		}
+		durable, hits := s.durable, first.Hits
+		allowed(t, c, true)
+		if got := c.Stats(); s.durable != durable+1 || got.Fallbacks != first.Fallbacks+1 || got.Hits != hits {
+			t.Fatalf("detached check did not fall back to the source: %+v", got)
+		}
+		if err := c.Rebuild(t.Context()); !errors.Is(err, tuplecache.ErrSourceIdentity) || errors.Is(err, workers.ErrPoolShutdown) {
+			t.Fatalf("detached rebuild: %v", err)
+		}
+		if err := c.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Poll(t.Context()); !errors.Is(err, tuplecache.ErrUnavailable) {
+			t.Fatalf("closed poll: %v", err)
+		}
+	})
+	t.Run("acknowledgement", func(t *testing.T) {
+		c, s := fixture(t, []tuplefacts.Tuple{grant}, memory.NewTupleCache())
+		poll(t, c)
+		revoke(t, s)
+		s.ackErr = identity
+		terminal(t, c.Poll(t.Context()))
+		if stats := c.Stats(); !stats.Detached || stats.LastPoll.FailureStage != "acknowledgement" {
+			t.Fatalf("acknowledgement identity change did not detach: %+v", stats)
+		}
+		allowed(t, c, false)
+	})
+	t.Run("rebuild", func(t *testing.T) {
+		c, s := fixture(t, []tuplefacts.Tuple{grant}, memory.NewTupleCache())
+		s.snapshotErr = identity
+		if err := c.Rebuild(t.Context()); !errors.Is(err, tuplecache.ErrSourceIdentity) || errors.Is(err, workers.ErrPoolShutdown) {
+			t.Fatalf("rebuild after identity change: %v", err)
+		}
+		if !c.Stats().Detached {
+			t.Fatal("rebuild did not detach")
+		}
+		terminal(t, c.Poll(t.Context()))
+	})
+	t.Run("pool", func(t *testing.T) {
+		c, s := fixture(t, []tuplefacts.Tuple{grant}, memory.NewTupleCache())
+		poll(t, c)
+		s.snapshotErr = identity
+		logs := &recordingHandler{}
+		pool := workers.NewPool(c.Poll, workers.WithWorkerCount(1), workers.WithPollInterval(time.Millisecond), workers.WithLogger(slog.New(logs)))
+		done := make(chan error, 1)
+		go func() { done <- pool.Run(t.Context()) }()
+		select {
+		case err := <-done:
+			if !errors.Is(err, tuplecache.ErrSourceIdentity) {
+				t.Fatalf("Run returned %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("pool did not stop after the identity change")
+		}
+		errorsLogged := logs.matching(slog.LevelError, "")
+		if len(errorsLogged) != 1 || errorsLogged[0].Message != "worker requesting pool shutdown" {
+			t.Fatalf("want one shutdown ERROR, got %d: %+v", len(errorsLogged), errorsLogged)
+		}
+		var cause error
+		errorsLogged[0].Attrs(func(a slog.Attr) bool {
+			if a.Key == "error" {
+				cause, _ = a.Value.Any().(error)
+			}
+			return true
+		})
+		if !errors.Is(cause, tuplecache.ErrSourceIdentity) {
+			t.Fatalf("shutdown ERROR error attribute: %v", cause)
+		}
+		if stopped := logs.matching(slog.LevelInfo, "worker pool stopped"); len(stopped) != 1 {
+			t.Fatalf("want one pool-stopped INFO, got %d", len(stopped))
+		}
+		if got := pool.Stats().Errors; got != 1 {
+			t.Fatalf("pool errors = %d, want 1", got)
+		}
+	})
+}
+
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+func (h *recordingHandler) matching(level slog.Level, message string) []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []slog.Record
+	for _, r := range h.records {
+		if r.Level == level && (message == "" || r.Message == message) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func TestZeroMaxStalenessSelectsDefault(t *testing.T) {

@@ -60,13 +60,17 @@ type PollStats struct {
 // Stats counts this process's work. ScheduledRebuilds counts the full rebuilds
 // FullRebuildEvery promoted and published; ScheduledRebuildFailures counts the
 // promoted attempts that failed. LastFullRebuild is this process's last full
-// publication, zero before the first.
+// publication, zero before the first. Detached reports that the source returned
+// ErrSourceIdentity: Poll and Rebuild refuse until the process restarts and
+// every read falls back to the source. Report it from liveness or as a field in
+// a 200 readiness body, never as a readiness failure.
 type Stats struct {
 	Hits, Fallbacks, Publications, Rebuilds, PollFailures uint64
 	CapacityFallbacks, CapacityFailures, PollConflicts    uint64
 	ScheduledRebuilds, ScheduledRebuildFailures           uint64
 	LastSuccessfulPoll, LastFullRebuild                   time.Time
 	LastPoll                                              PollStats
+	Detached                                              bool
 }
 
 // TupleCache borrows its source/backend. The host drives Poll (a workers.WorkFunc)
@@ -78,7 +82,7 @@ type TupleCache struct {
 	binding                                           string
 	gate                                              chan struct{}
 	wake                                              chan struct{}
-	closed, ready                                     atomic.Bool
+	closed, ready, detached                           atomic.Bool
 	hits, fallbacks, publications, rebuilds, failures atomic.Uint64
 	capacityFallbacks, capacityFailures, conflicts    atomic.Uint64
 	scheduled, scheduledFailures                      atomic.Uint64
@@ -159,7 +163,7 @@ func (c *TupleCache) Stats() Stats {
 		Rebuilds: c.rebuilds.Load(), PollFailures: c.failures.Load(),
 		CapacityFallbacks: c.capacityFallbacks.Load(), CapacityFailures: c.capacityFailures.Load(),
 		PollConflicts: c.conflicts.Load(), ScheduledRebuilds: c.scheduled.Load(),
-		ScheduledRebuildFailures: c.scheduledFailures.Load(),
+		ScheduledRebuildFailures: c.scheduledFailures.Load(), Detached: c.detached.Load(),
 	}
 	if nanos := c.lastSuccess.Load(); nanos != 0 {
 		stats.LastSuccessfulPoll = time.Unix(0, nanos)
@@ -175,6 +179,10 @@ func (c *TupleCache) Stats() Stats {
 
 // Poll uses a consistent source snapshot for each complete publication. SQL
 // acknowledgements delete exact event IDs; sequence gaps are never skipped.
+// Once the source reports ErrSourceIdentity at any stage, Poll returns
+// workers.ErrPoolShutdown wrapping it, so a workers.Pool logs one ERROR, stops
+// and Run returns the cause. Later calls return the same error and are neither
+// counted nor recorded in Stats.LastPoll. Restart the process, not the pool.
 func (c *TupleCache) Poll(ctx context.Context) error { return c.poll(ctx, false) }
 
 // Rebuild replaces the mirror from current authoritative facts, bypassing the
@@ -182,6 +190,8 @@ func (c *TupleCache) Poll(ctx context.Context) error { return c.poll(ctx, false)
 // the same freshness bound, publication gate and exact-ID acknowledgement as
 // Poll. Hosts can use it after a backlog exceeds delta publication capacity.
 // A concurrent local delivery returns workers.ErrNoWork; retry after it finishes.
+// After ErrSourceIdentity it detaches like Poll but returns ErrSourceIdentity
+// without the workers.ErrPoolShutdown wrapper.
 func (c *TupleCache) Rebuild(ctx context.Context) error { return c.poll(ctx, true) }
 
 func (c *TupleCache) poll(ctx context.Context, rebuild bool) (err error) {
@@ -190,6 +200,10 @@ func (c *TupleCache) poll(ctx context.Context, rebuild bool) (err error) {
 	}
 	if c.closed.Load() {
 		return ErrUnavailable
+	}
+	worker := !rebuild
+	if c.detached.Load() {
+		return detachedErr(worker, ErrSourceIdentity)
 	}
 	if !c.source.CacheableContext(ctx) {
 		return fmt.Errorf("tuple cache: ambient delivery: %w", sdk.ErrInvalidInput)
@@ -217,6 +231,11 @@ func (c *TupleCache) poll(ctx context.Context, rebuild bool) (err error) {
 			}
 			if errors.Is(err, ErrConflict) {
 				c.conflicts.Add(1)
+			}
+			if errors.Is(err, ErrSourceIdentity) {
+				c.detached.Store(true)
+				c.ready.Store(false)
+				err = detachedErr(worker, err)
 			}
 		} else {
 			c.lastSuccess.Store(time.Now().UnixNano())
@@ -325,6 +344,14 @@ func (c *TupleCache) fullRebuildDue(before State) bool {
 		}
 	}
 	return time.Since(last) >= c.policy.FullRebuildEvery
+}
+
+// detachedErr keeps the workers protocol out of Rebuild, which is a host API.
+func detachedErr(worker bool, err error) error {
+	if !worker {
+		return err
+	}
+	return fmt.Errorf("%w: %w", workers.ErrPoolShutdown, err)
 }
 
 func (c *TupleCache) scheduledBackoff() time.Duration {
