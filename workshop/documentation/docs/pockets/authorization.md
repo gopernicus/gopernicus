@@ -225,8 +225,15 @@ store := memory.New(memory.WithIntegrityPolicy(mutations.IntegrityPolicy{
 ```
 
 The SQL adapters take the same `WithIntegrityPolicy` option. The default is
-empty; `mutations.DefaultIntegrityPolicy()` opts into "one concrete owner on
-every resource". Rules are checked against the **post-state inside the
+empty; `mutations.DefaultIntegrityPolicyFor(model)` opts into "one concrete owner
+on every modelled type that declares `owner`" (one explicit rule per type; compose
+with `p.Rules = append(p.Rules, …)`; unmodelled types and permission-only `owner`s
+need their own explicit rule), and `mutations.DefaultIntegrityPolicy()` is the
+unscoped "one concrete owner on every resource". An unscoped rule whose relation
+some modelled type with relations does not declare refuses `New` in every mode
+with `ErrIntegrityRuleUnscoped`; the message names the types and the two fixes
+(scope the rule, or use `DefaultIntegrityPolicyFor`). Explicit rules are never
+refused. Rules are checked against the **post-state inside the
 serialized write**, so two concurrent removals cannot both delete the last owner
 even if both callers were admitted. Usersets do not satisfy a concrete minimum.
 A new protected resource must establish its required subjects in its first
@@ -384,8 +391,8 @@ governance controls. A host that sets none of them sees only the WARNs below.
   to passes. A two-person approval is a host workflow inside `AllOf`, not a helper.
 - **The integrity WARN.** In production and development `New` logs one WARN listing
   every resource type whose `owner` relation the store's integrity policy does not
-  protect (fix: `WithIntegrityPolicy(mutations.DefaultIntegrityPolicy())`, or a rule
-  per type), and a separate WARN when `Repositories.Mutations` is nil beside an
+  protect (fix: `WithIntegrityPolicy(mutations.DefaultIntegrityPolicyFor(model))`,
+  or a rule per type), and a separate WARN when `Repositories.Mutations` is nil beside an
   `owner` relation. Neither refuses. `Register` logs `audit_read_route` and
   `integrity_rules`.
 - **Scheduled full rebuilds.** `tuplecache.Policy.FullRebuildEvery` promotes a poll to

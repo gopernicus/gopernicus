@@ -193,7 +193,7 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 	authenticationRepos.Challenges, authenticationRepos.ContactChanges = nil, nil
 	authenticationRepos.ServiceAccounts, authenticationRepos.APIKeys = nil, nil
 	authorizationRepos, err := authorizationpgx.Repositories(ctx, db,
-		authorizationpgx.WithAudit(), authorizationpgx.WithIntegrityPolicy(mutations.DefaultIntegrityPolicy()))
+		authorizationpgx.WithAudit(), authorizationpgx.WithIntegrityPolicy(mutations.DefaultIntegrityPolicyFor(accessModel())))
 	if err != nil {
 		return err
 	}

@@ -255,8 +255,8 @@ refusal; see [Decision observer](#decision-observer).
 model and logs one WARN listing every resource type that declares an `owner`
 relation the store's integrity policy does not protect: `authorization: the
 integrity policy does not protect owner; a last owner can be removed — construct the
-store WithIntegrityPolicy(mutations.DefaultIntegrityPolicy()) or add a rule per
-type` with `resource_types=<a,b>`. With `Repositories.Mutations` nil beside any
+store WithIntegrityPolicy(mutations.DefaultIntegrityPolicyFor(model)) or add a rule
+per type` with `resource_types=<a,b>`. With `Repositories.Mutations` nil beside any
 `owner` relation it logs one WARN instead: `authorization: Repositories.Mutations is
 nil beside an owner relation; no integrity policy is verified and the baseline
 RelationshipWriter can remove a last owner`. Neither refuses and neither has an
@@ -425,11 +425,29 @@ components, err := authorization.New(authorization.Repositories{
 ```
 
 SQL adapters offer the same `WithIntegrityPolicy` option. The default policy is
-empty. `DefaultIntegrityPolicy()` explicitly requires one concrete `owner` on
-every resource type; with a mode set, `New` warns about each model type whose
-`owner` the policy leaves unprotected (see [Production posture](#production-posture)). Empty `ResourceType` matches all resource types; zero
-`MinSubjects` means one, and negative values are invalid. Matching rules use the
-largest minimum. Resource minima do not apply to global facts.
+empty. `DefaultIntegrityPolicyFor(model)` builds one explicit `{type, owner, 1}`
+rule per modelled type that declares `owner`, so a type without `owner` (a
+`platform` holding only `admin`) accepts its first grant; compose your own rules
+with `p := mutations.DefaultIntegrityPolicyFor(model); p.Rules = append(p.Rules, …)`.
+It does not cover unmodelled (opaque) types or types whose `owner` is a permission
+only; add an explicit rule for each. `DefaultIntegrityPolicy()` is the unscoped
+form: one concrete `owner` on every resource type. With a mode set, `New` warns
+about each model type whose `owner` the policy leaves unprotected (see
+[Production posture](#production-posture)). Empty `ResourceType` matches all
+resource types; zero `MinSubjects` means one, and negative values are invalid.
+Matching rules use the largest minimum. Resource minima do not apply to global
+facts.
+
+**An unscoped rule the model cannot satisfy refuses `New`.** In every mode, when a
+model is configured and `Repositories.Mutations` is wired, a rule with an empty
+`ResourceType` whose relation some modelled type with relations does not declare
+returns `ErrIntegrityRuleUnscoped` (wraps `sdk.ErrInvalidInput`): every write on
+that type would otherwise be refused. The message names the rule and the types,
+and the two fixes: scope the rule to the types that have the relation, or build it
+with `mutations.DefaultIntegrityPolicyFor(model)`. Explicit rules are never checked
+against the model and never refused, so a never-written type or an undeclared
+relation you assign on purpose takes an explicit rule. Types with no relations are
+exempt.
 
 | Capability | Behavior |
 | --- | --- |

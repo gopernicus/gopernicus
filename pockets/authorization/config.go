@@ -29,6 +29,12 @@ var (
 	// ErrAuditAcknowledgedWithRecording is returned by New in every mode when
 	// WithAuditDisabledAcknowledged is passed beside an authority that records.
 	ErrAuditAcknowledgedWithRecording = fmt.Errorf("authorization: WithAuditDisabledAcknowledged set but the authority records audit (remove the acknowledgement): %w", sdk.ErrInvalidInput)
+	// ErrIntegrityRuleUnscoped is returned by New in every mode when the store's
+	// integrity policy has a rule with no ResourceType and some modelled type
+	// with relations does not declare the rule's relation, so every write on
+	// that type would be refused. The wrapped text names the rule, the types and
+	// the two fixes: scope the rule, or mutations.DefaultIntegrityPolicyFor.
+	ErrIntegrityRuleUnscoped = fmt.Errorf("authorization: unscoped integrity rule: %w", sdk.ErrInvalidInput)
 )
 
 // Repositories supplies one required tuple authority and optional capabilities.

@@ -37,7 +37,7 @@ runner) and `workshop/`. There is no `internal/`.
    TLS does not verify the server), then `pgxdb.NewLimiter(db).StatusCheck(ctx)`.
 5. The authentication pgx store, with the native rails this host never serves
    unwired: challenges, contact changes, service accounts and API keys. The
-   authorization pgx store `WithAudit()` and `WithIntegrityPolicy(DefaultIntegrityPolicy())`.
+   authorization pgx store `WithAudit()` and `WithIntegrityPolicy(DefaultIntegrityPolicyFor(accessModel()))`.
 6. The router: `TrustProxies`, `SecurityHeaders`, `RequestID`, `Logger`,
    `Panics`; the authentication adapter's `ClientInfoMiddleware()` joins it in
    step 8, in a later `Use`, so it runs inside `TrustProxies`.

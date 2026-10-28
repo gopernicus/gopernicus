@@ -114,6 +114,9 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	if repos.Mutations != nil {
 		comps.integrityRules = len(repos.Mutations.IntegrityPolicy().Rules)
 	}
+	if err := refuseUnscopedIntegrity(comps.Decisions.CompiledModel(), repos.Mutations); err != nil {
+		return Components{}, err
+	}
 	warnIntegrity(comps.log, posture.mode, comps.Decisions.CompiledModel(), repos.Mutations)
 	comps.Authorizer, err = authorizer.New(comps.Decisions)
 	if err != nil {
@@ -249,6 +252,34 @@ func (p auditPosture) warn(log *slog.Logger) {
 	}
 }
 
+// refuseUnscopedIntegrity returns ErrIntegrityRuleUnscoped when a rule with no
+// ResourceType names a relation that some modelled type with relations does not
+// declare: ValidateState would apply the rule there and refuse every write.
+// Explicit rules are never checked against the model, and types with no
+// relations are exempt because nothing can be written on them.
+func refuseUnscopedIntegrity(model *decisions.CompiledModel, repo mutations.MutationRepository) error {
+	if model == nil || repo == nil {
+		return nil
+	}
+	snapshot := model.Snapshot()
+	for _, rule := range repo.IntegrityPolicy().Rules {
+		if rule.ResourceType != "" {
+			continue
+		}
+		var missing []string
+		for _, resourceType := range snapshot.ResourceTypes() {
+			relations := snapshot.Relations(resourceType)
+			if len(relations) != 0 && !slices.Contains(relations, rule.Relation) {
+				missing = append(missing, resourceType)
+			}
+		}
+		if len(missing) != 0 {
+			return fmt.Errorf("%w: integrity rule {%s} names no resource type and %s declares no %s relation, so every write there would be refused; scope the rule to the types that have it, or build it from the model with mutations.DefaultIntegrityPolicyFor(model)", ErrIntegrityRuleUnscoped, rule.Relation, strings.Join(missing, ","), rule.Relation)
+		}
+	}
+	return nil
+}
+
 // warnIntegrity logs, in production and development, one WARN naming every
 // model type whose owner relation the store's integrity policy leaves
 // unprotected, or one WARN when Mutations is nil beside an owner relation. An
@@ -279,7 +310,7 @@ func warnIntegrity(log *slog.Logger, mode environment.Mode, model *decisions.Com
 		}
 	}
 	if len(unprotected) != 0 {
-		log.Warn("authorization: the integrity policy does not protect owner; a last owner can be removed — construct the store WithIntegrityPolicy(mutations.DefaultIntegrityPolicy()) or add a rule per type", "resource_types", strings.Join(unprotected, ","), "runtime_mode", mode.String())
+		log.Warn("authorization: the integrity policy does not protect owner; a last owner can be removed — construct the store WithIntegrityPolicy(mutations.DefaultIntegrityPolicyFor(model)) or add a rule per type", "resource_types", strings.Join(unprotected, ","), "runtime_mode", mode.String())
 	}
 }
 
