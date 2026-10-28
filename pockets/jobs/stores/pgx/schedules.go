@@ -84,10 +84,14 @@ func NewScheduleStore(db *pgxdb.DB, opts ...Option) *Schedules {
 	return &Schedules{db: db, schema: cfg.schema}
 }
 
-// Ensure upserts by Name in one transaction: it creates the schedule (enabled,
-// next_run_at = next) or updates the existing one's kind, spec, and payload,
-// advancing next_run_at to next only when the spec changed.
+// Ensure upserts by Name in one transaction: it creates the schedule with in.ID
+// (enabled, next_run_at = next) or updates the existing one's kind, spec, and
+// payload, keeping its id and advancing next_run_at to next only when the spec
+// changed. An empty in.ID yields sdk.ErrInvalidInput.
 func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Time) (schedule.Schedule, error) {
+	if in.ID == "" {
+		return schedule.Schedule{}, errIDRequired
+	}
 	now := time.Now().UTC()
 	cron, every := specColumns(in.Spec)
 	q := `INSERT INTO ` + s.table("job_schedules") + ` AS current (` + scheduleColumns + `)
@@ -98,7 +102,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
  OR current.every_secs IS DISTINCT FROM EXCLUDED.every_secs THEN EXCLUDED.next_run_at ELSE current.next_run_at END,
  updated_at = GREATEST(current.updated_at, EXCLUDED.updated_at)
  RETURNING ` + scheduleRowColumns
-	row, err := pgxdb.QueryOne[scheduleRow](ctx, s.db, q, pgx.NamedArgs{"id": newID("sched"), "name": in.Name, "kind": in.Kind, "tenant_id": nullString(in.TenantID), "cron": cron, "every": every, "payload": payloadValue(in.Payload), "next": next.UTC(), "now": now})
+	row, err := pgxdb.QueryOne[scheduleRow](ctx, s.db, q, pgx.NamedArgs{"id": in.ID, "name": in.Name, "kind": in.Kind, "tenant_id": nullString(in.TenantID), "cron": cron, "every": every, "payload": payloadValue(in.Payload), "next": next.UTC(), "now": now})
 	if err != nil {
 		return schedule.Schedule{}, err
 	}

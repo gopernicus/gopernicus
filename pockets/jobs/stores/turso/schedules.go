@@ -70,10 +70,14 @@ func NewScheduleStore(db *tursodb.DB) *Schedules {
 	return &Schedules{db: db}
 }
 
-// Ensure upserts by Name in one transaction: it creates the schedule (enabled,
-// next_run_at = next) or updates the existing one's kind, spec, and payload,
-// advancing next_run_at to next only when the spec changed.
+// Ensure upserts by Name in one transaction: it creates the schedule with in.ID
+// (enabled, next_run_at = next) or updates the existing one's kind, spec, and
+// payload, keeping its id and advancing next_run_at to next only when the spec
+// changed. An empty in.ID yields sdk.ErrInvalidInput.
 func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Time) (schedule.Schedule, error) {
+	if in.ID == "" {
+		return schedule.Schedule{}, errIDRequired
+	}
 	now := time.Now().UTC()
 	var out schedule.Schedule
 
@@ -104,7 +108,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 				return nil
 			case errors.Is(err, sdk.ErrNotFound):
 				sch := schedule.Schedule{
-					ID:        newID("sched"),
+					ID:        in.ID,
 					Name:      in.Name,
 					Kind:      in.Kind,
 					TenantID:  in.TenantID,

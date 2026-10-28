@@ -103,9 +103,13 @@ func (r fencedRow) toDomain() job.Job {
 
 // EnqueueOnce inserts in as a new pending execution unless a non-terminal job
 // already holds in.LogicalKey, in which case that active job is returned unchanged
-// (idempotent admission). A duplicate explicit in.ID yields sdk.ErrAlreadyExists;
-// an empty in.ID is generated; an empty LogicalKey disables the once semantics.
+// (idempotent admission). A duplicate in.ID yields sdk.ErrAlreadyExists; an
+// empty in.ID yields sdk.ErrInvalidInput; an empty LogicalKey disables the once
+// semantics.
 func (q *FencedQueue) EnqueueOnce(ctx context.Context, in job.Enqueue) (job.Job, error) {
+	if in.ID == "" {
+		return job.Job{}, errIDRequired
+	}
 	var out job.Job
 	err := retryBusy(ctx, func() error {
 		return q.db.InTx(ctx, func(tx *tursodb.Tx) error {
@@ -128,8 +132,12 @@ func (q *FencedQueue) EnqueueOnce(ctx context.Context, in job.Enqueue) (job.Job,
 // Replace atomically supersedes: it marks every non-terminal job holding
 // in.LogicalKey StatusSuperseded (terminal, stamping terminal_at and clearing any
 // live lease so a running holder is fenced) and inserts in as one fresh pending
-// execution, which it returns.
+// execution, which it returns. An empty in.ID yields sdk.ErrInvalidInput before
+// any job is superseded.
 func (q *FencedQueue) Replace(ctx context.Context, in job.Enqueue) (job.Job, error) {
+	if in.ID == "" {
+		return job.Job{}, errIDRequired
+	}
 	var out job.Job
 	err := retryBusy(ctx, func() error {
 		return q.db.InTx(ctx, func(tx *tursodb.Tx) error {
@@ -406,7 +414,7 @@ func (q *FencedQueue) Get(ctx context.Context, id string) (job.Job, error) {
 func insertFenced(ctx context.Context, tx *tursodb.Tx, in job.Enqueue) (job.Job, error) {
 	id := in.ID
 	if id == "" {
-		id = newID("job")
+		return job.Job{}, errIDRequired
 	}
 	// BEGIN IMMEDIATE serializes this read with other admissions. Fixed-width
 	// TEXT retains nanoseconds; advance past all same-key generations, including

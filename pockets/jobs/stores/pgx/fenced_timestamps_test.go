@@ -67,7 +67,7 @@ func TestFencedGenerationOrderAfterClockRegression(t *testing.T) {
 			// A future timestamp under another key must not adjust ordinary
 			// wall-clock creation times for independent or unkeyed admissions.
 			for _, key := range []string{"other", ""} {
-				got, err := q.EnqueueOnce(ctx, job.Enqueue{Kind: "email", LogicalKey: key, ScheduledFor: scheduled})
+				got, err := q.EnqueueOnce(ctx, job.Enqueue{ID: "independent-" + key, Kind: "email", LogicalKey: key, ScheduledFor: scheduled})
 				if err != nil {
 					t.Fatal(err)
 				}

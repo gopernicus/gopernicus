@@ -13,8 +13,12 @@
 -- operators or indexes are used), and JSON preserves the caller's exact bytes
 -- while JSONB re-canonicalizes whitespace/key order. The conformance suite
 -- asserts a byte-exact payload round-trip, which only JSON satisfies.
+--
+-- job_id is Go-minted (UUIDv7 by default; jobs.WithIDs overrides) and the store
+-- always supplies it; the column default is the raw-SQL backstop. COLLATE "C"
+-- keeps id comparison byte-wise, matching the memory store.
 CREATE TABLE IF NOT EXISTS job_queue (
-    job_id         TEXT        NOT NULL,
+    job_id         TEXT        COLLATE "C" NOT NULL DEFAULT uuidv7()::text,
     kind           TEXT        NOT NULL,
     tenant_id      TEXT,
     payload        JSON        NOT NULL DEFAULT '{}',

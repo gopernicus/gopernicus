@@ -101,6 +101,24 @@ Two limits worth knowing:
 schema step; content is per-dialect. After export, the host owns the final
 migration stream in `workshop/migrations/{db}`.
 
+## Ids
+
+The jobs services mint every job and schedule id (`jobs.WithIDs`, UUIDv7 by
+default); this store persists them verbatim and never mints. An empty id is
+rejected with `sdk.ErrInvalidInput` (never a false `sdk.ErrAlreadyExists`).
+`job_queue.job_id`, `fenced_job_queue.job_id` and `job_schedules.schedule_id`
+are `TEXT COLLATE "C"` with `DEFAULT uuidv7()::text` — a backstop for raw SQL
+inserts only, which needs PostgreSQL 18 (`uuidv7()` lives in `pg_catalog`, so it
+resolves under `WithSchema`). The columns holding a jobs id
+(`job_schedules.last_job_id`, `job_schedule_occurrences.{job_id,schedule_id}`)
+are `COLLATE "C"` too, so comparison and ordering are byte-wise like the memory
+store. The occurrence `job_id` is deterministic (`schedules.OccurrenceID`) and
+has no default.
+
+These are edits to the original `CREATE` files (greenfield rule): a host that
+already applied the earlier bytes re-exports against a fresh database, or stays
+on the previous store pin.
+
 ## Testing
 
 `go test ./...` is hermetic: the `ExportMigrations` unit test runs, and the live

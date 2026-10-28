@@ -41,7 +41,7 @@ func TestOccurrencesMigrationPreservesSchedules(t *testing.T) {
 	}
 	repo := NewScheduleStore(db, WithSchema(schema))
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	sch, err := repo.Ensure(ctx, schedule.Ensure{Name: "legacy", Kind: "demo", Spec: schedule.Spec{Every: time.Hour}, Payload: []byte(`{"legacy":true}`)}, now)
+	sch, err := repo.Ensure(ctx, schedule.Ensure{ID: "legacy-schedule", Name: "legacy", Kind: "demo", Spec: schedule.Spec{Every: time.Hour}, Payload: []byte(`{"legacy":true}`)}, now)
 	if err != nil {
 		t.Fatal(err)
 	}

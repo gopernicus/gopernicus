@@ -14,8 +14,11 @@
 -- bytes a TEXT/JSON column would mangle, re-encode, or reject. The conformance
 -- suite's CheckpointWhileClaimCurrent case asserts a byte-exact non-UTF8
 -- round-trip, which only a binary column satisfies.
+--
+-- job_id is Go-minted like job_queue.job_id (see 0001); the default is the
+-- raw-SQL backstop.
 CREATE TABLE IF NOT EXISTS fenced_job_queue (
-    job_id         TEXT        NOT NULL,
+    job_id         TEXT        COLLATE "C" NOT NULL DEFAULT uuidv7()::text,
     kind           TEXT        NOT NULL,
     tenant_id      TEXT,
     payload        BYTEA       NOT NULL DEFAULT '\x'::bytea,

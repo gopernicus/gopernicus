@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/pockets/jobs"
 	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	schedule "github.com/gopernicus/gopernicus/pockets/jobs/logic/schedules"
 	"github.com/gopernicus/gopernicus/pockets/jobs/stores/storetest"
@@ -75,6 +76,22 @@ func TestConformance_Schedules(t *testing.T) {
 	storetest.RunSchedules(t, func(t *testing.T) schedule.Repository {
 		db, opts := openAndMigrate(t, dsn)
 		return NewScheduleStore(db, opts...)
+	})
+}
+
+// TestConformance_IDs runs the shared id-minting suite through jobs.New over a
+// live PostgreSQL database: the services mint, the stores persist verbatim, and
+// an empty id is sdk.ErrInvalidInput.
+func TestConformance_IDs(t *testing.T) {
+	dsn := requireDSN(t)
+
+	storetest.RunIDs(t, func(t *testing.T) jobs.Repositories {
+		db, opts := openAndMigrate(t, dsn)
+		return jobs.Repositories{
+			Queue:       NewQueueStore(db, append(opts, WithLease(storetest.Lease))...),
+			FencedQueue: NewFencedQueueStore(db, opts...),
+			Schedules:   NewScheduleStore(db, opts...),
+		}
 	})
 }
 

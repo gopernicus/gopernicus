@@ -109,9 +109,13 @@ func (r fencedRow) toDomain() job.Job {
 
 // EnqueueOnce inserts in as a new pending execution unless a non-terminal job
 // already holds in.LogicalKey, in which case that active job is returned unchanged
-// (idempotent admission). A duplicate explicit in.ID yields sdk.ErrAlreadyExists;
-// an empty in.ID is generated; an empty LogicalKey disables the once semantics.
+// (idempotent admission). A duplicate in.ID yields sdk.ErrAlreadyExists; an
+// empty in.ID yields sdk.ErrInvalidInput; an empty LogicalKey disables the once
+// semantics.
 func (q *FencedQueue) EnqueueOnce(ctx context.Context, in job.Enqueue) (job.Job, error) {
+	if in.ID == "" {
+		return job.Job{}, errIDRequired
+	}
 	var out job.Job
 	err := q.db.InTx(ctx, func(tx *pgxdb.Tx) error {
 		if err := lockKey(ctx, tx, in.LogicalKey); err != nil {
@@ -135,8 +139,12 @@ func (q *FencedQueue) EnqueueOnce(ctx context.Context, in job.Enqueue) (job.Job,
 // Replace atomically supersedes: it marks every non-terminal job holding
 // in.LogicalKey StatusSuperseded (terminal, stamping terminal_at and clearing any
 // live lease so a running holder is fenced) and inserts in as one fresh pending
-// execution, which it returns.
+// execution, which it returns. An empty in.ID yields sdk.ErrInvalidInput before
+// any job is superseded.
 func (q *FencedQueue) Replace(ctx context.Context, in job.Enqueue) (job.Job, error) {
+	if in.ID == "" {
+		return job.Job{}, errIDRequired
+	}
 	var out job.Job
 	err := q.db.InTx(ctx, func(tx *pgxdb.Tx) error {
 		if err := lockKey(ctx, tx, in.LogicalKey); err != nil {
@@ -368,7 +376,7 @@ func (q *FencedQueue) Get(ctx context.Context, id string) (job.Job, error) {
 func (q *FencedQueue) insertFenced(ctx context.Context, tx *pgxdb.Tx, in job.Enqueue) (job.Job, error) {
 	id := in.ID
 	if id == "" {
-		id = newID("job")
+		return job.Job{}, errIDRequired
 	}
 	// Keyed admission already holds lockKey. Compare at PostgreSQL's stored
 	// precision so repeated/backward clocks cannot put a new generation before
