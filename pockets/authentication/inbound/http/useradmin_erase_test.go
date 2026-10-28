@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -155,6 +156,40 @@ func TestEraseRouteMapsRefusals(t *testing.T) {
 		key, _ := f.operatorKey(t)
 		if code, body := f.erase(t, key, "target"); code != tc.want {
 			t.Errorf("%v: status = %d, want %d; body=%v", tc.err, code, tc.want, body)
+		}
+	}
+}
+
+// TestEraseRouteMapsHookRefusals: the service wraps a BeforeErase refusal in
+// ErrEraseRefusedByHook; the route maps it by the hook error's kind and never
+// echoes the hook's text.
+func TestEraseRouteMapsHookRefusals(t *testing.T) {
+	const hookText = "hook-private-detail"
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+		code string
+	}{
+		{"invariant", fmt.Errorf("%w: %w", authlogic.ErrEraseRefusedByHook, fmt.Errorf("%s: %w", hookText, sdk.ErrConflict)), http.StatusConflict, "conflict"},
+		{"forbidden", fmt.Errorf("%w: %w", authlogic.ErrEraseRefusedByHook, fmt.Errorf("%s: %w", hookText, sdk.ErrForbidden)), http.StatusForbidden, "permission_denied"},
+		{"unkinded", fmt.Errorf("%w: %w", authlogic.ErrEraseRefusedByHook, errors.New(hookText)), http.StatusInternalServerError, "internal"},
+	} {
+		eraser := &fakeEraser{err: tc.err}
+		f := newEraseRouteFixture(t, eraser)
+		key, _ := f.operatorKey(t)
+		code, body := f.erase(t, key, "target")
+		if code != tc.want {
+			t.Errorf("%s: status = %d, want %d; body=%v", tc.name, code, tc.want, body)
+		}
+		if body["code"] != tc.code {
+			t.Errorf("%s: code = %v, want %q; body=%v", tc.name, body["code"], tc.code, body)
+		}
+		if raw, _ := json.Marshal(body); strings.Contains(string(raw), hookText) {
+			t.Errorf("%s: the response echoes the hook's text: %s", tc.name, raw)
+		}
+		if _, ok := body["user"]; ok {
+			t.Errorf("%s: a refused erase answered a user: %v", tc.name, body)
 		}
 	}
 }

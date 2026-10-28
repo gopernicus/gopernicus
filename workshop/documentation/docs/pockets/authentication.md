@@ -175,7 +175,7 @@ supplied as a named group:
 | `WithBrowser` | `BrowserConfig`: cookies, origins, views and browser route policy |
 | `WithInvitations` | `InvitationsConfig`: granter and host access checks |
 | `WithPasskeys` | `PasskeyConfig`: the WebAuthn relying party, user verification, the per-user cap and the passkey pages (see [Passkeys](#passkeys)) |
-| `WithAdministration` | `AdministrationConfig`: machine gate, user administration, list strategy and the `UserErasureRoute` opt-in |
+| `WithAdministration` | `AdministrationConfig`: machine gate, user administration, list strategy, the `UserErasureRoute` opt-in and the `BeforeErase` hook |
 | `WithMaintenance` | `MaintenanceConfig`: the retention policy (`maintenance.Config`) and `MaintenanceRunnerAcknowledged` |
 
 `WithIDs` and `WithLogger` select optional host dependencies. With no `WithIDs`,
@@ -1011,6 +1011,20 @@ authSvc, err := authentication.New(repos, signer, mode, delivery.ModeJobs,
   `{user, changed, counts}`, 409 on an accepting claim, 400 on self (`ErrEraseSelf`). Without the
   port or the check it is `ErrUserErasureRouteRequires`; the port without `ActiveSessions` is
   `ErrUserErasureRequiresActiveSessions`. `UserErasureRoute` is not an acknowledgement.
+- **`BeforeErase`.** `AdministrationConfig.BeforeErase` (`func(ctx, actor sdk.Principal, userID
+  string) error`) runs after `EraseUser`'s own checks and before the store transaction, under the
+  request context bounded by `EraseTimeout`; it is where the host revokes the person's
+  authorization role assignments in every scope. A non-nil error refuses the erase with nothing
+  erased (`authlogic.ErrEraseRefusedByHook` wrapping the hook's error, mapped by its sdk kind; an
+  unkinded error is a 500). The two transactions are never atomic: the hook runs first because
+  its work is reversible, and it runs on every call, so re-running the erase completes a
+  half-finished one and sweeps orphan grants. A 409 after the roles vanished means the hook ran
+  and the store refused (a held claim, logged as `auth: erase refused after BeforeErase ran`):
+  settle the claim, re-run. The hook is idempotent, attempts integrity-protected relations first,
+  re-reads the first page until it is empty, stamps the administrator as audit actor with reason
+  `user_erase`, returns the pocket error unwrapped and never runs inside a `Transact` on the
+  authorization store. Without `Repositories.UserErasure` it is `ErrBeforeEraseWithoutErasure`.
+  The pocket README's "Erasure" section has every partial state.
 - **Service accounts.** `Service.DeleteServiceAccount(ctx, actor, id)` deletes the account and its
   API keys in one transaction through the store's optional `serviceaccount.CascadeDeleter` (every
   bundled SQL store), recording `service_account_deleted`; no route ships it.

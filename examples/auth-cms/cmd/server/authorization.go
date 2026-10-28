@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync/atomic"
 
 	access "github.com/gopernicus/gopernicus/examples/auth-cms/pockets/access/inbound"
@@ -20,8 +22,11 @@ import (
 	model "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	relationships "github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	roles "github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	authzmem "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
@@ -31,6 +36,13 @@ const (
 	platformResourceID   = "main"
 
 	manageAccessPerm = "manage_access"
+)
+
+// The erase cleanup's audit reason and page size. The reason names the
+// request, not an outcome the erase may not reach.
+const (
+	eraseAuditReason = "user_erase"
+	erasePageSize    = 100
 )
 
 func authzSchema() decisions.Model {
@@ -130,6 +142,59 @@ func newAuthorization(roleRoutesGate web.Middleware, securityEvents securityeven
 			authorizationhttp.WithDecisionObserver(observer), authorizationhttp.WithAuditReadObserver(auditReads), authorizationhttp.WithLogger(logger))
 	}
 	return components, err
+}
+
+// beforeErase is the authentication pocket's BeforeErase hook: it revokes every
+// role assignment and relationship of user:<id>, in every scope, through the
+// audited unassign command with the administrator as actor, before the erase
+// transaction runs. It re-reads the first page until it is empty, attempts the
+// integrity-protected relations of each page first (so a last-owner refusal
+// fires before lesser roles go), stops at the first error and returns it
+// unwrapped so its kind maps (the last owner is a 409, nothing erased). Revoking
+// nothing is success, so a re-run completes a half-finished erase.
+func beforeErase(assignments *roles.Service, unassign *mutations.Service, policy mutations.IntegrityPolicy) func(context.Context, sdk.Principal, string) error {
+	return func(ctx context.Context, actor sdk.Principal, userID string) error {
+		ctx = audit.WithSource(ctx, audit.Source{ActorType: actor.Type, ActorID: actor.ID, Reason: eraseAuditReason})
+		subject := model.PrincipalRef{Type: sdk.PrincipalTypeUser, ID: userID}
+		for {
+			page, err := assignments.ListRoleAssignmentsBySubject(ctx, subject, list.Request{Limit: erasePageSize})
+			if err != nil {
+				return err
+			}
+			if len(page.Items) == 0 {
+				return nil
+			}
+			slices.SortStableFunc(page.Items, func(a, b roles.Assignment) int {
+				return guardRank(policy, a) - guardRank(policy, b)
+			})
+			removed := 0
+			for _, a := range page.Items {
+				result, err := unassign.UnassignRole(ctx, mutations.UnassignRoleCommand{Subject: subject, Role: a.Role, Scope: a.Scope})
+				if err != nil {
+					return err
+				}
+				if result.Outcome == mutations.OutcomeApplied {
+					removed++
+				}
+			}
+			if removed == 0 {
+				return fmt.Errorf("erase cleanup: a page of role assignments did not shrink: %w", sdk.ErrUnavailable)
+			}
+		}
+	}
+}
+
+// guardRank orders an assignment an integrity rule protects before the rest.
+func guardRank(policy mutations.IntegrityPolicy, a roles.Assignment) int {
+	if a.Scope.Kind != tuples.ResourceScope {
+		return 1
+	}
+	for _, rule := range policy.Rules {
+		if rule.Relation == a.Role && (rule.ResourceType == "" || rule.ResourceType == a.Scope.Type) {
+			return 0
+		}
+	}
+	return 1
 }
 
 // roleAdministrationGate composes the D6 chain the bundled /authorization/* routes

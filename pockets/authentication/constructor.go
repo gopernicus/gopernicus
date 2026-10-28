@@ -172,6 +172,9 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if cfg.UserErasureRoute && (nilDependency(repos.UserErasure) || cfg.UserAdminCheck == nil) {
 		return nil, ErrUserErasureRouteRequires
 	}
+	if cfg.BeforeErase != nil && nilDependency(repos.UserErasure) {
+		return nil, ErrBeforeEraseWithoutErasure
+	}
 	if cfg.MaintenanceRunnerAcknowledged && nilDependency(repos.Maintenance) {
 		return nil, ErrMaintenanceAcknowledgedWithoutRepository
 	}
@@ -602,6 +605,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		authlogic.WithLogger(cfg.Logger),
 		authlogic.WithIDs(cfg.IDs),
 		authlogic.WithSecurityEventRecorder(securityEvents),
+		authlogic.WithErasure(authlogic.ErasureConfig{BeforeErase: cfg.BeforeErase}),
 	}
 	if cfg.OAuth2 != nil {
 		logicOptions = append(logicOptions, authlogic.WithDelegatedTokens(authlogic.DelegatedTokensConfig{Issuer: cfg.OAuth2.Server.Issuer}))

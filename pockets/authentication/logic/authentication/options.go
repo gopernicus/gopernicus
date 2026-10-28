@@ -343,6 +343,21 @@ func WithMachine(value MachineConfig) Option {
 	}
 }
 
+// ErasureConfig configures EraseUser beyond the erasure repository.
+type ErasureConfig struct {
+	// BeforeErase runs after EraseUser's own checks and before the store
+	// transaction; a non-nil error refuses the erase with nothing erased. Nil
+	// runs no hook. See EraseUser for the ordering and the re-run repair.
+	BeforeErase EraseHook
+}
+
+// WithErasure replaces the complete ErasureConfig group, including zero values.
+func WithErasure(value ErasureConfig) Option {
+	return func(c *constructorConfig) {
+		c.BeforeErase = value.BeforeErase
+	}
+}
+
 // DeliveryConfig supplies message rendering and delivery dependencies.
 type DeliveryConfig struct {
 	// Deliver is the shared kind-aware delivery renderer/router (design §6.1),

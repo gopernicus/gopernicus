@@ -333,6 +333,10 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	// UserAdminErase reaching the check.
 	authCfg.UserAdminCheck = access.New(authorizer).UserAdmin
 	authCfg.UserErasureRoute = true
+	// The erase revokes the person's role assignments and relationships in every
+	// scope first, through the audited unassign command with the administrator
+	// as actor; the last project owner refuses it as 409 with nothing erased.
+	authCfg.BeforeErase = beforeErase(authzComponents.Roles, authzComponents.Mutations, authzIntegrityPolicy())
 	// The security-event listing (SOC 2 S7), behind the same check with the
 	// action UserAdminReadAudit; each page read records one audit_read row.
 	authCfg.SecurityEventsRoute = true

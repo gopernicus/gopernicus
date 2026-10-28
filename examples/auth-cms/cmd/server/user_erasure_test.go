@@ -8,14 +8,22 @@ import (
 
 	access "github.com/gopernicus/gopernicus/examples/auth-cms/pockets/access/inbound"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
+	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
+	audit "github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
+	model "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	roles "github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // erasureHost is this host's wiring of the erase route: the access policy's
-// platform-admin UserAdminCheck and the UserErasureRoute opt-in run() sets.
+// platform-admin UserAdminCheck, the UserErasureRoute opt-in and the
+// BeforeErase cleanup run() sets.
 type erasureHost struct {
 	*machineHost
+	authz authorization.Components
 }
 
 func newErasureHost(t *testing.T) *erasureHost {
@@ -25,13 +33,44 @@ func newErasureHost(t *testing.T) *erasureHost {
 		t.Fatalf("newAuthorization: %v", err)
 	}
 	policy := access.New(components.Decisions)
-	return &erasureHost{&machineHost{
+	return &erasureHost{machineHost: &machineHost{
 		linkHost: newLinkHostTuned(t, func(cfg *authenticationConfig) {
 			cfg.UserAdminCheck = policy.UserAdmin
 			cfg.UserErasureRoute = true
+			cfg.BeforeErase = beforeErase(components.Roles, components.Mutations, authzIntegrityPolicy())
 		}),
 		system: components.Mutations,
-	}}
+	}, authz: components}
+}
+
+// assignments lists every role assignment and relationship of user:id.
+func (h *erasureHost) assignments(id string) []roles.Assignment {
+	h.t.Helper()
+	page, err := h.authz.Roles.ListRoleAssignmentsBySubject(context.Background(), model.PrincipalRef{Type: "user", ID: id}, list.Request{Limit: 100})
+	if err != nil {
+		h.t.Fatalf("ListRoleAssignmentsBySubject: %v", err)
+	}
+	return page.Items
+}
+
+func (h *erasureHost) erase(admin *linkClient, id string) (int, map[string]any) {
+	h.t.Helper()
+	resp, payload := admin.mutate("/auth/admin/users/"+id+"/erase", `{}`)
+	var body map[string]any
+	_ = json.Unmarshal(payload, &body)
+	return resp.StatusCode, body
+}
+
+func (h *erasureHost) status(admin *linkClient, id string) string {
+	h.t.Helper()
+	resp, payload := admin.do("GET", "/auth/admin/users/"+id, "", nil)
+	var summary struct {
+		Status string `json:"status"`
+	}
+	if resp.StatusCode != http.StatusOK || json.Unmarshal(payload, &summary) != nil {
+		h.t.Fatalf("GET user = %d %s", resp.StatusCode, payload)
+	}
+	return summary.Status
 }
 
 func (h *erasureHost) rail(filter securityevent.ListFilter) []securityevent.SecurityEvent {
@@ -156,5 +195,88 @@ func TestUserErasureRefusedForANonAdmin(t *testing.T) {
 	}
 	if resp, _ := victim.do("GET", "/auth/me", "", nil); resp.StatusCode != http.StatusOK {
 		t.Errorf("the victim lost its session to a refused erase: %d", resp.StatusCode)
+	}
+}
+
+// TestUserErasureRevokesAccessServerSide: one erase request removes a project
+// member who also holds the global auditor role from every scope, each removal
+// audited with the administrator as actor and the reason user_erase.
+func TestUserErasureRevokesAccessServerSide(t *testing.T) {
+	h := newErasureHost(t)
+	admin := h.signUpPlatformAdmin("revoke-admin@example.com")
+	admin.stepUpToAAL2()
+	adminID := h.currentUserID(admin)
+	target := h.signUp("revoke-target@example.com")
+	targetID := h.currentUserID(target)
+	trustGrant(t, h.system, demoResourceType, demoResourceID, "owner", subj("user", adminID))
+	trustGrant(t, h.system, demoResourceType, demoResourceID, "member", subj("user", targetID))
+	if _, err := h.system.AssignRole(proofSystemContext(), mutations.AssignRoleCommand{
+		Subject: model.PrincipalRef{Type: "user", ID: targetID}, Role: demoRole, Scope: tuples.Global(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.assignments(targetID); len(got) != 2 {
+		t.Fatalf("fixture: assignments = %+v, want the member and the global auditor", got)
+	}
+
+	if code, body := h.erase(admin, targetID); code != http.StatusOK || body["changed"] != true {
+		t.Fatalf("erase = %d %v, want 200 changed:true", code, body)
+	}
+	if got := h.assignments(targetID); len(got) != 0 {
+		t.Fatalf("assignments after erase = %+v, want none in any scope", got)
+	}
+	page, err := h.authz.Audit.List(context.Background(), audit.Filter{SubjectType: "user", SubjectID: targetID}, list.Request{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := map[string]bool{}
+	for _, rec := range page.Items {
+		if rec.Change.Action != audit.ActionRemoved {
+			continue
+		}
+		if rec.Source.ActorType != "user" || rec.Source.ActorID != adminID || rec.Source.Reason != "user_erase" || rec.Source.System != "" {
+			t.Errorf("removal %s source = %+v, want the admin with reason user_erase", rec.ID, rec.Source)
+		}
+		removed[rec.Change.Tuple.Relation] = true
+	}
+	if !removed["member"] || !removed[demoRole] || len(removed) != 2 {
+		t.Fatalf("audited removals = %v, want member and %s", removed, demoRole)
+	}
+}
+
+// TestUserErasureRefusedWhileSoleProjectOwner: the host's last-owner rule
+// refuses the cleanup as 409 with nothing erased and, because the owner tuple
+// is attempted first, nothing revoked; a second owner lets the re-run finish,
+// and a third erase is a no-op.
+func TestUserErasureRefusedWhileSoleProjectOwner(t *testing.T) {
+	h := newErasureHost(t)
+	admin := h.signUpPlatformAdmin("owner-admin@example.com")
+	admin.stepUpToAAL2()
+	adminID := h.currentUserID(admin)
+	target := h.signUp("owner-target@example.com")
+	targetID := h.currentUserID(target)
+	trustGrant(t, h.system, demoResourceType, "solo", "owner", subj("user", targetID))
+	trustGrant(t, h.system, demoResourceType, "solo", "member", subj("user", targetID))
+
+	code, body := h.erase(admin, targetID)
+	if code != http.StatusConflict || body["code"] != "conflict" {
+		t.Fatalf("erase of the sole owner = %d %v, want 409 conflict", code, body)
+	}
+	if got := h.status(admin, targetID); got != "active" {
+		t.Errorf("status after the refusal = %q, want active", got)
+	}
+	if got := h.assignments(targetID); len(got) != 2 {
+		t.Fatalf("assignments after the refusal = %+v, want the owner and the member intact", got)
+	}
+
+	trustGrant(t, h.system, demoResourceType, "solo", "owner", subj("user", adminID))
+	if code, body := h.erase(admin, targetID); code != http.StatusOK || body["changed"] != true {
+		t.Fatalf("re-run = %d %v, want 200 changed:true", code, body)
+	}
+	if got := h.assignments(targetID); len(got) != 0 {
+		t.Fatalf("assignments after the re-run = %+v, want none", got)
+	}
+	if code, body := h.erase(admin, targetID); code != http.StatusOK || body["changed"] != false {
+		t.Fatalf("third erase = %d %v, want 200 changed:false", code, body)
 	}
 }
