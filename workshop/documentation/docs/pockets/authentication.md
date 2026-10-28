@@ -218,6 +218,168 @@ The host owns either runtime. In jobs mode, authentication exposes delivery call
 
 The access JWT is short-lived. The server-side session is the refresh and revocation anchor. Refresh tokens rotate within a fixed horizon rather than extending it indefinitely.
 
+## JSON session inventory over the service
+
+The pocket's session-management routes are HTML: `GET /auth/sessions`, `POST
+/auth/sessions/{id}/revoke` and `POST /auth/sessions/revoke-all`, mounted with the OAuth2
+configuration. A JSON arm in the pocket is deferred to its own plan, because it has to fit the
+adapter's dual-transport rule and a single wiring point. Until then, a host with a JSON client
+builds three routes of its own over the same service methods:
+
+| Method | Does |
+|---|---|
+| `ListUserSessions(ctx, userID, req)` | one owner's live sessions, newest first, as a `list.Page[session.Session]` |
+| `RevokeUserSession(ctx, userID, sessionID)` | deletes one of that owner's sessions; an unknown id or another user's id is `sdk.ErrNotFound` |
+| `RevokeAllUserSessions(ctx, userID)` | ends every session the owner holds, pending approvals included |
+
+All three return `sdk.ErrForbidden` when `Repositories.SessionManagement` is nil, so mount the
+routes only when your repositories fill it (the bundled pgx and Turso `Repositories` do). The
+methods trust their caller to authorize `userID`. The routes derive it from the live session,
+never from the request.
+
+The gates to reuse:
+
+- **First-party and live.** `RequirePrincipal(FirstParty(), Live())`. `FirstParty()` refuses API
+  keys, external tokens and delegated OAuth access tokens, so a connected app cannot list or end
+  the user's sessions. `Live()` re-checks the session on every request and is what makes
+  `CurrentSessionID` report the caller's own session.
+- **Browser-safe mutations.** `RequireBrowserSafeMutation()` after the authenticator on both
+  writes: an allowlisted Origin plus the `X-CSRF-Token` double-submit for cookie callers.
+  Bearer callers pass.
+- **No caching.** `web.NoStore()` on all three.
+
+The handlers, as host inbound code:
+
+```go
+// SessionInventory is the slice of *authentication.Service these routes use.
+type SessionInventory interface {
+	CurrentUser(context.Context) (string, bool)
+	CurrentSessionID(context.Context) (string, bool)
+	ListUserSessions(context.Context, string, list.Request) (list.Page[session.Session], error)
+	RevokeUserSession(context.Context, string, string) error
+	RevokeAllUserSessions(context.Context, string) error
+}
+
+// CookieClearer ends the browser's session cookies (*authenticationhttp.Adapter).
+type CookieClearer interface {
+	ClearSessionCookies(http.ResponseWriter)
+}
+
+// Router is the registration method of *web.WebHandler.
+type Router interface {
+	Handle(method, path string, handler http.HandlerFunc, middleware ...web.Middleware)
+}
+
+type sessionView struct {
+	ID         string    `json:"id"`
+	FirstParty bool      `json:"first_party"`
+	ClientID   string    `json:"client_id,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Current    bool      `json:"current"`
+}
+
+type sessionHandlers struct {
+	svc     SessionInventory
+	cookies CookieClearer
+}
+
+// Mount registers the routes behind authenticate (FirstParty, Live) and, on
+// the writes, browserSafe.
+func Mount(r Router, svc SessionInventory, cookies CookieClearer, authenticate, browserSafe web.Middleware) {
+	h := sessionHandlers{svc: svc, cookies: cookies}
+	r.Handle("GET", "/api/me/sessions", h.list, web.NoStore(), authenticate)
+	r.Handle("DELETE", "/api/me/sessions/{id}", h.revoke, web.NoStore(), authenticate, browserSafe)
+	r.Handle("POST", "/api/me/sessions/revoke-all", h.revokeAll, web.NoStore(), authenticate, browserSafe)
+}
+
+func (h sessionHandlers) caller(w http.ResponseWriter, r *http.Request) (userID, sessionID string, ok bool) {
+	userID, uok := h.svc.CurrentUser(r.Context())
+	sessionID, sok := h.svc.CurrentSessionID(r.Context())
+	if !uok || !sok {
+		web.RespondJSONDomainError(w, sdk.ErrUnauthorized)
+		return "", "", false
+	}
+	return userID, sessionID, true
+}
+
+func (h sessionHandlers) list(w http.ResponseWriter, r *http.Request) {
+	userID, current, ok := h.caller(w, r)
+	if !ok {
+		return
+	}
+	req, err := list.ParseQuery(r.URL.Query(), list.QueryOptions{})
+	if err != nil {
+		web.RespondJSONDomainError(w, err)
+		return
+	}
+	req.Order = session.DefaultOrder
+	page, err := h.svc.ListUserSessions(r.Context(), userID, req)
+	if err != nil {
+		web.RespondJSONDomainError(w, err)
+		return
+	}
+	web.RespondJSONOK(w, list.MapPage(page, func(s session.Session) sessionView {
+		return sessionView{ID: s.ID, FirstParty: s.FirstParty(), ClientID: s.Delegation.ClientID,
+			CreatedAt: s.CreatedAt, ExpiresAt: s.ExpiresAt, Current: s.ID == current}
+	}))
+}
+
+func (h sessionHandlers) revoke(w http.ResponseWriter, r *http.Request) {
+	userID, current, ok := h.caller(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	if err := h.svc.RevokeUserSession(r.Context(), userID, id); err != nil {
+		web.RespondJSONDomainError(w, err)
+		return
+	}
+	if id == current {
+		h.cookies.ClearSessionCookies(w)
+	}
+	web.RespondNoContent(w)
+}
+
+func (h sessionHandlers) revokeAll(w http.ResponseWriter, r *http.Request) {
+	userID, _, ok := h.caller(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.RevokeAllUserSessions(r.Context(), userID); err != nil {
+		web.RespondJSONDomainError(w, err)
+		return
+	}
+	h.cookies.ClearSessionCookies(w)
+	web.RespondNoContent(w)
+}
+```
+
+`cmd` wires it with the pocket's adapter and service:
+
+```go
+sessionsinbound.Mount(router, auth.Authentication, auth.HTTP,
+	auth.HTTP.RequirePrincipal(authenticationhttp.FirstParty(), authenticationhttp.Live()),
+	auth.HTTP.RequireBrowserSafeMutation())
+```
+
+What the recipe guarantees, and what to keep when you adapt it:
+
+- **Identical not-found.** Another user's session id and an id that does not exist both answer
+  the same 404 body, because the store constrains the delete to the owner and answers
+  `sdk.ErrNotFound` for both. Do not look the session up first to give a better error. (The
+  HTML arm answers a blanket 400, which is not the model here.)
+- **Revoking the current session ends the browser's sign-in.** Revoke-current and revoke-all
+  clear the session cookies on the response. A bearer client drops its own tokens on the 204.
+- **No secrets in the projection.** A `session.Session` carries refresh-token hashes; the view
+  copies the id, the timestamps, the delegation's client id and `FirstParty()` only.
+  `FirstParty()` separates the user's own sign-ins from connected apps (delegated sessions,
+  where revoking one disconnects the app). Filter on it if your page lists only devices. The
+  session row has no IP address or user agent. If you join those in from your own records,
+  show them only on these owner-only routes.
+- **Your paths.** The recipe mounts under the host's API prefix, outside `/auth/*`, so a later
+  pocket arm cannot collide with it. Add the three routes to your endpoint matrix as `self`.
+
 ## External identity providers
 
 Since v0.19 the pocket also admits tokens from an external identity provider

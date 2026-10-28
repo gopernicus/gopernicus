@@ -24,7 +24,9 @@ migrator inside a runtime transaction; migrations already run pre-boot. See *Per
 databases never share a transaction".
 
 A host that uses row-level security also keeps the runtime role `NOBYPASSRLS` and owning no
-table: see [Row-level security with pgxdb](./row-level-security.md), "Roles".
+table: see [Row-level security with pgxdb](./row-level-security.md), "Roles", and its read-only
+[owner/app preflight](./row-level-security.md#roles-the-ownerapp-split-and-a-read-only-preflight),
+which checks this split before a release.
 
 Create the runtime role with SQL, not the provider console: Neon console and API roles carry
 `pg_write_all_data` (through `neon_superuser`), which no per-table `REVOKE` removes, and a role

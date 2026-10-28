@@ -135,7 +135,7 @@ A nested request holds one connection from each pool. Nest instances in one fixe
 
 ### Row-level security
 
-A PostgreSQL host that isolates tenants with row-level security scopes each transaction with `pgxdb.DB.TransactWithSettings`, which applies transaction-local settings such as `app.tenant_id` as its first statement, and has tenant-owned stores check `tx.Setting` on `db.TxFrom(ctx)` instead of falling back to the pool. See [Row-level security with pgxdb](./row-level-security.md).
+A PostgreSQL host that isolates tenants with row-level security scopes each transaction with `pgxdb.DB.TransactWithSettings`, which applies transaction-local settings such as `app.tenant_id` as its first statement, and has tenant-owned stores check `tx.Setting` on `db.TxFrom(ctx)` instead of falling back to the pool. See [Row-level security with pgxdb](./row-level-security.md), which also covers [adding policies to your own tables](./row-level-security.md#adding-policies-to-your-own-tables) after the exported store files, and why a pocket write or a job enqueue inside a held transaction [does not join it](./row-level-security.md#enqueue-after-commit).
 
 ## Prove parity
 

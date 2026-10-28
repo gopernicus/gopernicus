@@ -231,9 +231,11 @@ The command writes through the authorization pocket over the same recording
 store, under the same runtime mode as the server, so the grant is in the
 change history (`iam_audit`, `system_source = bootstrap`, reason `first platform
 admin`). Rerunning it answers `no_change` and records nothing. **A raw SQL
-insert into `iam_tuples` is not supported:** it leaves no audit row. Once an
-admin exists, role writes through `POST /authorization/roles` are recorded with
-that admin as the actor (the MFA token; `$SINGLE` still answers 401):
+insert into `iam_tuples` is not supported:** it leaves no audit row. The
+[first-admin guide](../../workshop/documentation/docs/guides/first-admin.md)
+sets this grant beside the invitation shape an invitation-only native host
+uses. Once an admin exists, role writes through `POST /authorization/roles`
+are recorded with that admin as the actor (the MFA token; `$SINGLE` still answers 401):
 
 ```sh
 curl -i -XPOST localhost:8080/authorization/roles -H "Authorization: Bearer $TOKEN" \
