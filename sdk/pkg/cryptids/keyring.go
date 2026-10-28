@@ -22,12 +22,14 @@ var (
 	ErrUnknownKeyID         = fmt.Errorf("cryptids: ciphertext names a key that is not in the ring: %w", sdk.ErrInvalidInput)
 	ErrCiphertextMalformed  = fmt.Errorf("cryptids: ciphertext malformed: %w", sdk.ErrInvalidInput)
 	ErrCiphertextAuthFailed = fmt.Errorf("cryptids: ciphertext authentication failed: %w", sdk.ErrConflict)
+	ErrLegacyKeyMissing     = fmt.Errorf("cryptids: legacy key is not in the ring: %w", sdk.ErrInvalidInput)
 )
 
 // ringScheme tags keyed ciphertext: ringScheme.<key id>.<AESGCM payload>.
 const ringScheme = "v1"
 
-// ringKeyBytes is the AES-256 key length every ring key must have.
+// ringKeyBytes is the key length Validate requires and the floor
+// ValidateMinimum never goes below.
 const ringKeyBytes = 32
 
 // keyIDPattern keeps key ids free of the separators the wire format uses.
@@ -45,12 +47,27 @@ type KeyedEncrypter interface {
 	KeyIDOf(ciphertext string) (string, error)
 }
 
-// KeyRing names the keys a KeyedEncrypter may use. Active encrypts; every key
-// decrypts. Remove a retired key only after nothing is still sealed under it.
-// Ids match ^[a-z0-9][a-z0-9_-]{0,31}$ and every key is exactly 32 bytes.
+// KeyRing names the keys a KeyedEncrypter or a signer may use. Active
+// encrypts or signs; every key decrypts or verifies. Remove a retired key only
+// after nothing is still sealed or signed under it. Ids match
+// ^[a-z0-9][a-z0-9_-]{0,31}$. Validate requires every key to be exactly 32
+// bytes (AES-256-GCM, HMAC-SHA-256 and HS256 share that shape);
+// ValidateMinimum accepts longer keys for HMAC secrets.
 type KeyRing struct {
 	Active string
 	Keys   map[string][]byte
+}
+
+// RingOption configures NewAESGCMRing.
+type RingOption func(*AESGCMRing)
+
+// WithLegacyKeyID names the ring key that opens single-key AESGCM output (raw
+// base64url, no "v1." prefix), so values written before a host moved to a ring
+// keep decrypting. While that key is also the active key, Encrypt writes the
+// single-key shape too, so instances still on a plain AESGCM can open it
+// during a rolling deploy. An empty id is no option.
+func WithLegacyKeyID(id string) RingOption {
+	return func(r *AESGCMRing) { r.legacy = id }
 }
 
 // ParseKeyRing reads keys as "id:hex,id:hex" and the active id, the shape a
@@ -58,6 +75,30 @@ type KeyRing struct {
 // APP_SECRETS_ACTIVE_KEY. Each hex value decodes to 32 bytes
 // (`openssl rand -hex 32`). Errors name the key id, never its material.
 func ParseKeyRing(keys, active string) (KeyRing, error) {
+	ring, err := parseKeyRing(keys, active)
+	if err != nil {
+		return KeyRing{}, err
+	}
+	if err := ring.Validate(); err != nil {
+		return KeyRing{}, err
+	}
+	return ring, nil
+}
+
+// ParseKeyRingMinimum is ParseKeyRing for keys of at least min bytes rather
+// than exactly 32, the shape of an HMAC secret. min below 32 is raised to 32.
+func ParseKeyRingMinimum(keys, active string, min int) (KeyRing, error) {
+	ring, err := parseKeyRing(keys, active)
+	if err != nil {
+		return KeyRing{}, err
+	}
+	if err := ring.ValidateMinimum(min); err != nil {
+		return KeyRing{}, err
+	}
+	return ring, nil
+}
+
+func parseKeyRing(keys, active string) (KeyRing, error) {
 	ring := KeyRing{Active: strings.TrimSpace(active), Keys: map[string][]byte{}}
 	for entry := range strings.SplitSeq(keys, ",") {
 		entry = strings.TrimSpace(entry)
@@ -78,13 +119,23 @@ func ParseKeyRing(keys, active string) (KeyRing, error) {
 		}
 		ring.Keys[id] = raw
 	}
-	if err := ring.validate(); err != nil {
-		return KeyRing{}, err
-	}
 	return ring, nil
 }
 
-func (r KeyRing) validate() error {
+// Validate checks the ids, that the active key is present and that every key
+// is exactly 32 bytes.
+func (r KeyRing) Validate() error {
+	return r.validate(func(n int) bool { return n == ringKeyBytes }, fmt.Sprintf("must be %d bytes", ringKeyBytes))
+}
+
+// ValidateMinimum is Validate for keys of at least min bytes. min below 32 is
+// raised to 32.
+func (r KeyRing) ValidateMinimum(min int) error {
+	min = max(min, ringKeyBytes)
+	return r.validate(func(n int) bool { return n >= min }, fmt.Sprintf("must be at least %d bytes", min))
+}
+
+func (r KeyRing) validate(lengthOK func(int) bool, want string) error {
 	if len(r.Keys) == 0 {
 		return ErrKeyRingEmpty
 	}
@@ -92,8 +143,8 @@ func (r KeyRing) validate() error {
 		if !keyIDPattern.MatchString(id) {
 			return fmt.Errorf("%w: key id %q", ErrKeyMalformed, id)
 		}
-		if len(raw) != ringKeyBytes {
-			return fmt.Errorf("%w: key %q must be %d bytes, got %d", ErrKeyMalformed, id, ringKeyBytes, len(raw))
+		if !lengthOK(len(raw)) {
+			return fmt.Errorf("%w: key %q %s, got %d", ErrKeyMalformed, id, want, len(raw))
 		}
 	}
 	if _, ok := r.Keys[r.Active]; !ok {
@@ -107,17 +158,27 @@ var _ KeyedEncrypter = (*AESGCMRing)(nil)
 // AESGCMRing is the in-package KeyedEncrypter: one AESGCM per ring key. Its
 // ciphertext is "v1.<key id>.<payload>", where the payload is exactly what
 // AESGCM produces, so each key keeps AESGCM's nonce and message-count limits.
+// With WithLegacyKeyID it also reads (and, while that key is active, writes)
+// the unprefixed single-key form.
 type AESGCMRing struct {
 	active string
+	legacy string
 	keys   map[string]*AESGCM
 }
 
-// NewAESGCMRing validates the ring and builds a cipher per key.
-func NewAESGCMRing(ring KeyRing) (*AESGCMRing, error) {
-	if err := ring.validate(); err != nil {
+// NewAESGCMRing validates the ring and builds a cipher per key. A legacy key
+// id that is not in the ring is ErrLegacyKeyMissing.
+func NewAESGCMRing(ring KeyRing, opts ...RingOption) (*AESGCMRing, error) {
+	if err := ring.Validate(); err != nil {
 		return nil, err
 	}
 	r := &AESGCMRing{active: ring.Active, keys: make(map[string]*AESGCM, len(ring.Keys))}
+	for _, opt := range opts {
+		opt(r)
+	}
+	if _, ok := ring.Keys[r.legacy]; r.legacy != "" && !ok {
+		return nil, fmt.Errorf("%w: %q", ErrLegacyKeyMissing, r.legacy)
+	}
 	for id, raw := range ring.Keys {
 		gcm, err := NewAESGCM(raw)
 		if err != nil {
@@ -131,20 +192,29 @@ func NewAESGCMRing(ring KeyRing) (*AESGCMRing, error) {
 // ActiveKeyID is the id Encrypt seals under.
 func (r *AESGCMRing) ActiveKeyID() string { return r.active }
 
+// LegacyKeyID is the key that reads unprefixed single-key ciphertext, or ""
+// when the ring reads only the v1 form.
+func (r *AESGCMRing) LegacyKeyID() string { return r.legacy }
+
 // Encrypt seals plaintext under the active key and prefixes the scheme and
-// key id.
+// key id, except while the active key is the legacy key: then it writes the
+// unprefixed single-key form.
 func (r *AESGCMRing) Encrypt(plaintext string) (string, error) {
 	payload, err := r.keys[r.active].Encrypt(plaintext)
 	if err != nil {
 		return "", err
 	}
+	if r.active == r.legacy {
+		return payload, nil
+	}
 	return ringScheme + "." + r.active + "." + payload, nil
 }
 
-// Decrypt opens ciphertext under the key it names. A key no longer in the ring
-// is ErrUnknownKeyID; a payload the key rejects is ErrCiphertextAuthFailed.
+// Decrypt opens ciphertext under the key it names, or under the legacy key
+// when it has no "." (base64url never contains one). A key no longer in the
+// ring is ErrUnknownKeyID; a payload the key rejects is ErrCiphertextAuthFailed.
 func (r *AESGCMRing) Decrypt(ciphertext string) (string, error) {
-	id, payload, err := splitKeyed(ciphertext)
+	id, payload, err := r.split(ciphertext)
 	if err != nil {
 		return "", err
 	}
@@ -167,10 +237,18 @@ func (r *AESGCMRing) Decrypt(ciphertext string) (string, error) {
 	return plaintext, nil
 }
 
-// KeyIDOf reports the key id a ciphertext names.
+// KeyIDOf reports the key id a ciphertext names, or the legacy key id for an
+// unprefixed value when the ring has one.
 func (r *AESGCMRing) KeyIDOf(ciphertext string) (string, error) {
-	id, _, err := splitKeyed(ciphertext)
+	id, _, err := r.split(ciphertext)
 	return id, err
+}
+
+func (r *AESGCMRing) split(ciphertext string) (id, payload string, err error) {
+	if r.legacy != "" && ciphertext != "" && !strings.Contains(ciphertext, ".") {
+		return r.legacy, ciphertext, nil
+	}
+	return splitKeyed(ciphertext)
 }
 
 // splitKeyed parses "v1.<key id>.<payload>".
