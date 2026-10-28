@@ -240,6 +240,24 @@ func TestGuardRuleFixtures(t *testing.T) {
 		{name: "client binary carries an SQL literal", rule: "H10", violating: true, files: map[string]string{
 			"cmd/cli/main.go": goSrc("main", nil, "const q = \"SELECT 1\"\n\nfunc main() {}"),
 		}},
+		{name: "composition root carries message and method literals", rule: "H10", files: map[string]string{
+			"cmd/server/wire.go": "package main\n\nimport (\n\t\"errors\"\n\tf \"fmt\"\n\t\"log\"\n\t\"log/slog\"\n\t\"net/http\"\n)\n\n" +
+				"var method = http.MethodDelete\n\nconst verb = \"DELETE\"\n\n" +
+				"func wire(ctx any, err error) error {\n" +
+				"\tslog.InfoContext(nil, \"delete from cache\")\n" +
+				"\tlog.Printf(\"select one from the list\")\n" +
+				"\t_ = errors.New(\"insert into map\")\n" +
+				"\treturn f.Errorf(\"create invitation: %w\", f.Errorf(\"delete from cache: %w\", err))\n}\n",
+		}},
+		{name: "SQL passed as a format operand, not the format", rule: "H10", violating: true, files: map[string]string{
+			"cmd/server/wire.go": goSrc("main", nil, "import \"fmt\"\n\nvar q = fmt.Sprintf(\"%s\", \"DELETE FROM t WHERE id = $1\")"),
+		}},
+		{name: "SQL built as a Sprintf format", rule: "H10", violating: true, files: map[string]string{
+			"cmd/server/wire.go": goSrc("main", nil, "import \"fmt\"\n\nvar q = fmt.Sprintf(\"SELECT * FROM %s\", \"t\")"),
+		}},
+		{name: "SQL handed to a database call", rule: "H10", violating: true, files: map[string]string{
+			"cmd/server/wire.go": goSrc("main", nil, "type db struct{}\n\nfunc (db) Exec(string) {}\n\nfunc reset(d db) { d.Exec(`\n\tINSERT INTO t (id)\n\tVALUES ($1)`) }"),
+		}},
 
 		{name: "integration named only by cmd", rule: "H11", files: map[string]string{
 			"integrations/mail/smtp/smtp.go": goSrc("smtp", []string{fwSDK + "/capabilities/notify/email", host + "/sdk/addr", "github.com/vendor/smtp"}, ""),
@@ -1024,4 +1042,34 @@ func sameLabels(got, want []string) bool {
 	slices.Sort(g)
 	slices.Sort(w)
 	return slices.Equal(g, w)
+}
+
+// TestIsSQLLiteral pins H10's shape rule: a verb counts only when SQL shape
+// follows it on whitespace-normalised tokens.
+func TestIsSQLLiteral(t *testing.T) {
+	flagged := []string{
+		"SELECT 1", "SELECT * FROM t", "SELECT $1::text", "SELECT (1)",
+		"SELECT set_config($1,$2,true)", "select count(*) from x", "INSERT INTO t",
+		"DELETE FROM t WHERE", "UPDATE t SET", "CREATE TABLE", "CREATE UNIQUE INDEX",
+		"CREATE OR REPLACE FUNCTION", "CREATE POLICY", "ALTER TABLE",
+		"ALTER DEFAULT PRIVILEGES", "DROP SCHEMA", "\n\t  SELECT id\n\t  FROM t\n",
+		"delete from cache: %w", "insert into map", "select one from the list",
+	}
+	clean := []string{
+		"create invitation: %w", "select the organization", "update failed",
+		"delete pending", "Insert the key", "alter ego", "Drop it", "SELECTED",
+		"Create", "DELETE", "UPDATE profile SETTINGS", "", "   ",
+	}
+	for _, s := range flagged {
+		for _, lit := range []string{strconv.Quote(s), "`" + s + "`"} {
+			if !isSQLLiteral(lit) {
+				t.Errorf("isSQLLiteral(%s) = false, want true", lit)
+			}
+		}
+	}
+	for _, s := range clean {
+		if isSQLLiteral(strconv.Quote(s)) {
+			t.Errorf("isSQLLiteral(%q) = true, want false", s)
+		}
+	}
 }

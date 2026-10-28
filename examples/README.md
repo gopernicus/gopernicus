@@ -587,9 +587,19 @@ host decision.
 **`cmd/`** is the composition root and nothing else (**H10**). The
 machine-checkable floor is narrow: a composition root declares no interface
 types — a root wires, it declares nothing for others to implement — and no
-`cmd/**` file contains an SQL statement literal (a string literal whose
-trimmed, upper-cased prefix is `SELECT`, `INSERT`, `UPDATE`, `DELETE`,
-`CREATE`, `ALTER`, or `DROP`). Both clauses read production files only: a
+`cmd/**` file contains an SQL statement literal. Read as upper-cased,
+whitespace-split tokens, a string literal is one when it opens with a verb
+followed by SQL shape: `CREATE`, `ALTER`, or `DROP` then one of `TABLE`,
+`INDEX`, `UNIQUE`, `OR`, `POLICY`, `SCHEMA`, `ROLE`, `EXTENSION`, `FUNCTION`,
+`TRIGGER`, `VIEW`, `TYPE`, `SEQUENCE`, `TEMP`, `TEMPORARY`, `MATERIALIZED`,
+`DATABASE`, or `DEFAULT`; `INSERT INTO`; `DELETE FROM`; `UPDATE <name> SET`;
+or `SELECT` then `*`, a digit, `$`, `(`, or `<name>(`, or with a `FROM` token
+anywhere after it. A bare verb (`"DELETE"` as an HTTP method) is not one, and
+neither is the message or format argument of `fmt.Errorf`, `errors.New`, a
+`log` print, or an `slog` message — `fmt.Errorf("delete from cache: %w", err)`
+is prose. A `fmt.Sprintf` format is still read: it builds a value, which may
+be SQL handed to a database. A `WITH …` statement is not read. Both clauses
+read production files only: a
 live-leg test's fixture reset behind a build tag is a test, not wiring. The
 normative rule is wider than its floor: provider behavior — a mutation guard,
 a membership resolver, a purge routine, a host-registered content type's
