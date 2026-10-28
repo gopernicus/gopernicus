@@ -98,8 +98,38 @@ func TestDefaultCost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading cost: %v", err)
 	}
-	if got != xbcrypt.DefaultCost {
-		t.Fatalf("default cost = %d, want %d", got, xbcrypt.DefaultCost)
+	if got != bcrypt.DefaultCost || bcrypt.DefaultCost != 12 {
+		t.Fatalf("default cost = %d, want 12", got)
+	}
+	if h.Cost() != 12 {
+		t.Fatalf("Cost() = %d, want 12", h.Cost())
+	}
+	var zero bcrypt.Hasher
+	if zero.Cost() != 12 {
+		t.Fatalf("zero-value Cost() = %d, want 12", zero.Cost())
+	}
+}
+
+func TestCostReportsConfiguredCost(t *testing.T) {
+	if got := bcrypt.New(bcrypt.WithCost(10)).Cost(); got != 10 {
+		t.Fatalf("WithCost(10).Cost() = %d, want 10", got)
+	}
+	if got := bcrypt.New(bcrypt.WithCost(xbcrypt.MaxCost + 1)).Cost(); got != 12 {
+		t.Fatalf("out-of-range Cost() = %d, want the default 12", got)
+	}
+}
+
+func TestCostTenHashVerifiesUnderDefaultHasher(t *testing.T) {
+	hash, err := xbcrypt.GenerateFromPassword([]byte("existing password"), 10)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword: %v", err)
+	}
+	h := bcrypt.New()
+	if err := h.VerifyPassword(string(hash), "existing password"); err != nil {
+		t.Fatalf("cost-10 hash should verify at its stored cost: %v", err)
+	}
+	if err := h.VerifyPassword(string(hash), "other password"); err == nil {
+		t.Fatal("cost-10 hash should reject a wrong password")
 	}
 }
 
@@ -121,5 +151,42 @@ func TestSeventyTwoByteBoundary(t *testing.T) {
 				t.Errorf("VerifyPassword error = %v, want ErrPasswordTooLong and sdk.ErrInvalidInput", err)
 			}
 		}
+	}
+}
+
+func TestNeedsRehash(t *testing.T) {
+	mint := func(cost int) string {
+		t.Helper()
+		hash, err := xbcrypt.GenerateFromPassword([]byte("stored password"), cost)
+		if err != nil {
+			t.Fatalf("GenerateFromPassword(%d): %v", cost, err)
+		}
+		return string(hash)
+	}
+	cases := []struct {
+		name string
+		hash string
+		want bool
+	}{
+		{"cost 10", mint(10), true},
+		{"cost 12", mint(12), false},
+		{"cost 14", mint(14), false},
+		{"garbage", "not-a-bcrypt-hash", false},
+		{"empty", "", false},
+		{"truncated prefix", "$2a$", false},
+	}
+	var zero bcrypt.Hasher
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := bcrypt.New().NeedsRehash(tc.hash); got != tc.want {
+				t.Errorf("New().NeedsRehash = %v, want %v", got, tc.want)
+			}
+			if got := zero.NeedsRehash(tc.hash); got != tc.want {
+				t.Errorf("zero-value NeedsRehash = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if bcrypt.New(bcrypt.WithCost(10)).NeedsRehash(cases[0].hash) {
+		t.Error("a cost-10 hash under WithCost(10) needs no rehash")
 	}
 }

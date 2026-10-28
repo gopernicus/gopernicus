@@ -8,7 +8,7 @@ infrastructure. Gopernicus is open source under the [MIT License](LICENSE),
 very much a work in progress, and not stable. See [ARCHITECTURE.md](ARCHITECTURE.md)
 for the full layering rules and [NOTES.md](NOTES.md) for the decision log.
 
-## The forty-nine modules
+## The fifty modules
 
 ```
 sdk/                                stdlib-only, layered: root = kernel; pkg/ + capabilities/ (empty go.mod = structural enforcement)
@@ -26,6 +26,7 @@ integrations/filestorage/s3/        S3-compatible object-storage connector (aws-
 integrations/kvstores/goredis/      Redis connector — events bus, cacher, ratelimiter over one go-redis client, its own module
 integrations/oauth/github/          GitHub OAuth provider (vendor API contract; zero external libs), its own module
 integrations/oauth/google/          Google OIDC provider connector (coreos/go-oidc v3), its own module
+integrations/passwords/hibp/        Pwned Passwords breach checker (vendor API contract, k-anonymity; zero external libs), its own module
 integrations/scheduling/robfig-cron/ cron-expression connector (robfig/cron v3), its own module
 integrations/tracing/otel/          OpenTelemetry tracing connector (stdout/OTLP-gRPC exporters or caller-supplied provider), its own module
 pockets/                           shared host-contract module; requires SDK only
@@ -120,7 +121,7 @@ make migrate           # applies examples/cms/workshop/migrations pre-boot
 make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
-From the repo root, `make check` builds, vets, and tests all forty-nine modules
+From the repo root, `make check` builds, vets, and tests all fifty modules
 and runs the thirty-six layering guards; `make test-stores` runs the live dialect
 conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.
