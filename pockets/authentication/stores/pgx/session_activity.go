@@ -74,7 +74,7 @@ func (s *SessionStore) GetByRefreshHashWithActivity(ctx context.Context, hash st
 func (s *SessionStore) RotateAt(ctx context.Context, id, expectedCurrentHash, newHash string, now time.Time) error {
 	q := `UPDATE ` + s.table(sessionsTable) + `
 		SET refresh_token_hash = @new_hash, previous_refresh_token_hash = @expected, previous_used = false, rotation_count = rotation_count + 1, last_rotated_at = @now
-		WHERE id = @id AND refresh_token_hash = @expected`
+		WHERE id = @id AND refresh_token_hash = @expected AND session_profile IN ('', 'first_party')`
 	n, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{
 		"new_hash": newHash,
 		"expected": expectedCurrentHash,

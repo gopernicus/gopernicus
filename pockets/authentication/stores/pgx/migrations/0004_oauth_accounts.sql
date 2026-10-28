@@ -8,7 +8,7 @@
 CREATE TABLE IF NOT EXISTS oauth_accounts (
     provider                TEXT NOT NULL,
     provider_user_id        TEXT NOT NULL,
-    user_id                 TEXT NOT NULL,
+    user_id                 TEXT COLLATE "C" NOT NULL,
     provider_email          TEXT NOT NULL DEFAULT '',
     provider_email_verified BOOLEAN NOT NULL DEFAULT FALSE,
     account_verified        BOOLEAN NOT NULL DEFAULT FALSE,

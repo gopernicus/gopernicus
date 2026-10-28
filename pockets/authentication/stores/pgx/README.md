@@ -421,6 +421,23 @@ schema does NOT retroactively gain the per-column collation — per the
 greenfield-migrations rule the canonical set ships the final schema only and hosts
 own their own schema evolution.
 
+**Generated ids and their backstops.** The pocket mints every id in Go (NanoID for
+users, service accounts and invitations; UUIDv7 for every other record — see the
+pocket's `Config.IDs`); the column defaults are only the backstop for a raw SQL
+insert or a host wired with `sdk.DatabaseID`. Every generated `id` column is
+`TEXT COLLATE "C"`. Record-class tables (`api_keys`, `security_events`,
+`user_identifiers`, `challenges`, `contact_changes`, `authentication_grants`,
+`passkey_credentials`, `recovery_codes`) default to `uuidv7()::text`;
+identity-class tables keep `gen_random_uuid()::text`, because a time-ordered id
+there would reveal when the identity was created. The columns that hold one of
+those ids (`user_id`, `session_id`, `service_account_id`, `owner_user_id`,
+`replaces_identifier_id`) carry `COLLATE "C"` too: an index serves a join only
+under the join key's collation, and without it the directory's
+`user_identifiers` join against `users.id` falls back to a sequential scan. The
+one store statement that calls `uuidv7()` at runtime is the recovery-code
+empty-id backstop in `totp.go` (guard G38 keeps it the only one); no other store
+query needs PostgreSQL 18.
+
 ## Testing
 
 `go test ./...` is hermetic: the `ExportMigrations` unit test runs, and the

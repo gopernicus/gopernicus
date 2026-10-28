@@ -21,7 +21,7 @@
 -- session store maps these in auth-v3 phase 2.
 CREATE TABLE IF NOT EXISTS sessions (
     id                          TEXT PRIMARY KEY,
-    user_id                     TEXT NOT NULL,
+    user_id                     TEXT COLLATE "C" NOT NULL,
     refresh_token_hash          TEXT NOT NULL,
     previous_refresh_token_hash TEXT,
     previous_used               BOOLEAN NOT NULL DEFAULT FALSE,

@@ -144,6 +144,8 @@ func TestConformance_Postgres(t *testing.T) {
 	storetest.Run(t, newRepos)
 	storetest.RunPasskeys(t, newRepos)
 	storetest.RunTOTP(t, newRepos)
+	storetest.RunDelegatedRotationFence(t, newRepos)
+	storetest.RunIDs(t, newRepos)
 }
 
 // truncate clears every auth table so a Repositories starts empty. The names are

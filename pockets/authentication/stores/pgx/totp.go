@@ -200,7 +200,7 @@ func (s *TOTPStore) replaceCodes(ctx context.Context, tx *pgxdb.Tx, userID strin
 		ids[i], keys[i], digests[i], generated[i] = c.ID, c.KeyID, c.Digest, c.GeneratedAt.UTC()
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO `+s.table(recoveryCodesTable)+` (id, user_id, key_id, code_digest, generated_at)
-		SELECT COALESCE(NULLIF(c.id, ''), gen_random_uuid()::text), @user_id, c.key_id, c.digest, c.generated_at
+		SELECT COALESCE(NULLIF(c.id, ''), uuidv7()::text), @user_id, c.key_id, c.digest, c.generated_at
 		FROM unnest(@ids::text[], @keys::text[], @digests::text[], @generated::timestamptz[]) AS c(id, key_id, digest, generated_at)`,
 		pgx.NamedArgs{"user_id": userID, "ids": ids, "keys": keys, "digests": digests, "generated": generated})
 	return pgxdb.MapError(err)

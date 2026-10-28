@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
 
 CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
     code_hash      TEXT PRIMARY KEY,
-    user_id        TEXT NOT NULL,
+    user_id        TEXT COLLATE "C" NOT NULL,
     auth_revision  BIGINT NOT NULL,
     delegation     TEXT NOT NULL,
     redirect_uri   TEXT NOT NULL,
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
 -- session is revoked. There is deliberately no cascading foreign key.
 CREATE TABLE IF NOT EXISTS oauth_refresh_history (
     refresh_token_hash TEXT PRIMARY KEY,
-    session_id        TEXT NOT NULL,
+    session_id        TEXT COLLATE "C" NOT NULL,
     expires_at        TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_oauth_refresh_history_session_id

@@ -5,15 +5,16 @@
 -- nil/empty map stores '{}' and reads back as a NON-NIL empty map. created_at is
 -- the ordering key, tie-broken by id. user_id/actor_id reference their subjects by
 -- convention (no enforced FK). NO outbox columns (the durable rail is deferred).
--- id defaults DB-side (a cryptids.Database host sends Create an empty id; the
--- store omits the column and RETURNING reads the generated key back).
+-- id is Go-minted UUIDv7 by default; this default is the raw-SQL backstop (a
+-- host wired with sdk.DatabaseID sends Create an empty id; the store omits the
+-- column and RETURNING reads the generated key back).
 -- id carries COLLATE "C": it is the keyset tiebreak of the created_at DESC, id
 -- DESC List, and the storetest collision suite pins that tiebreak to the
 -- reference store's byte-wise (Go string) order. The per-column collation makes
 -- that byte-order contract travel with the schema (AAH-5 / plan D5).
 CREATE TABLE IF NOT EXISTS security_events (
-    id           TEXT COLLATE "C" PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    user_id      TEXT NOT NULL DEFAULT '',
+    id           TEXT COLLATE "C" PRIMARY KEY DEFAULT uuidv7()::text,
+    user_id      TEXT COLLATE "C" NOT NULL DEFAULT '',
     actor_type   TEXT NOT NULL DEFAULT '',
     actor_id     TEXT NOT NULL DEFAULT '',
     event_type   TEXT NOT NULL,

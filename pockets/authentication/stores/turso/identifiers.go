@@ -193,6 +193,7 @@ func (s *IdentifierStore) ApplyVerifiedChange(ctx context.Context, input identif
 		}
 
 		created, err := insertIdentifier(ctx, tx, identifier.Identifier{
+			ID:                  input.ID,
 			UserID:              input.UserID,
 			Kind:                input.Kind,
 			NormalizedValue:     input.NormalizedValue,

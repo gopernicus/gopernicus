@@ -13,7 +13,7 @@
 CREATE TABLE IF NOT EXISTS external_subjects (
     provider      TEXT NOT NULL,
     subject       TEXT NOT NULL,
-    user_id       TEXT NOT NULL,
+    user_id       TEXT COLLATE "C" NOT NULL,
     issuer        TEXT NOT NULL DEFAULT '',
     email         TEXT NOT NULL DEFAULT '',
     first_seen_at TIMESTAMPTZ NOT NULL,

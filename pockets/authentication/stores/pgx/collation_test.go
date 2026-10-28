@@ -3,11 +3,15 @@
 // COLLATE "C" in the canonical migrations, so the guarantee travels with the
 // schema instead of relying on the cluster's default collation.
 //
-// The inventory is a single table (contractualCollatedColumns) so adding or
-// dropping a contractual column is a visible test edit. Three checks stand on it:
+// Three inventories stand side by side so adding or dropping a column is a
+// visible test edit: contractualCollatedColumns (keyset tiebreaks),
+// generatedIDColumns (every pocket-generated id, with its database backstop)
+// and referencingIDColumns (the columns that hold one of those ids). Three
+// checks stand on them:
 //
 //   - TestContractualCollation_SQL (hermetic): every inventoried column's
-//     canonical DDL carries COLLATE "C".
+//     canonical DDL carries COLLATE "C", and every generated id column carries
+//     its class's DEFAULT backstop.
 //   - TestContractualCollation_Catalog (live, POSTGRES_TEST_DSN): the applied
 //     schema reports collation_name = 'C' for every inventoried column.
 //   - TestCollationControlsOrdering_NonC (live, POSTGRES_NON_C_TEST_DSN): on a
@@ -72,6 +76,90 @@ var contractualCollatedColumns = []collatedColumn{
 	{"users", "id", "operator-directory keyset PK tiebreak (CHAU-1.2); pinned by ALTER in 0014"},
 }
 
+// Database backstops by entity class (plan D3). Go mints every id; the column
+// default only serves a raw SQL insert or a host wired with sdk.DatabaseID.
+const (
+	// recordBackstop is the record class's default: a UUIDv7 (PostgreSQL 18).
+	recordBackstop = "DEFAULT uuidv7()::text"
+	// identityBackstop is the identity class's default (users, service
+	// accounts, invitations): a random UUIDv4, because a time-ordered id there
+	// would reveal when the identity was created.
+	identityBackstop = "DEFAULT gen_random_uuid()::text"
+)
+
+// generatedIDColumn is one pocket-generated id column and its backstop.
+type generatedIDColumn struct {
+	collatedColumn
+	Backstop string
+}
+
+// generatedIDColumns inventories every id the pocket generates. Each carries
+// COLLATE "C" — the collation is a property of the column, not the generator —
+// and its class's backstop. users.id is pinned by the 0014 ALTER (0001 is
+// left as it is).
+var generatedIDColumns = []generatedIDColumn{
+	{collatedColumn{"users", "id", "identity id; pinned by ALTER in 0014"}, identityBackstop},
+	{collatedColumn{"service_accounts", "id", "identity id"}, identityBackstop},
+	{collatedColumn{"invitations", "id", "identity id"}, identityBackstop},
+	{collatedColumn{"api_keys", "id", "record id"}, recordBackstop},
+	{collatedColumn{"security_events", "id", "record id"}, recordBackstop},
+	{collatedColumn{"user_identifiers", "id", "record id"}, recordBackstop},
+	{collatedColumn{"challenges", "id", "record id"}, recordBackstop},
+	{collatedColumn{"contact_changes", "id", "record id"}, recordBackstop},
+	{collatedColumn{"authentication_grants", "id", "record id"}, recordBackstop},
+	{collatedColumn{"passkey_credentials", "id", "record id"}, recordBackstop},
+	{collatedColumn{"recovery_codes", "id", "record id"}, recordBackstop},
+}
+
+// referencingIDColumns inventories the columns that hold a pocket-generated id
+// (plan R5). They share the "C" collation of the id they reference because the
+// planner uses an index only under the join key's collation: with
+// user_identifiers.user_id on the default collation the directory join against
+// users.id ("C") seq-scanned user_identifiers. Host-defined ids (resource_id,
+// actor_id, provider_user_id) and recovery_codes.key_id (a pepper keyring id)
+// are excluded.
+var referencingIDColumns = []collatedColumn{
+	{"user_passwords", "user_id", "references users.id"},
+	{"sessions", "user_id", "references users.id"},
+	{"oauth_accounts", "user_id", "references users.id"},
+	{"service_accounts", "owner_user_id", "references users.id"},
+	{"api_keys", "service_account_id", "references service_accounts.id"},
+	{"security_events", "user_id", "references users.id"},
+	{"user_identifiers", "user_id", "references users.id"},
+	{"challenges", "user_id", "references users.id"},
+	{"contact_changes", "user_id", "references users.id"},
+	{"contact_changes", "replaces_identifier_id", "references user_identifiers.id"},
+	{"authentication_grants", "session_id", "references sessions.id"},
+	{"authentication_grants", "user_id", "references users.id"},
+	{"oauth_authorization_codes", "user_id", "references users.id"},
+	{"oauth_refresh_history", "session_id", "references sessions.id"},
+	{"external_subjects", "user_id", "references users.id"},
+	{"passkey_credentials", "user_id", "references users.id"},
+	{"totp_credentials", "user_id", "references users.id"},
+	{"totp_credentials", "session_id", "references sessions.id"},
+	{"recovery_codes", "user_id", "references users.id"},
+	{"service_account_status", "service_account_id", "references service_accounts.id"},
+}
+
+// collatedInventory is every column the three inventories pin to "C".
+func collatedInventory() []collatedColumn {
+	out := append([]collatedColumn(nil), contractualCollatedColumns...)
+	for _, g := range generatedIDColumns {
+		out = append(out, g.collatedColumn)
+	}
+	return append(out, referencingIDColumns...)
+}
+
+// columnLine returns the DDL line defining column within a CREATE TABLE body.
+func columnLine(body, column string) (string, bool) {
+	for _, line := range strings.Split(body, "\n") {
+		if fields := strings.Fields(line); len(fields) >= 2 && fields[0] == column {
+			return line, true
+		}
+	}
+	return "", false
+}
+
 // pinnedByAlter reports whether the canonical SQL pins table.column's collation
 // through an append-only ALTER instead of its CREATE TABLE. A column that became
 // contractual AFTER its table was tagged cannot be fixed in place — the tagged
@@ -132,24 +220,27 @@ func TestContractualCollation_SQL(t *testing.T) {
 	}
 	sql := all.String()
 
-	for _, c := range contractualCollatedColumns {
+	for _, c := range collatedInventory() {
 		if pinnedByAlter(sql, c.Table, c.Column) {
 			continue
 		}
-		body := tableCreateBody(t, sql, c.Table)
-		var found bool
-		for _, line := range strings.Split(body, "\n") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 && fields[0] == c.Column {
-				found = true
-				if !strings.Contains(line, `COLLATE "C"`) {
-					t.Errorf("%s.%s is contractual (%s) but its DDL lacks COLLATE \"C\": %q", c.Table, c.Column, c.Why, strings.TrimSpace(line))
-				}
-				break
-			}
-		}
+		line, found := columnLine(tableCreateBody(t, sql, c.Table), c.Column)
 		if !found {
 			t.Errorf("no column definition found for %s.%s", c.Table, c.Column)
+			continue
+		}
+		if !strings.Contains(line, `COLLATE "C"`) {
+			t.Errorf("%s.%s is inventoried (%s) but its DDL lacks COLLATE \"C\": %q", c.Table, c.Column, c.Why, strings.TrimSpace(line))
+		}
+	}
+	for _, g := range generatedIDColumns {
+		line, found := columnLine(tableCreateBody(t, sql, g.Table), g.Column)
+		if !found {
+			t.Errorf("no column definition found for %s.%s", g.Table, g.Column)
+			continue
+		}
+		if !strings.Contains(line, g.Backstop) {
+			t.Errorf("%s.%s (%s) DDL lacks its backstop %q: %q", g.Table, g.Column, g.Why, g.Backstop, strings.TrimSpace(line))
 		}
 	}
 }
@@ -164,7 +255,7 @@ func TestContractualCollation_Catalog(t *testing.T) {
 
 	ctx := context.Background()
 	schema := testSchema(t)
-	for _, c := range contractualCollatedColumns {
+	for _, c := range collatedInventory() {
 		var collation *string
 		q, args := collationSQL, []any{c.Table, c.Column}
 		if !schema.IsZero() {

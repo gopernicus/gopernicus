@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS service_accounts (
     description   TEXT NOT NULL DEFAULT '',
     created_by    TEXT NOT NULL,
     act_as_user   BOOLEAN NOT NULL DEFAULT FALSE,
-    owner_user_id TEXT NOT NULL DEFAULT '',
+    owner_user_id TEXT COLLATE "C" NOT NULL DEFAULT '',
     created_at    TIMESTAMPTZ NOT NULL,
     updated_at    TIMESTAMPTZ NOT NULL
 );
