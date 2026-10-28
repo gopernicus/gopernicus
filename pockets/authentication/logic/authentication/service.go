@@ -298,9 +298,12 @@ type Service struct {
 	logger               *slog.Logger
 	requireVerifiedEmail bool
 	passwordFlowsEnabled bool
-	// ids is the app-chosen entity-ID strategy (WithIDs); zero value → default
-	// nanoids. Entity keys only, never secrets.
-	ids sdk.IDGenerator
+	// ids is the app-chosen entity-ID strategy (WithIDs) for the identity class
+	// (users, service accounts); zero value → default nanoids. recordIDs is the
+	// same strategy for every other record id, resolved through Or so the zero
+	// value selects UUIDv7. Entity keys only, never secrets.
+	ids       sdk.IDGenerator
+	recordIDs sdk.IDGenerator
 	// securityEvents records the optional append-only audit rail (design §5.1):
 	// the supplied recorder or one over Repositories.SecurityEvents. Without a
 	// repository recordSecurityEvent is a no-op (ratified AV9).
@@ -485,6 +488,7 @@ func newService(d constructorConfig) *Service {
 		requireVerifiedEmail: d.RequireVerifiedEmail,
 		passwordFlowsEnabled: !d.PasswordFlowsDisabled,
 		ids:                  d.IDs,
+		recordIDs:            d.IDs.Or(sdk.UUIDv7()),
 		securityEvents:       securityEvents,
 		invitations:          d.Invitations,
 
@@ -568,7 +572,7 @@ func (s *Service) Register(ctx context.Context, emailAddr, password, displayName
 	// The primary identifier is normalized through the single injected policy so a
 	// later GetLogin/GetRecovery lookup resolves the same stored value; it also
 	// validates the address, failing before any user row is minted.
-	ident, err := identifier.NewRegistrationEmail(s.ids, s.normalizer, "", emailAddr, now)
+	ident, err := identifier.NewRegistrationEmail(s.recordIDs, s.normalizer, "", emailAddr, now)
 	if err != nil {
 		return user.User{}, err
 	}
@@ -658,6 +662,11 @@ func (s *Service) Verify(ctx context.Context, emailAddr, code string) error {
 		return ErrChallengeInvalid
 	}
 	ident = current
+	// Minted before the code is consumed, so a generator failure never burns it.
+	replacementID, err := s.recordIDs.Generate()
+	if err != nil {
+		return err
+	}
 	if _, err := s.consumeChallenge(ctx, ident.UserID, challenge.PurposeVerifyRegistration, code); err != nil {
 		s.recordChallengeDenial(ctx, securityevent.TypeEmailVerified, u.ID, err)
 		return err
@@ -667,6 +676,7 @@ func (s *Service) Verify(ctx context.Context, emailAddr, code string) error {
 	// replacement in one revision-CAS operation (design §2.2). ReplacesIdentifierID
 	// frees the partial authentication-claim index before the verified row claims it.
 	input := identifier.ApplyVerifiedChangeInput{
+		ID:                   replacementID,
 		UserID:               ident.UserID,
 		Kind:                 identifier.KindEmail,
 		NormalizedValue:      normalized,

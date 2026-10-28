@@ -281,7 +281,7 @@ func (s *Service) FinishPasskeyRegistration(ctx context.Context, in PasskeyRegis
 		name = passkey.DefaultName(len(existing))
 	}
 	created, err := s.passkeys.Create(ctx, passkey.CreateInput{Passkey: passkey.Passkey{
-		ID:             s.ids.MustGenerate(),
+		ID:             s.recordIDs.MustGenerate(),
 		UserID:         in.UserID,
 		Name:           name,
 		CredentialID:   cred.ID,

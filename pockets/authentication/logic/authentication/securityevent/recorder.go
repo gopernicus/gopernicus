@@ -152,9 +152,10 @@ func WithMissingAttributionWarning() RecorderOption {
 }
 
 // NewRecorder returns a Recorder appending to repo, minting event ids from ids
-// and timestamps from now. A nil now selects time.Now and a nil log
-// slog.Default(). A nil repo yields a Recorder whose Record does nothing — the
-// host keeps no audit trail (ratified AV9).
+// and timestamps from now. Event ids are record-class ids, so the zero ids
+// selects UUIDv7 (sdk.IDGenerator.Or); a configured generator wins. A nil now
+// selects time.Now and a nil log slog.Default(). A nil repo yields a Recorder
+// whose Record does nothing — the host keeps no audit trail (ratified AV9).
 func NewRecorder(repo SecurityEventRepository, ids sdk.IDGenerator, now func() time.Time, log *slog.Logger, opts ...RecorderOption) *Recorder {
 	if now == nil {
 		now = time.Now
@@ -162,7 +163,7 @@ func NewRecorder(repo SecurityEventRepository, ids sdk.IDGenerator, now func() t
 	if log == nil {
 		log = slog.Default()
 	}
-	r := &Recorder{repo: repo, ids: ids, now: now, log: log, timeout: writeTimeout}
+	r := &Recorder{repo: repo, ids: ids.Or(sdk.UUIDv7()), now: now, log: log, timeout: writeTimeout}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(r)

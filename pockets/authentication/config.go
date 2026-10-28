@@ -130,6 +130,13 @@ type constructorConfig struct {
 	InvitationTokenInQuery        bool     `env:"AUTH_INVITATION_TOKEN_IN_QUERY"`
 	PasswordlessProvisionOnRedeem bool     `env:"AUTH_PASSWORDLESS_PROVISION_ON_REDEEM"`
 	Passwordless                  []string `env:"AUTH_PASSWORDLESS"`
+	// IDs is the entity-ID strategy; it never mints secrets. The zero value
+	// selects the class default: NanoID for identities (users, service
+	// accounts, invitations), UUIDv7 for records (identifiers, API keys,
+	// security events, passkeys, recovery codes, challenges, contact changes,
+	// authentication grants). A configured generator wins everywhere, so it
+	// must yield unique ids: the contact-change stale-request guard keys on
+	// the pending change's id.
 	IDs                           sdk.IDGenerator
 	ListStrategy                  string `env:"AUTH_LIST_STRATEGY" default:"cursor"`
 	Providers                     []oauth.Provider

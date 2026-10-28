@@ -2,6 +2,9 @@ package authentication
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -56,10 +59,18 @@ var (
 // challenge's bound pending-change ID matches the consumed pending change, so a code
 // minted for one proposed value can never confirm a different one (the concurrent-
 // start race where a live challenge and a live pending row disagree).
+//
+// PayloadDigest binds the pending change's CONTENTS, not just its id: the id
+// comes from the host's generator, and a generator that repeats ids lets a
+// concurrent start overwrite the pending row under the same id after the first
+// start stored it but before it issued its challenge. The id then matches while
+// the value differs, and only the digest refuses a code delivered to one
+// address from confirming another.
 type changeBinding struct {
-	PendingID    string `json:"pending_id"`
-	SessionID    string `json:"session_id"`
-	AuthRevision int64  `json:"auth_revision"`
+	PendingID     string `json:"pending_id"`
+	SessionID     string `json:"session_id"`
+	AuthRevision  int64  `json:"auth_revision"`
+	PayloadDigest string `json:"payload_digest"`
 }
 
 // IdentifierChangeStart is the input to StartIdentifierChange: the live session and
@@ -158,14 +169,18 @@ func (s *Service) StartIdentifierChange(ctx context.Context, in IdentifierChange
 	}
 	// Pinned order (design §2.4): create the pending row FIRST (obtaining its ID), then
 	// issue the challenge bound to that ID.
-	pending, err := s.contactChanges.Create(ctx, contactchange.New(
-		in.UserID, in.Kind, normalized, in.Uses, in.MakePrimary, "", contactChangeTTL, s.now()))
+	change := contactchange.New(in.UserID, in.Kind, normalized, in.Uses, in.MakePrimary, "", contactChangeTTL, s.now())
+	if change.ID, err = s.recordIDs.Generate(); err != nil {
+		return StepUpReceipt{}, err
+	}
+	pending, err := s.contactChanges.Create(ctx, change)
 	if err != nil {
 		return StepUpReceipt{}, err
 	}
 	code, err := s.issueChallengeSecret(ctx, in.UserID, challengePurpose,
 		withSubjectKey(pending.ID), withStoredContext(changeBinding{
 			PendingID: pending.ID, SessionID: in.SessionID, AuthRevision: owner.AuthRevision,
+			PayloadDigest: pendingPayloadDigest(change),
 		}))
 	if err != nil {
 		return StepUpReceipt{}, err
@@ -231,9 +246,16 @@ func (s *Service) ConfirmIdentifierChange(ctx context.Context, in IdentifierChan
 	if err != nil {
 		return err
 	}
+	// Minted before the code and the pending row are consumed, so a generator
+	// failure never burns either.
+	identifierID, err := s.recordIDs.Generate()
+	if err != nil {
+		return err
+	}
 	if _, err := s.consumeChallenge(ctx, in.UserID, challengePurpose, in.Code,
 		withSubjectKey(pending.ID), withExpectedContext(changeBinding{
 			PendingID: pending.ID, SessionID: in.SessionID, AuthRevision: owner.AuthRevision,
+			PayloadDigest: pendingPayloadDigest(pending),
 		})); err != nil {
 		s.recordChallengeDenial(ctx, changedEvent(in.Kind), in.UserID, err)
 		return err
@@ -249,7 +271,7 @@ func (s *Service) ConfirmIdentifierChange(ctx context.Context, in IdentifierChan
 	// Capture the previously verified notice recipients BEFORE the apply, so a primary
 	// replacement still notifies the old primary it retires (design §5.5).
 	recipients := s.verifiedContactChannels(ctx, in.UserID, pending.NewValue)
-	if err := s.applyVerifiedIdentifierChange(ctx, in.UserID, owner.AuthRevision, pending); err != nil {
+	if err := s.applyVerifiedIdentifierChange(ctx, in.UserID, identifierID, owner.AuthRevision, pending); err != nil {
 		s.recordCredentialMutationDenial(ctx, changedEvent(in.Kind), in.UserID, err)
 		return err
 	}
@@ -384,8 +406,9 @@ func (s *Service) SetIdentifierUses(ctx context.Context, in IdentifierUsesInput)
 // proof's revision, then evaluates policy and makes one conditional write. A lost
 // authentication-claim race on the new
 // value surfaces as sdk.ErrAlreadyExists (the generic collision).
-func (s *Service) applyVerifiedIdentifierChange(ctx context.Context, userID string, revision int64, pending contactchange.PendingChange) error {
+func (s *Service) applyVerifiedIdentifierChange(ctx context.Context, userID, identifierID string, revision int64, pending contactchange.PendingChange) error {
 	input := identifier.ApplyVerifiedChangeInput{
+		ID:                   identifierID,
 		UserID:               userID,
 		Kind:                 pending.Kind,
 		NormalizedValue:      pending.NewValue,
@@ -413,8 +436,9 @@ func (s *Service) applyVerifiedIdentifierChange(ctx context.Context, userID stri
 // policy can judge it before the store commits (design §5.6). It mirrors the store's
 // effects: an explicitly replaced identifier is retired, a make-primary retires the
 // displaced primary of the same kind, and the new verified identifier is added
-// (primary when requested). The new identifier carries no ID (the store assigns it),
-// which the policy does not key on.
+// (primary when requested). The proposed identifier carries no ID — the policy
+// does not key on it; the applied row's id is minted by the service from the
+// record-class generator (empty, sdk.DatabaseID, leaves it to the store).
 func proposedSetForChange(snap credential.MethodSet, p contactchange.PendingChange) credential.MethodSet {
 	proposed := snap
 	if p.ReplacesIdentifierID != "" {
@@ -612,4 +636,30 @@ func removedEvent(kind identifier.Kind) string {
 		return securityevent.TypePhoneRemoved
 	}
 	return securityevent.TypeEmailRemoved
+}
+
+// pendingPayloadDigest is the hex SHA-256 of a pending change's contents —
+// the new value, its uses, the primary intent and the identifier it replaces —
+// each field length-prefixed so no two payloads encode alike.
+func pendingPayloadDigest(p contactchange.PendingChange) string {
+	h := sha256.New()
+	field := func(b []byte) {
+		var n [8]byte
+		binary.BigEndian.PutUint64(n[:], uint64(len(b)))
+		h.Write(n[:])
+		h.Write(b)
+	}
+	flag := func(v bool) []byte {
+		if v {
+			return []byte{1}
+		}
+		return []byte{0}
+	}
+	field([]byte(p.NewValue))
+	field(flag(p.LoginEnabled))
+	field(flag(p.RecoveryEnabled))
+	field(flag(p.NotificationEnabled))
+	field(flag(p.MakePrimary))
+	field([]byte(p.ReplacesIdentifierID))
+	return hex.EncodeToString(h.Sum(nil))
 }

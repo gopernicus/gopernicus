@@ -317,7 +317,7 @@ func (s *Service) mintRecoveryCodes(userID string, now time.Time) (RecoveryCodeS
 		if err != nil {
 			return RecoveryCodeSet{}, nil, err
 		}
-		rows = append(rows, totp.RecoveryCode{ID: s.ids.MustGenerate(), UserID: userID, KeyID: keyID, Digest: digest, GeneratedAt: generated})
+		rows = append(rows, totp.RecoveryCode{ID: s.recordIDs.MustGenerate(), UserID: userID, KeyID: keyID, Digest: digest, GeneratedAt: generated})
 	}
 	return RecoveryCodeSet{Codes: codes, GeneratedAt: generated}, rows, nil
 }

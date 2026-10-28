@@ -36,9 +36,9 @@ import (
 // delete-before-create plus a DB unique index (the challenge rule). ExpiresAt bounds
 // the flow; an expired row is deleted on Consume.
 type PendingChange struct {
-	// ID is the app-minted primary key, empty under the greenfield DB-generated
-	// convention so the store assigns it inline. challenge.context binds this ID as
-	// the confirm-step validator.
+	// ID is the primary key: the service mints it from the record-class
+	// generator; empty (sdk.DatabaseID) leaves it to the store. challenge.context
+	// binds this ID as the confirm-step validator.
 	ID     string
 	UserID string
 	Kind   identifier.Kind
@@ -59,8 +59,9 @@ type PendingChange struct {
 
 // New builds a PendingChange for (userID, kind) carrying the already-normalized
 // newValue, the requested uses, primary/replacement intent, and an expiry of ttl
-// after now. The ID is left empty for the store to assign inline (greenfield
-// DB-generated convention). Normalization is the caller's responsibility (design
+// after now. The ID is left empty for the caller to set: the service mints it
+// from the record-class generator; empty (sdk.DatabaseID) leaves it to the
+// store. Normalization is the caller's responsibility (design
 // §2.2: one normalization result for persistence, lookup, and audit).
 func New(userID string, kind identifier.Kind, newValue string, uses identifier.Uses, makePrimary bool, replacesIdentifierID string, ttl time.Duration, now time.Time) PendingChange {
 	now = now.UTC()

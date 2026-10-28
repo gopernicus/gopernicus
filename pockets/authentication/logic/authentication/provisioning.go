@@ -92,6 +92,10 @@ func (s *Service) redeemPasswordlessAtomic(ctx context.Context, token string) (T
 	}
 	proposed.RefreshTokenHash = refreshHash
 	proposed.Authentication = s.primaryAuthentication(session.MethodEmailLink)
+	identifierID, err := s.recordIDs.Generate()
+	if err != nil {
+		return TokenPair{}, passwordless.RedeemResult{}, err
+	}
 
 	res, err := s.passwordlessRedeem.Redeem(ctx, passwordless.RedeemInput{
 		Purpose:     challenge.PurposeLoginMagicLink,
@@ -102,6 +106,7 @@ func (s *Service) redeemPasswordlessAtomic(ctx context.Context, token string) (T
 		// sign-in. The host's profile flow fills it in later.
 		NewUser: user.NewUser(s.ids, "", now),
 		NewIdentifier: identifier.Identifier{
+			ID:                  identifierID,
 			Kind:                identifier.KindEmail,
 			LoginEnabled:        true,
 			RecoveryEnabled:     true,

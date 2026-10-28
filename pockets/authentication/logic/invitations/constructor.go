@@ -86,6 +86,8 @@ func (d constructorConfig) securityEventRecorder(clock func() time.Time, logger 
 	if d.SecurityRecorder != nil {
 		return d.SecurityRecorder
 	}
+	// d.IDs is the identity-class generator; NewRecorder resolves its zero
+	// value to the record-class default for event ids.
 	return securityevent.NewRecorder(d.SecurityEvents, d.IDs, clock, logger, securityevent.WithClientInfoReader(authlogic.ClientInfoFromContext))
 }
 

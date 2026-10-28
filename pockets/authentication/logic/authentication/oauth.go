@@ -610,7 +610,7 @@ func (s *Service) linkAccount(ctx context.Context, userID string, expectedAuthRe
 // resolution after the transaction succeeds.
 func (s *Service) registerAndLink(ctx context.Context, providerName, normEmail string, ident providerIdentity, tok *oauth.TokenResponse, redirectTo string) (OAuthResult, error) {
 	now := s.now()
-	primary, err := identifier.New(s.ids, s.normalizer, "", identifier.KindEmail, ident.Email,
+	primary, err := identifier.New(s.recordIDs, s.normalizer, "", identifier.KindEmail, ident.Email,
 		identifier.Uses{Login: true, Recovery: true, Notification: true}, true, now, now)
 	if err != nil {
 		return OAuthResult{}, err

@@ -73,6 +73,9 @@ type options struct {
 	logger   *slog.Logger
 	clock    func() time.Time
 	interval time.Duration
+	// rowIDs mints the archive marker row's security_events.id, a record-class
+	// id; the zero value selects UUIDv7.
+	rowIDs sdk.IDGenerator
 }
 
 // Step is one step's outcome in a Report. Count is the rows the step disposed
@@ -109,7 +112,10 @@ type Service struct {
 	log      *slog.Logger
 	now      func() time.Time
 	interval time.Duration
+	// objectID mints archive object keys (secrets); rowID mints the archive
+	// marker row's record id.
 	objectID func() (string, error)
+	rowID    func() (string, error)
 
 	mu             sync.Mutex
 	railRanAt      time.Time
@@ -135,6 +141,13 @@ func WithClock(clock func() time.Time) Option {
 // sdk.ErrInvalidInput.
 func WithInterval(d time.Duration) Option {
 	return func(o *options) { o.interval = d }
+}
+
+// WithIDs sets the entity-ID strategy for the archive marker row's
+// security_events.id; the zero value selects UUIDv7. It never reaches the
+// archive object keys, which are secrets.
+func WithIDs(ids sdk.IDGenerator) Option {
+	return func(o *options) { o.rowIDs = ids }
 }
 
 // New builds a Service over repos with cfg's policy, defaults applied. It
@@ -181,6 +194,7 @@ func New(repos Repositories, cfg Config, opts ...Option) (*Service, error) {
 		now:      o.clock,
 		interval: o.interval,
 		objectID: keys.Generate,
+		rowID:    o.rowIDs.Or(sdk.UUIDv7()).Generate,
 	}, nil
 }
 
@@ -422,7 +436,7 @@ func (s *Service) archive(ctx context.Context, cutoff time.Time, rows []Archived
 	if err := verifyArchive(ctx, s.cfg.ArchiveSink, key, enc); err != nil {
 		return err
 	}
-	id, err := s.objectID()
+	id, err := s.rowID()
 	if err != nil {
 		return fmt.Errorf("archived row id: %w", err)
 	}

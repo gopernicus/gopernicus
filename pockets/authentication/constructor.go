@@ -509,7 +509,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	// The retention service starts nothing; the host runs it. Its policy is
 	// validated here so a refused retention fails the boot, not the first pass.
 	maintenanceService, err := maintenance.New(maintenance.Repositories{Maintenance: repos.Maintenance, Challenges: repos.Challenges, SecurityEvents: repos.SecurityEvents},
-		cfg.Maintenance, maintenance.WithLogger(cfg.Logger))
+		cfg.Maintenance, maintenance.WithLogger(cfg.Logger), maintenance.WithIDs(cfg.IDs))
 	if err != nil {
 		return nil, err
 	}

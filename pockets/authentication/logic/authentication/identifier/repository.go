@@ -15,6 +15,9 @@ import (
 // requested uses, whether the new identifier becomes primary, and the prior
 // identifier it replaces (empty for a pure add).
 type ApplyVerifiedChangeInput struct {
+	// ID is the new identifier's id; empty leaves it to the store (the
+	// sdk.DatabaseID convention).
+	ID                  string
 	UserID              string
 	Kind                Kind
 	NormalizedValue     string

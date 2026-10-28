@@ -38,8 +38,10 @@ func ccKey(userID string, kind identifier.Kind) string { return userID + "|" + s
 func (f *fakeContactChanges) Create(_ context.Context, p contactchange.PendingChange) (contactchange.PendingChange, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.seq++
-	p.ID = "cc" + itoa(f.seq)
+	if p.ID == "" {
+		f.seq++
+		p.ID = "cc" + itoa(f.seq)
+	}
 	f.m[ccKey(p.UserID, p.Kind)] = p
 	return p, nil
 }
@@ -649,4 +651,64 @@ func (h *harness) startAndConfirmEmail(t *testing.T, sessionID, userID, newEmail
 	return h.svc.ConfirmIdentifierChange(ctx, IdentifierChangeConfirm{
 		SessionID: sessionID, UserID: userID, Kind: identifier.KindEmail, Code: code,
 	})
+}
+
+// interleavingContactChanges runs a second, concurrent start inside the first
+// start's Create — after A's pending row is stored but before A issues its
+// challenge — the interleaving a real concurrent pair can produce.
+type interleavingContactChanges struct {
+	*fakeContactChanges
+	during func()
+}
+
+func (f *interleavingContactChanges) Create(ctx context.Context, p contactchange.PendingChange) (contactchange.PendingChange, error) {
+	created, err := f.fakeContactChanges.Create(ctx, p)
+	if run := f.during; run != nil && err == nil {
+		f.during = nil
+		run()
+	}
+	return created, err
+}
+
+// TestIdentifierChangeBindsThePendingPayload reproduces the stale-request race
+// under a generator that repeats ids: start A writes pending X(a); start B
+// overwrites it with X(b) and issues its challenge; A then issues its own
+// challenge, bound to the same id X and replacing B's. The live challenge (A's
+// code, delivered to a) and the live pending row (b) now agree on the id, so
+// only the bound payload digest tells them apart: confirming with A's code
+// must not apply b.
+func TestIdentifierChangeBindsThePendingPayload(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	userID, _, sessionID := h.mustVerifiedLogin(t, "race@example.com", "password123456789")
+	useIDs(h.svc, h.events, sdk.NewIDGenerator(func() (string, error) { return "fixed", nil }))
+	start := func(value string) error {
+		_, err := h.svc.StartIdentifierChange(ctx, IdentifierChangeStart{
+			SessionID: sessionID, UserID: userID, Kind: identifier.KindEmail,
+			Value: value, Uses: identifier.Uses{Login: true, Recovery: true, Notification: true},
+		})
+		return err
+	}
+	contacts := &interleavingContactChanges{fakeContactChanges: h.contacts}
+	contacts.during = func() {
+		if err := start("b@example.com"); err != nil {
+			t.Errorf("start B: %v", err)
+		}
+	}
+	h.svc.contactChanges = contacts
+	if err := start("a@example.com"); err != nil {
+		t.Fatalf("start A: %v", err)
+	}
+	pending, err := h.contacts.Get(ctx, userID, identifier.KindEmail)
+	if err != nil || pending.ID != "fixed" || pending.NewValue != "b@example.com" {
+		t.Fatalf("live pending = %+v, %v; want B's row under the repeated id", pending, err)
+	}
+	if err := h.svc.ConfirmIdentifierChange(ctx, IdentifierChangeConfirm{
+		SessionID: sessionID, UserID: userID, Kind: identifier.KindEmail, Code: h.mailer.proofCodeFor(t, "a@example.com"),
+	}); !errors.Is(err, ErrChallengeInvalid) {
+		t.Fatalf("confirm with A's code = %v, want ErrChallengeInvalid", err)
+	}
+	if _, err := h.idents.GetLogin(ctx, string(identifier.KindEmail), "b@example.com"); !errors.Is(err, sdk.ErrNotFound) {
+		t.Fatalf("b was claimed by a code delivered to a: %v", err)
+	}
 }

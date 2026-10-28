@@ -398,7 +398,12 @@ func (s *Service) issueGrant(ctx context.Context, in StepUpCompletion, meta sess
 	if !requirement.Accepts(meta.AuthenticatedAt, meta.Assurance, now) {
 		return authgrant.Grant{}, ErrStepUpProof
 	}
+	id, err := s.recordIDs.Generate()
+	if err != nil {
+		return authgrant.Grant{}, err
+	}
 	g, err := s.authGrants.Create(ctx, authgrant.Grant{
+		ID:              id,
 		SessionID:       in.SessionID,
 		UserID:          in.UserID,
 		Purpose:         in.Purpose,

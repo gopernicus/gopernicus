@@ -192,7 +192,7 @@ func (s *Service) MintAPIKey(ctx context.Context, serviceAccountID, name string,
 	if err != nil {
 		return apikey.APIKey{}, "", err
 	}
-	k, err := apikey.New(s.ids, serviceAccountID, name, prefix, hashed, expiresAt, now)
+	k, err := apikey.New(s.recordIDs, serviceAccountID, name, prefix, hashed, expiresAt, now)
 	if err != nil {
 		return apikey.APIKey{}, "", err
 	}
