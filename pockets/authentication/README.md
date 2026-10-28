@@ -3402,7 +3402,9 @@ optional compare-and-swap `user.PasswordHashUpgrader` (`UpgradeHash(ctx,
 userID, oldHash, newHash)`), which, unlike `Set`/`Change`, bumps no revision and
 revokes nothing. A failure logs one `password_rehash_failed` WARN (no password,
 no hash) and never fails the login; no security event is recorded. A store
-without `UpgradeHash` is never rehashed. The timing residual closes as users
+without `UpgradeHash` is never rehashed; `storetest.RunPasswordHashUpgrade` is
+the conformance suite a store adopts (outside `Run`), and the pgx and turso
+stores add it in the release after core v0.35.0. The timing residual closes as users
 log in; accounts that never log in keep their old hashes until a host sweep
 (for example forcing a reset).
 

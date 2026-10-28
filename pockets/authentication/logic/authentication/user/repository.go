@@ -88,7 +88,10 @@ type PasswordRepository interface {
 // only while it still equals oldHash (compare-and-swap) and reports whether it
 // did. Unlike Set and Change it is not a credential change: it must NOT bump
 // auth_revision or revoke sessions, grants or challenges, since both hashes
-// encode the same password. A store without it is never re-hashed.
+// encode the same password. A user with no stored password (or no such user)
+// returns false and a nil error, as a stale oldHash does. Concurrent upgrades
+// from the same oldHash have exactly one winner. A store without it is never
+// re-hashed; storetest.RunPasswordHashUpgrade is its conformance suite.
 type PasswordHashUpgrader interface {
 	UpgradeHash(ctx context.Context, userID, oldHash, newHash string) (bool, error)
 }
