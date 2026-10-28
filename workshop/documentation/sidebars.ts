@@ -88,6 +88,7 @@ const sidebars: SidebarsConfig = {
         'guides/operations-runbooks',
         'guides/database-posture',
         'guides/row-level-security',
+        'guides/first-admin',
       ],
     },
     'project-status',
