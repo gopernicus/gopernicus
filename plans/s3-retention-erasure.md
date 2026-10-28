@@ -1478,7 +1478,7 @@ G35 count prose follows architecture-steward's "thirty-three" (the Makefile and 
   — SHIP WITH EDITS (23 findings, 3 HIGH); architecture-steward — SHIP WITH EDITS (9 findings + aligned
   notes); data-integration-reviewer — SHIP WITH EDITS (29 findings, 3 HIGH); lead-backend-engineer — SHIP
   WITH EDITS (26 findings, 3 HIGH); lead-frontend-engineer — SHIP WITH EDITS (PR-5 only, 14 findings).
-  Reviews at `/private/tmp/claude-502/-Users-jrazmi-code-gopernicus-ecosystem-gopernicus/18fb770a-a1cf-406a-abf7-217562a2bd5e/scratchpad/review-s3/01-product-manager.md`,
+  Reviews at `<scratchpad>/review-s3/01-product-manager.md`,
   `…/02-platform-sre.md`, `…/03-architecture-steward.md`, `…/04-data-integration-reviewer.md`,
   `…/05-lead-backend-engineer.md`, `…/06-lead-frontend-engineer.md`. Every finding is accepted and folded
   under the lead rulings, except where a ruling overrides it: **rejected or superseded** — platform-sre #3

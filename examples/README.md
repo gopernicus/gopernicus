@@ -598,7 +598,10 @@ anywhere after it. A bare verb (`"DELETE"` as an HTTP method) is not one, and
 neither is the message or format argument of `fmt.Errorf`, `errors.New`, a
 `log` print, or an `slog` message — `fmt.Errorf("delete from cache: %w", err)`
 is prose. A `fmt.Sprintf` format is still read: it builds a value, which may
-be SQL handed to a database. A `WITH …` statement is not read. Both clauses
+be SQL handed to a database. The skip covers package-level calls only
+(`slog.Info(…)`, `log.Printf(…)`); a method on a logger value
+(`logger.Info("delete from cache")`) is still read, because the guard has no
+type information to know the receiver is a logger. A `WITH …` statement is not read. Both clauses
 read production files only: a
 live-leg test's fixture reset behind a build tag is a test, not wiring. The
 normative rule is wider than its floor: provider behavior — a mutation guard,

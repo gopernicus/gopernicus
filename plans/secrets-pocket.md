@@ -322,7 +322,7 @@ Each stage is its own PR. S1 can ship alone; S2 and S3 may share a PR.
 
 ## 7. Preconditions and constraints
 
-Repository `/Users/jrazmi/code/gopernicus-ecosystem/gopernicus`, HEAD 5dc0f731
+Repository `gopernicus`, HEAD 5dc0f731
 (2026-10-14) on `docs/tuplecache-key-on-binding-release`, 5 dirty paths that are
 not this work. Work branches from `main` after that release lands. Go 1.26.1.
 Latest tags at planning: sdk v0.12.0, pgxdb v0.9.0, jobs stores/pgx v0.6.0,

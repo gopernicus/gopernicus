@@ -1,7 +1,7 @@
 # Handoff — build issue #76 (tuplecache keyed on binding)
 
 Paste everything below the line into a fresh session started in
-`/Users/jrazmi/code/gopernicus-ecosystem/gopernicus`.
+the `gopernicus` repo root.
 
 ---
 

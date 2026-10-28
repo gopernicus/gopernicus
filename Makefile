@@ -36,7 +36,7 @@ EMULATOR_TAG_MODULES = integrations/authentication/firebase
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
 	guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
 	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger guard-rail-no-dml guard-auth-maintenance-leaf \
-	guard-credential-fields-secret guard-store-uuidv7-sites
+	guard-credential-fields-secret guard-store-uuidv7-sites guard-no-local-paths
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -194,7 +194,7 @@ guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-leg
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
 	guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
 	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger guard-rail-no-dml guard-auth-maintenance-leaf \
-	guard-credential-fields-secret guard-store-uuidv7-sites
+	guard-credential-fields-secret guard-store-uuidv7-sites guard-no-local-paths
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -747,3 +747,22 @@ guard-store-uuidv7-sites:
 			if printf '%s\n' "$$file:$$text" | grep -qxF $(G38_ALLOWED); then continue; fi; \
 			echo "ERROR (G38): $$hit — uuidv7() needs PostgreSQL 18: mint the id in Go (the record generator) or put the default in a canonical migration; a new runtime site is a reviewed allow-list line here"; fail=1; \
 		done; exit $$fail; }
+
+# G39 (hygiene, 2026-10-28): this is a public repo, so no tracked text file
+# names a local machine path — a home directory (/Users/<name>/) or an agent
+# session scratchpad under /private/tmp. A sibling repo is named by its repo
+# name, a path in this repo is repo-relative, and a scratchpad path is
+# <scratchpad>. go.sum files are skipped (hashes, never paths). The pattern
+# here is written so it does not match itself, and the self-check runs it over
+# canonical samples (assembled from split strings for the same reason), so a
+# pattern that stops matching cannot pass silently.
+G39_PATTERN = /Users/[A-Za-z0-9._-]+/|/private/tmp/clau[d]e
+guard-no-local-paths:
+	@echo "== guard: no tracked text file names a local machine path (G39) =="
+	@test "$$(printf '%s\n' '/Users/''alice/code/x' '/private/tmp/''claude-502/s' '~/code/segovia' '<scratchpad>/review' '/Users/' | grep -cE '$(G39_PATTERN)')" = 2 || { echo "ERROR (G39): the pattern no longer matches exactly the two canonical local-path samples — the guard would check nothing"; exit 1; }
+	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		hits=$$(git grep -nIE '$(G39_PATTERN)' -- ':!*.sum' || true); \
+	else \
+		hits=$$(grep -rnIE --exclude='*.sum' --exclude-dir=.git --exclude-dir=node_modules '$(G39_PATTERN)' . || true); \
+	fi; \
+	if [ -n "$$hits" ]; then echo "ERROR (G39): a tracked file names a local machine path — name a sibling repo by its repo name, make an in-repo path repo-relative, write a scratchpad path as <scratchpad>:"; echo "$$hits"; exit 1; fi

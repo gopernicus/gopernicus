@@ -39,6 +39,12 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
+// refEvidenceIDs mints the ids of the purge evidence rows the reference store
+// writes itself. Those rows are stamped with time.Now, consecutive purges can
+// share a clock tick, and the rail lists by (created_at, id); the suite's
+// NanoID ids would break that tie at random, so these mint in mint order.
+var refEvidenceIDs = sdk.NewIDGenerator(sdk.UUIDv7())
+
 // TestReferencePasskeys runs the passkey suite, separate from Run, against the
 // reference implementation.
 func TestReferencePasskeys(t *testing.T) {
@@ -3025,7 +3031,7 @@ func (r refMaintenance) PurgeSecurityEventsBefore(_ context.Context, before time
 		}
 	}
 	r.securityEvents = append(kept, securityevent.SecurityEvent{
-		ID:          ids.MustGenerate(),
+		ID:          refEvidenceIDs.MustGenerate(),
 		Actor:       securityevent.Principal{Type: "system", ID: "maintenance"},
 		EventType:   securityevent.TypeSecurityEventsPurged,
 		EventStatus: securityevent.StatusSuccess,

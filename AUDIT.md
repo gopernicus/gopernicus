@@ -2118,19 +2118,19 @@ wrappers.
 
 Read-only consumer anchors from the audit (recheck their current revisions):
 
-- **Segovia v2**, `/Users/jrazmi/code/segovia/segovia/v2`, main/76b3d78,
+- **Segovia v2**, `segovia/v2`, main/76b3d78,
   SDK v0.8.0: `cmd/server/filestorage.go`, `cmd/server/dashboards.go` and
   `internal/outbound/domains/dashboards/content.go` need facade migration.
   Preserve `.segovia/boot-probe`, generic non-seekable bundle readers, and
   errors.Is recognition of ErrBundleTooLarge. Storage is actively used by
   `internal/logic/domains/dashboards/service.go`; its startup comment suggesting
   otherwise was stale.
-- **GPS360**, `/Users/jrazmi/code/gps/three-sixty/gps-360-go`, main/e1ab3f0,
+- **GPS360**, `gps-360-go`, main/e1ab3f0,
   SDK v0.7.1: inspect `cmd/server/filestorage.go`, `cmd/workers/comps/main.go`
   and host `integrations/filestorage/{gcs,s3}`. Comps replays intentionally
   overwrite a stable archive key; do not turn the upgrade into create-only
   storage or silently rename race-derived keys.
-- **Coordination Hub**, `/Users/jrazmi/code/gps/coordination-hub`, main/84ff08a,
+- **Coordination Hub**, `coordination-hub`, main/84ff08a,
   SDK v0.7.0: `integrations/objectstore/objectstore.go` uses its own S3 Bucket
   interface. Its public/private bucket selection, MIME/cache metadata and CDN
   URLs remain host policy; it is not a mechanical FileStore migration.

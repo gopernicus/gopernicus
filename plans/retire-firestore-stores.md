@@ -25,8 +25,8 @@ No host mounts them. The only three `go.mod` files naming `firestore` are the tw
 and `integrations/authentication/firebase/go.mod`, whose `cloud.google.com/go/firestore v1.22.0 //
 indirect` is a transitive dependency of `firebase.google.com/go/v4` — unrelated to the connector
 and untouched by this plan. Nothing outside the two directories imports
-`…/integrations/datastores/firestore` (grep-verified; the lead also checked every `go.mod` under
-`/Users/jrazmi/code` — the only consumers are gopernicus worktrees). Firestore hosts were already
+`…/integrations/datastores/firestore` (grep-verified; the lead also checked every `go.mod` in the
+local code workspace — the only consumers are gopernicus worktrees). Firestore hosts were already
 frozen at authentication ≤ v0.17.x because the published store `v0.2.0` does not compile against
 v0.18.0 (RELEASING line 630-631; `pockets/authentication/README.md:775-779`).
 
@@ -285,7 +285,7 @@ Branch from `main` now; independent of S2 PR-7.
 - **files:** none (verification only; its output goes in the PR description)
 - **verify:**
   ```sh
-  cd /Users/jrazmi/code/gopernicus-ecosystem/gopernicus
+  cd "$(git rev-parse --show-toplevel)"
   env -u POSTGRES_TEST_DSN -u TURSO_DATABASE_URL -u TURSO_AUTH_TOKEN \
       -u FIRESTORE_EMULATOR_HOST -u FIRESTORE_PROJECT_ID make check          # 47 modules, 33 guards, no -tags=integration,live line
   make vuln                                                                   # required check; the Google versions moved
@@ -504,7 +504,7 @@ and already carries the retirement sentence; PR-B anchors under it). Do not stac
    fact a stranded host needs.
 2. **Does `integrations/datastores/firestore` go too?** Its only consumer in the tree was the
    authentication store (grep: no other Go importer; the authorization store was its other consumer
-   until AUDIT-040; the lead found no consumer in any `go.mod` under `/Users/jrazmi/code` outside
+   until AUDIT-040; the lead found no consumer in any `go.mod` in the local code workspace outside
    gopernicus worktrees). `integrations/authentication/firebase` does **not** use it (its indirect
    `cloud.google.com/go/firestore` comes from the Firebase Admin SDK). **Recommend yes** — a connector
    with no store is dead weight in `make check`, `vuln` and the docs.

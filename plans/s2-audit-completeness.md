@@ -1456,7 +1456,7 @@ rest; their resolutions are the "Decided by the review gate" list and the "Rulin
   inert), O-2/O-3/O-4 ADOPT WITH CHANGE; lead-backend-engineer — O-1 REJECT (`hardening/`
   directory), O-2/O-3/O-4 ADOPT WITH CHANGE; platform-sre — all four ADOPT WITH CHANGE;
   data-integration-reviewer — all four ADOPT WITH CHANGE. Reviews at
-  `/private/tmp/claude-502/-Users-jrazmi-code-gopernicus-ecosystem-gopernicus/18fb770a-a1cf-406a-abf7-217562a2bd5e/scratchpad/review-s2/rulings/01-product-manager.md`,
+  `<scratchpad>/review-s2/rulings/01-product-manager.md`,
   `…/rulings/02-lead-backend-engineer.md`, `…/rulings/03-platform-sre.md`,
   `…/rulings/04-data-integration-reviewer.md`. Rev 2 of this file is
   `s2-audit-completeness.rev2.md`.
@@ -1464,7 +1464,7 @@ rest; their resolutions are the "Decided by the review gate" list and the "Rulin
   architecture-steward — RATIFY WITH AMENDMENTS (8 items); platform-sre — RATIFY WITH AMENDMENTS
   (7 items); data-integration-reviewer — RATIFY WITH AMENDMENTS (12 items); lead-backend-engineer
   — RATIFY WITH AMENDMENTS (8 items). Reviews at
-  `/private/tmp/claude-502/-Users-jrazmi-code-gopernicus-ecosystem-gopernicus/18fb770a-a1cf-406a-abf7-217562a2bd5e/scratchpad/review-s2/01-product-manager.md`,
+  `<scratchpad>/review-s2/01-product-manager.md`,
   `…/02-architecture-steward.md`, `…/03-platform-sre.md`, `…/04-data-integration-reviewer.md`,
   `…/05-lead-backend-engineer.md`. Rejected there: product-manager's drop-`seq` alternative. Rev
   1 of this file is `s2-audit-completeness.rev1.md`.
