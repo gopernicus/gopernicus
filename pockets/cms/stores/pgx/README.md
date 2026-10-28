@@ -66,6 +66,21 @@ tree — `0009`–`0022` with `0011`/`0012` absent (gaps reproduced). Same filen
 = same logical schema step; content is per-dialect. After export, the host owns
 the final migration stream in `workshop/migrations/{db}`.
 
+**Generated ids and their backstops.** The pocket mints every id in Go (UUIDv7
+by default — see the pocket's `Config.IDs`); the column defaults are only the
+backstop for a raw SQL insert or a host wired with `sdk.DatabaseID`. Every
+generated `id` column (`terms`, `menus`, `menu_items`, `assets`, `inquiries`,
+`entries`) is `TEXT COLLATE "C" … DEFAULT uuidv7()::text`, so the canonical set
+needs PostgreSQL 18. The columns that hold one of those ids
+(`terms.parent_id`, `menu_items.{menu_id,parent_id}`, `entries.parent_id`,
+`entry_fields.entry_id`, `entry_terms.{entry_id,term_id}`) carry `COLLATE "C"`
+too: an index serves a join only under the join key's collation, and the
+`created_at DESC, id DESC` tiebreak and `ORDER BY term_id` / `parent_id` then
+sort in byte order on any cluster locale, matching the turso sibling. No store
+query calls `uuidv7()` at runtime. A host that already applied the previous
+files re-exports them against a fresh database: the edited files' checksums
+changed.
+
 ## Retention and erasure
 
 Inquiries hold a third party's name, email and message, and nothing in the pocket
@@ -121,6 +136,13 @@ first, migrated with `pgxdb.WithSchema`, constructed with `WithSchema`, and
 truncated by qualified name — which is the behavioural proof that the option
 reaches every executed path. That leg also asserts the `TRUNCATE ... CASCADE`
 stays inside the schema: a decoy row in a bare `public.entries` survives it.
+
+The id inventories in `collation_test.go` are checked three ways: the canonical
+DDL (hermetic), the applied catalog (`POSTGRES_TEST_DSN`), and — with
+`POSTGRES_NON_C_TEST_DSN` pointing at a non-C database such as the
+`postgres:18` image's default `en_US.utf8` — the entry tiebreak and term-id
+order through the store. `id_default_live_test.go` proves each `uuidv7()`
+backstop with a raw insert that omits the id.
 
 ```sh
 POSTGRES_TEST_SCHEMA=gopernicus_schema_test \

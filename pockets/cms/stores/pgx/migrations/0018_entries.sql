@@ -2,7 +2,7 @@
 -- analog). This table never changes shape when an author adds a type or a field
 -- (plan §2); it changes only on a framework upgrade.
 CREATE TABLE IF NOT EXISTS entries (
-    id           TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    id           TEXT COLLATE "C" PRIMARY KEY DEFAULT uuidv7()::text,
     type         TEXT NOT NULL,            -- content type slug: 'article','page','product'
     slug         TEXT NOT NULL,
     title        TEXT NOT NULL,
@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS entries (
     excerpt      TEXT NOT NULL DEFAULT '',
     author       TEXT NOT NULL DEFAULT '',
     template     TEXT NOT NULL DEFAULT 'default',
-    parent_id    TEXT NOT NULL DEFAULT '', -- hierarchy (pages); '' otherwise
+    parent_id    TEXT COLLATE "C" NOT NULL DEFAULT '', -- hierarchy (pages); '' otherwise
     menu_order   INTEGER NOT NULL DEFAULT 0,
     published_at TIMESTAMPTZ,               -- set the first time published
     created_at   TIMESTAMPTZ NOT NULL,
