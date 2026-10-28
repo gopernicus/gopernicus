@@ -1,6 +1,12 @@
 package mutations
 
-import "github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+import (
+	"maps"
+	"slices"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+)
 
 // IntegrityRule requires a minimum number of concrete subjects on a relationship
 // after each ordinary canonical command. A userset (group#member) is not a
@@ -27,8 +33,27 @@ type IntegrityPolicy struct {
 
 // DefaultIntegrityPolicy is an explicit convenience for hosts protecting one
 // concrete owner on every resource type. Stores never install it implicitly.
+// Its rule is unscoped, so it assumes every modelled type with relations
+// declares owner; beside a model that has a type without it, authorization.New
+// refuses — use DefaultIntegrityPolicyFor.
 func DefaultIntegrityPolicy() IntegrityPolicy {
 	return IntegrityPolicy{Rules: []IntegrityRule{{Relation: "owner", MinSubjects: 1}}}
+}
+
+// DefaultIntegrityPolicyFor builds the default owner policy from a model: one
+// explicit {type, owner, 1} rule per modelled type that declares an owner
+// relation, so a type without owner is left alone. Unlike the unscoped
+// DefaultIntegrityPolicy it does not cover unmodelled (opaque) types or types
+// whose owner is a permission only; add an explicit rule for each. Compose
+// further rules with p.Rules = append(p.Rules, ...).
+func DefaultIntegrityPolicyFor(model decisions.Model) IntegrityPolicy {
+	var p IntegrityPolicy
+	for _, rt := range slices.Sorted(maps.Keys(model.ResourceTypes)) {
+		if _, ok := model.ResourceTypes[rt].Relations["owner"]; ok {
+			p.Rules = append(p.Rules, IntegrityRule{ResourceType: rt, Relation: "owner", MinSubjects: 1})
+		}
+	}
+	return p
 }
 
 // MinDirectSubjects returns the minimum number of distinct concrete subjects the policy

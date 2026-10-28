@@ -79,6 +79,7 @@ func authzSchema() decisions.Model {
 // not a weakened posture: the empty IntegrityPolicy the pre-AZ3-4.1 demo wired (which
 // disabled last-owner protection entirely to let member invitations precede an owner) is
 // gone, replaced by a boot-time owner seed + this real invariant.
+// mutations.DefaultIntegrityPolicyFor(model) derives the same per-type owner rules from a model.
 func authzIntegrityPolicy() mutations.IntegrityPolicy {
 	return mutations.IntegrityPolicy{
 		Rules: []mutations.IntegrityRule{{ResourceType: demoResourceType, Relation: "owner", MinSubjects: 1}},

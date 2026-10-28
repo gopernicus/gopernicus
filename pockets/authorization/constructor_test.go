@@ -13,6 +13,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets"
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
@@ -288,7 +289,7 @@ const (
 	integrityWarnText      = "the integrity policy does not protect owner"
 	integrityNilWarnText   = "Repositories.Mutations is nil beside an owner relation"
 	auditReadWarnText      = "audit reads are not recorded; wire WithAuditReadObserver"
-	integrityPolicyFixHint = "mutations.DefaultIntegrityPolicy()"
+	integrityPolicyFixHint = "mutations.DefaultIntegrityPolicyFor(model)"
 )
 
 func integrityModel() decisions.Model {
@@ -318,8 +319,8 @@ func integrityRepos(policy *mutations.IntegrityPolicy) Repositories {
 
 func TestIntegrityWarnsWhenOwnerIsUnprotected(t *testing.T) {
 	projectOnly := mutations.IntegrityPolicy{Rules: []mutations.IntegrityRule{{ResourceType: "project", Relation: "owner"}}}
-	adminOnly := mutations.IntegrityPolicy{Rules: []mutations.IntegrityRule{{Relation: "admin"}}}
-	full := mutations.DefaultIntegrityPolicy()
+	teamAdmin := mutations.IntegrityPolicy{Rules: []mutations.IntegrityRule{{ResourceType: "team", Relation: "admin"}}}
+	full := mutations.DefaultIntegrityPolicyFor(integrityModel())
 	for _, tc := range []struct {
 		name   string
 		policy *mutations.IntegrityPolicy
@@ -328,8 +329,8 @@ func TestIntegrityWarnsWhenOwnerIsUnprotected(t *testing.T) {
 	}{
 		{"empty policy", nil, "project,space", 0},
 		{"one type protected", &projectOnly, "space", 1},
-		{"another relation protected", &adminOnly, "project,space", 1},
-		{"default policy", &full, "", 1},
+		{"opaque explicit rule", &teamAdmin, "project,space", 1},
+		{"default policy for the model", &full, "", 2},
 	} {
 		for _, mode := range []environment.Mode{"", environment.ModeDevelopment, environment.ModeProduction} {
 			t.Run(tc.name+"/"+mode.String(), func(t *testing.T) {
@@ -354,6 +355,74 @@ func TestIntegrityWarnsWhenOwnerIsUnprotected(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestNewRefusesUnscopedIntegrityRuleOnModelledTypeWithoutRelation(t *testing.T) {
+	user := decisions.RelationDef{AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}
+	platformOnly := decisions.NewSchema([]decisions.ResourceSchema{{Name: "platform", Def: decisions.ResourceTypeDef{
+		Relations: map[string]decisions.RelationDef{"admin": user}, Permissions: map[string]decisions.Expression{"manage": decisions.AnyOf(decisions.Direct("admin"))},
+	}}})
+	unscoped := mutations.DefaultIntegrityPolicy()
+	adminAnywhere := mutations.IntegrityPolicy{Rules: []mutations.IntegrityRule{{Relation: "admin"}}}
+	for _, tc := range []struct {
+		name   string
+		policy mutations.IntegrityPolicy
+		model  decisions.Model
+		types  string
+		rel    string
+	}{
+		{"owner declared nowhere", unscoped, platformOnly, "platform", "owner"},
+		{"owner missing on one type", unscoped, integrityModel(), "team", "owner"},
+		{"relation declared nowhere", adminAnywhere, integrityModel(), "project,space,team", "admin"},
+	} {
+		for _, mode := range []environment.Mode{"", environment.ModeDevelopment, environment.ModeProduction} {
+			t.Run(tc.name+"/"+mode.String(), func(t *testing.T) {
+				_, err := New(integrityRepos(&tc.policy), WithModel(tc.model), WithRuntimeMode(mode), WithLogger(slog.New(slog.DiscardHandler)), WithDecisionObserver(ignoreDecisions))
+				if !errors.Is(err, ErrIntegrityRuleUnscoped) || !errors.Is(err, sdk.ErrInvalidInput) {
+					t.Fatalf("New = %v; want ErrIntegrityRuleUnscoped", err)
+				}
+				for _, want := range []string{"{" + tc.rel + "}", tc.types + " declares no " + tc.rel + " relation", "scope the rule", "mutations.DefaultIntegrityPolicyFor(model)"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("refusal lacks %q: %v", want, err)
+					}
+				}
+			})
+		}
+	}
+
+	t.Run("model-derived default plus platform admin applies the first grant", func(t *testing.T) {
+		policy := mutations.DefaultIntegrityPolicyFor(platformOnly)
+		policy.Rules = append(policy.Rules, mutations.IntegrityRule{ResourceType: "platform", Relation: "admin", MinSubjects: 1})
+		comps, err := New(integrityRepos(&policy), WithModel(platformOnly))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := audit.WithSource(t.Context(), audit.Source{System: "test"})
+		got, err := comps.Mutations.AssignRole(ctx, mutations.AssignRoleCommand{Subject: prinU("a"), Role: "admin", Scope: tuples.On("platform", "global")})
+		if err != nil || got == nil || got.Outcome != mutations.OutcomeApplied {
+			t.Fatalf("first platform admin grant: %+v, %v", got, err)
+		}
+	})
+
+	ownedEverywhere := decisions.NewSchema([]decisions.ResourceSchema{
+		{Name: "project", Def: decisions.ResourceTypeDef{Relations: map[string]decisions.RelationDef{"owner": user}, Permissions: map[string]decisions.Expression{"manage": decisions.AnyOf(decisions.Direct("owner"))}}},
+		{Name: "label", Def: decisions.ResourceTypeDef{Permissions: map[string]decisions.Expression{"view": decisions.Role("viewer")}}},
+	})
+	for _, tc := range []struct {
+		name  string
+		repos Repositories
+		opts  []Option
+	}{
+		{"every type with relations declares owner", integrityRepos(&unscoped), []Option{WithModel(ownedEverywhere)}},
+		{"no model", integrityRepos(&unscoped), nil},
+		{"Mutations nil", Repositories{Tuples: memory.New().Tuples()}, []Option{WithModel(platformOnly)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := New(tc.repos, tc.opts...); err != nil {
+				t.Fatalf("New = %v; want no refusal", err)
+			}
+		})
 	}
 }
 
