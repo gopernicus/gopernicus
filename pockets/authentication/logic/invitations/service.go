@@ -254,6 +254,7 @@ type PreparedCreate struct {
 	owner     *Service
 	input     CreateInput
 	subjectID string
+	actor     sdk.Principal
 }
 
 // Input returns a defensive copy of the normalized command.
@@ -266,6 +267,14 @@ func (p PreparedCreate) Input() CreateInput {
 // ResolvedSubjectID is the verified email owner found during preparation, or
 // empty for an unknown email or an identifier kind without account resolution.
 func (p PreparedCreate) ResolvedSubjectID() string { return p.subjectID }
+
+// WithActor returns a copy attributed to the principal executing the create.
+// The actor is audit attribution only; it never authorizes the command and never
+// reaches Input. A zero principal keeps the headless InvitedBy attribution.
+func (p PreparedCreate) WithActor(actor sdk.Principal) PreparedCreate {
+	p.actor = actor
+	return p
+}
 
 // AcceptInput is the input to Accept. Token is the plaintext secret from the
 // invitation mail; SubjectType/SubjectID is the accepting caller. Verified
@@ -496,9 +505,9 @@ func (s *Service) CreatePrepared(ctx context.Context, p PreparedCreate) (CreateR
 	}
 
 	if p.input.AutoAccept && p.subjectID != "" {
-		return s.directAdd(ctx, p.input, p.subjectID)
+		return s.directAdd(ctx, p.input, p.subjectID, p.actor)
 	}
-	return s.createPending(ctx, p.input, p.subjectID)
+	return s.createPending(ctx, p.input, p.subjectID, p.actor)
 }
 
 // kindSupported reports whether the host can deliver an invitation of kind
@@ -516,7 +525,7 @@ func (s *Service) kindSupported(kind string) bool {
 // directAdd grants a known invitee immediately (AutoAccept). A MemberCheck veto
 // (already a member) → ErrAlreadyMember; a Granter failure is audited and
 // returned. No invitation record is created (the original's direct-add shape).
-func (s *Service) directAdd(ctx context.Context, in CreateInput, subjectID string) (CreateResult, error) {
+func (s *Service) directAdd(ctx context.Context, in CreateInput, subjectID string, actor sdk.Principal) (CreateResult, error) {
 	if s.memberCheck != nil {
 		isMember, err := s.memberCheck(ctx, in.ResourceType, in.ResourceID, subjectTypeUser, subjectID)
 		if err != nil {
@@ -531,7 +540,7 @@ func (s *Service) directAdd(ctx context.Context, in CreateInput, subjectID strin
 	// from the unconditional secret generator — NOT the entity WithIDs strategy,
 	// whose sdk.DatabaseID mode yields an empty ID until an entity is inserted.
 	operationID := mintOperationID()
-	prov := grantProvenance{operationID: operationID, invitedBy: in.InvitedBy, resolvedBy: resolvedByDirectAdd, directAdd: true}
+	prov := grantProvenance{operationID: operationID, invitedBy: in.InvitedBy, resolvedBy: resolvedByDirectAdd, directAdd: true, actor: actor}
 	if err := s.grant(ctx, operationID, in.ResourceType, in.ResourceID, in.Relation, subjectTypeUser, subjectID, in.Metadata); err != nil {
 		s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.IdentifierKind, in.Identifier, securityevent.StatusFailure, "", prov)
 		return CreateResult{}, fmt.Errorf("grant: %w", err)
@@ -550,7 +559,7 @@ func (s *Service) directAdd(ctx context.Context, in CreateInput, subjectID strin
 // collision → ErrPendingInvitationExists. When the invitee is already a known
 // user its subject id is pre-recorded (ResolvedSubjectID) for later attribution.
 // A mail failure is returned with the (persisted) record, mirroring Register.
-func (s *Service) createPending(ctx context.Context, in CreateInput, subjectID string) (CreateResult, error) {
+func (s *Service) createPending(ctx context.Context, in CreateInput, subjectID string, actor sdk.Principal) (CreateResult, error) {
 	secret := mintSecret()
 	tokenHash, err := s.hashSecret(secret)
 	if err != nil {
@@ -570,7 +579,7 @@ func (s *Service) createPending(ctx context.Context, in CreateInput, subjectID s
 		}
 		return CreateResult{}, err
 	}
-	s.recordCreated(ctx, created)
+	s.recordCreated(ctx, created, actor)
 	if err := s.sendInviteSent(ctx, created, secret, in.Redirect, false); err != nil {
 		return CreateResult{Invitation: created}, err
 	}
@@ -677,6 +686,9 @@ func (s *Service) acceptClaim(ctx context.Context, inv Invitation, subjectType, 
 // Decline marks a pending invitation declined. It is a PUBLIC route, so the
 // caller proves they are the invitee by presenting the token; a wrong token
 // leaks nothing (sdk.ErrNotFound). No grant happens.
+//
+// Decline does not check expiry: an expired pending row still declines.
+// DeclineByToken surfaces sdk.ErrExpired instead.
 func (s *Service) Decline(ctx context.Context, id, token string) error {
 	inv, err := s.invitations.Get(ctx, id)
 	if err != nil {
@@ -686,11 +698,37 @@ func (s *Service) Decline(ctx context.Context, id, token string) error {
 	if err != nil || tokenHash != inv.TokenHash {
 		return invitationNotFound()
 	}
+	return s.declinePending(ctx, inv)
+}
+
+// DeclineByToken marks the pending invitation the token addresses declined, for
+// a landing page that holds only the mailed secret. The token is the proof of
+// being the invitee. An unknown token is sdk.ErrNotFound, an unclaimed token
+// past expiry is sdk.ErrExpired (as Accept), and any non-pending state —
+// including an accepting claim, which is never changed — is ErrNotPending.
+func (s *Service) DeclineByToken(ctx context.Context, token string) error {
+	tokenHash, err := s.hashSecret(token)
+	if err != nil {
+		return invitationNotFound()
+	}
+	inv, err := s.invitations.GetByTokenHash(ctx, tokenHash)
+	if err != nil {
+		if errors.Is(err, sdk.ErrNotFound) {
+			return invitationNotFound()
+		}
+		return err
+	}
+	return s.declinePending(ctx, inv)
+}
+
+// declinePending declines inv, already matched to the caller's token, against
+// its observed token hash; a non-pending row is ErrNotPending.
+func (s *Service) declinePending(ctx context.Context, inv Invitation) error {
 	if inv.Status != StatusPending {
 		return ErrNotPending
 	}
 	now := s.now()
-	if _, err := s.invitations.UpdateStatus(ctx, id, StatusUpdate{
+	if _, err := s.invitations.UpdateStatus(ctx, inv.ID, StatusUpdate{
 		ExpectedTokenHash: inv.TokenHash,
 		Status:            StatusDeclined,
 		TokenHash:         inv.TokenHash,
@@ -998,6 +1036,9 @@ func (s *Service) live(inv Invitation, pendingOnly bool) bool {
 type grantProvenance struct {
 	invitationID, operationID, invitedBy, resolvedBy string
 	directAdd                                        bool
+	// actor is the direct add's audit attribution (PreparedCreate.WithActor). It
+	// rides the row's Actor only: UserID stays the granted subject.
+	actor sdk.Principal
 }
 
 // recordGrant appends an invitation_granted audit row for a grant attempt
@@ -1024,7 +1065,7 @@ func (s *Service) recordGrant(ctx context.Context, subjectID, resourceType, reso
 	if reason != "" {
 		details["reason"] = reason
 	}
-	s.record(ctx, subjectID, securityevent.TypeInvitationGranted, status, details)
+	s.recordAs(ctx, auditActor(prov.actor), subjectID, securityevent.TypeInvitationGranted, status, details)
 }
 
 // recordAcceptDenied appends an invitation_granted failure for an accept refused
@@ -1044,16 +1085,24 @@ func (s *Service) recordAcceptDenied(ctx context.Context, subjectID string, inv 
 }
 
 // recordCreated appends an invitation_created audit row for a newly minted
-// pending invite, attributed to the InvitedBy owner. Resend uses recordManagement.
-// The invitee rides as its kind and digest, never the address (AUDIT-054).
-func (s *Service) recordCreated(ctx context.Context, inv Invitation) {
-	s.record(ctx, inv.InvitedBy, securityevent.TypeInvitationCreated, securityevent.StatusSuccess, map[string]any{
+// pending invite, attributed by the management rule (attribute): a user actor is
+// the UserID, a non-user actor leaves it empty, and no actor keeps the InvitedBy
+// owner. With an actor, Details carries the original invited_by. Resend uses
+// recordManagement. The invitee rides as its kind and digest, never the address
+// (AUDIT-054).
+func (s *Service) recordCreated(ctx context.Context, inv Invitation, actor sdk.Principal) {
+	details := map[string]any{
 		"resource_type":     inv.ResourceType,
 		"resource_id":       inv.ResourceID,
 		"relation":          inv.Relation,
 		"identifier_kind":   inv.IdentifierKind,
 		"identifier_digest": s.auditDigest(inv.IdentifierKind, inv.Identifier),
-	})
+	}
+	if actor != (sdk.Principal{}) {
+		details["invited_by"] = inv.InvitedBy
+	}
+	who, userID := attribute(actor, inv.InvitedBy)
+	s.recordAs(ctx, who, userID, securityevent.TypeInvitationCreated, securityevent.StatusSuccess, details)
 }
 
 // auditDigest returns the digest an audit row carries in place of the invitee

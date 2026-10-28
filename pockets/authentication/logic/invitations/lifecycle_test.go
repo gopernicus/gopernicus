@@ -1,13 +1,18 @@
 package invitations
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -229,5 +234,143 @@ func TestClaimResumesAfterAmbiguousGrantOrFinalizationAndRestart(t *testing.T) {
 				t.Fatal("replay changed acceptance timestamp")
 			}
 		})
+	}
+}
+
+// TestDeclineByToken pins the token-only decline: a pending row declines with
+// its invitation_declined row; unknown is ErrNotFound; expired unclaimed is
+// ErrExpired; accepted, declined and accepting rows are ErrNotPending with no
+// state change; and neither the token nor its hash reaches a log line or an
+// event detail.
+func TestDeclineByToken(t *testing.T) {
+	var logs bytes.Buffer
+	repo := newFakeInvRepo()
+	events := &fakeSecurityEvents{}
+	g := &fakeGranter{}
+	svc := newSvc(t, repo, g, constructorConfig{SecurityEvents: events, Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
+	ctx := t.Context()
+
+	pending := seedInvite(t, repo, "project", "p", "member", "a@x.com", "owner", "tok-pending", false, time.Now().Add(time.Hour))
+	if err := svc.DeclineByToken(ctx, "tok-pending"); err != nil {
+		t.Fatalf("pending: %v", err)
+	}
+	if got, _ := repo.Get(ctx, pending.ID); got.Status != StatusDeclined {
+		t.Fatalf("pending not declined: %+v", got)
+	}
+	var declined []securityevent.SecurityEvent
+	for _, evt := range events.created {
+		if evt.EventType == securityevent.TypeInvitationDeclined {
+			declined = append(declined, evt)
+		}
+	}
+	if len(declined) != 1 || declined[0].Details["resource_id"] != "p" {
+		t.Fatalf("declined rows=%+v", declined)
+	}
+	if err := svc.DeclineByToken(ctx, "tok-pending"); !errors.Is(err, ErrNotPending) {
+		t.Fatalf("second decline=%v, want ErrNotPending", err)
+	}
+
+	for _, tok := range []string{"tok-unknown", ""} {
+		if err := svc.DeclineByToken(ctx, tok); !errors.Is(err, sdk.ErrNotFound) {
+			t.Fatalf("unknown %q=%v, want ErrNotFound", tok, err)
+		}
+	}
+
+	expired := seedInvite(t, repo, "project", "p", "member", "b@x.com", "owner", "tok-expired", false, time.Now().Add(-time.Hour))
+	if err := svc.DeclineByToken(ctx, "tok-expired"); !errors.Is(err, sdk.ErrExpired) {
+		t.Fatalf("expired=%v, want ErrExpired", err)
+	}
+	if got, _ := repo.Get(ctx, expired.ID); got.Status != StatusPending {
+		t.Fatalf("expired row changed: %+v", got)
+	}
+
+	accepted := seedInvite(t, repo, "project", "p", "member", "invitee@x.com", "owner", "tok-accepted", false, time.Now().Add(time.Hour))
+	if _, err := svc.Accept(ctx, AcceptInput{Token: "tok-accepted", SubjectID: "user-9"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeclineByToken(ctx, "tok-accepted"); !errors.Is(err, ErrNotPending) {
+		t.Fatalf("accepted=%v, want ErrNotPending", err)
+	}
+	if got, _ := repo.Get(ctx, accepted.ID); got.Status != StatusAccepted {
+		t.Fatalf("accepted row changed: %+v", got)
+	}
+
+	claimed := seedInvite(t, repo, "project", "p2", "member", "sub@x.com", "owner", "tok-accepting", false, time.Now().Add(time.Hour))
+	before, err := repo.ClaimAcceptance(ctx, claimed.ID, Acceptance{TokenHash: claimed.TokenHash, SubjectType: "user", SubjectID: "user-7", Now: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeclineByToken(ctx, "tok-accepting"); !errors.Is(err, ErrNotPending) {
+		t.Fatalf("accepting=%v, want ErrNotPending", err)
+	}
+	if got, _ := repo.Get(ctx, claimed.ID); got.Status != StatusAccepting || !got.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Fatalf("accepting row changed: %+v", got)
+	}
+	n := 0
+	for _, evt := range events.created {
+		if evt.EventType == securityevent.TypeInvitationDeclined {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("declined rows=%d, want 1", n)
+	}
+
+	secrets := []string{"tok-pending", "tok-expired", "tok-accepted", "tok-accepting", "tok-unknown"}
+	for _, sec := range secrets {
+		for _, needle := range []string{sec, hashOf(t, sec)} {
+			if strings.Contains(logs.String(), needle) {
+				t.Fatalf("log carries %q", needle)
+			}
+			for _, evt := range events.created {
+				if strings.Contains(fmt.Sprint(evt.Details), needle) {
+					t.Fatalf("%s details carry %q", evt.EventType, needle)
+				}
+			}
+		}
+	}
+}
+
+// TestDeclineByIDKeepsDecliningExpired pins ruling R-8: the id route keeps its
+// no-expiry behaviour while DeclineByToken surfaces ErrExpired.
+func TestDeclineByIDKeepsDecliningExpired(t *testing.T) {
+	repo := newFakeInvRepo()
+	svc := newSvc(t, repo, &fakeGranter{}, constructorConfig{})
+	inv := seedInvite(t, repo, "project", "p", "member", "a@x.com", "owner", "tok", false, time.Now().Add(-time.Hour))
+	if err := svc.Decline(t.Context(), inv.ID, "tok"); err != nil {
+		t.Fatalf("Decline(expired)=%v", err)
+	}
+	if got, _ := repo.Get(t.Context(), inv.ID); got.Status != StatusDeclined {
+		t.Fatalf("status=%q", got.Status)
+	}
+}
+
+// lostDeclineRace serves a pending row by token hash but loses the conditional
+// write, as when an accept claims the row between the read and the decline.
+type lostDeclineRace struct {
+	*fakeInvRepo
+}
+
+func (r lostDeclineRace) UpdateStatus(context.Context, string, StatusUpdate) (Invitation, error) {
+	return Invitation{}, sdk.ErrConflict
+}
+
+// TestDeclineByTokenLostRaceConflicts pins that a decline whose conditional
+// write loses to a concurrent accept surfaces the conflict (409 class) and
+// records no invitation_declined row.
+func TestDeclineByTokenLostRaceConflicts(t *testing.T) {
+	repo := newFakeInvRepo()
+	events := &fakeSecurityEvents{}
+	seedInvite(t, repo, "project", "p", "member", "a@x.com", "owner", "tok", false, time.Now().Add(time.Hour))
+	d := constructorConfig{SecurityEvents: events, Invitations: lostDeclineRace{repo}, Granter: &fakeGranter{}, Mailer: &recordingMailer{}}
+	svc := newService(d)
+	err := svc.DeclineByToken(t.Context(), "tok")
+	if !errors.Is(err, sdk.ErrConflict) {
+		t.Fatalf("lost race = %v, want sdk.ErrConflict", err)
+	}
+	for _, evt := range events.created {
+		if evt.EventType == securityevent.TypeInvitationDeclined {
+			t.Fatalf("declined row recorded on a lost race: %+v", evt)
+		}
 	}
 }

@@ -9,14 +9,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -277,6 +281,7 @@ func TestInvitationRoutesDenyByAbsence(t *testing.T) {
 		{"POST", "/auth/invitations/inv-1/cancel"},
 		{"POST", "/auth/invitations/inv-1/resend"},
 		{"POST", "/auth/invitations/inv-1/decline"},
+		{"POST", "/auth/invitations/decline"},
 	}
 	for _, rt := range routes {
 		rec := do(t, h, rt.method, rt.path, "")
@@ -926,3 +931,261 @@ func (metadataMineInvitationService) Mine(context.Context, string, string, list.
 
 // compile-time proof the spy satisfies the consumed InvitationService port.
 var _ InvitationService = (*spyInvitationService)(nil)
+
+var _ invitationTokenDecliner = (*invitations.Service)(nil)
+
+// tokenDeclineRepo is the slice of InvitationRepository a token decline reads
+// and writes, keyed by token hash with the store contract's expiry rule.
+type tokenDeclineRepo struct {
+	invitations.InvitationRepository
+	mu     sync.Mutex
+	byHash map[string]invitations.Invitation
+}
+
+func (r *tokenDeclineRepo) GetByTokenHash(_ context.Context, hash string) (invitations.Invitation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	inv, ok := r.byHash[hash]
+	if !ok {
+		return invitations.Invitation{}, sdk.ErrNotFound
+	}
+	if inv.Status != invitations.StatusAccepting && inv.Status != invitations.StatusAccepted && inv.Expired(time.Now()) {
+		return invitations.Invitation{}, sdk.ErrExpired
+	}
+	return inv, nil
+}
+
+func (r *tokenDeclineRepo) Get(_ context.Context, id string) (invitations.Invitation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, inv := range r.byHash {
+		if inv.ID == id {
+			return inv, nil
+		}
+	}
+	return invitations.Invitation{}, sdk.ErrNotFound
+}
+
+func (r *tokenDeclineRepo) UpdateStatus(_ context.Context, id string, upd invitations.StatusUpdate) (invitations.Invitation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for hash, inv := range r.byHash {
+		if inv.ID == id {
+			updated, err := inv.UpdateStatus(upd)
+			if err != nil {
+				return invitations.Invitation{}, err
+			}
+			r.byHash[hash] = updated
+			return updated, nil
+		}
+	}
+	return invitations.Invitation{}, sdk.ErrNotFound
+}
+
+func (r *tokenDeclineRepo) status(t *testing.T, token string) string {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.byHash[mustHash(t, token)].Status
+}
+
+func mustHash(t *testing.T, token string) string {
+	t.Helper()
+	hash, err := cryptids.SHA256(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hash
+}
+
+// newTokenDeclineService is the real invitation service over tokenDeclineRepo,
+// seeded with one invitation per token in the given state.
+func newTokenDeclineService(t *testing.T, seed map[string]string) (*invitations.Service, *tokenDeclineRepo) {
+	t.Helper()
+	repo := &tokenDeclineRepo{byHash: map[string]invitations.Invitation{}}
+	for token, status := range seed {
+		inv, err := invitations.NewInvitation(sdk.IDGenerator{}, "project", "p1", "member", token+"@x.com", sdk.AddressKindEmail, "u1", mustHash(t, token), false, time.Hour, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch status {
+		case "expired":
+			inv.ExpiresAt = time.Now().Add(-time.Minute)
+		case "declined-expired":
+			inv.Status, inv.ExpiresAt = invitations.StatusDeclined, time.Now().Add(-time.Minute)
+		case "accepted-expired":
+			inv.Status, inv.ExpiresAt = invitations.StatusAccepted, time.Now().Add(-time.Minute)
+		case "":
+		default:
+			inv.Status = status
+		}
+		repo.byHash[inv.TokenHash] = inv
+	}
+	svc, err := invitations.New(repo, unusedInvitationGranter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return svc, repo
+}
+
+// TestInvitationDeclineByTokenResponses pins the POST /auth/invitations/decline
+// response matrix over the real service: success, an unknown or wrong token as
+// one not-found body, expiry, a second click as the not-pending conflict, and
+// a missing token as the id route's bad-body 400.
+func TestInvitationDeclineByTokenResponses(t *testing.T) {
+	svc, repo := newTokenDeclineService(t, map[string]string{"tok-pending": "", "tok-expired": "expired", "tok-accepted": invitations.StatusAccepted, "tok-accepting": invitations.StatusAccepting, "tok-declined-expired": "declined-expired", "tok-accepted-expired": "accepted-expired"})
+	f := newInvitationFixtureWith(t, svc, allowInviteCheck, nil)
+
+	rec := do(t, f.h, "POST", "/auth/invitations/decline", `{"token":"tok-pending"}`)
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"status":"declined"}` {
+		t.Fatalf("decline = %d %s", rec.Code, rec.Body)
+	}
+	if got := repo.status(t, "tok-pending"); got != invitations.StatusDeclined {
+		t.Fatalf("status = %q, want declined", got)
+	}
+
+	unknown := do(t, f.h, "POST", "/auth/invitations/decline", `{"token":"tok-unknown"}`)
+	wrong := do(t, f.h, "POST", "/auth/invitations/decline", `{"token":"tok-pending-but-wrong"}`)
+	idRoute := do(t, f.h, "POST", "/auth/invitations/inv-1/decline", `{"token":"x"}`)
+	if unknown.Code != http.StatusNotFound || wrong.Code != http.StatusNotFound || unknown.Body.String() != wrong.Body.String() || idRoute.Body.String() != unknown.Body.String() {
+		t.Fatalf("unknown = %d %s; wrong = %d %s; id route = %d %s", unknown.Code, unknown.Body, wrong.Code, wrong.Body, idRoute.Code, idRoute.Body)
+	}
+	if strings.Contains(unknown.Body.String(), "tok-unknown") {
+		t.Fatalf("not-found body echoes the token: %s", unknown.Body)
+	}
+
+	// Past ExpiresAt the stores expire every unclaimed row, declined included;
+	// claimed rows (accepted/accepting) stay readable and conflict.
+	for _, tok := range []string{"tok-expired", "tok-declined-expired"} {
+		if rec := do(t, f.h, "POST", "/auth/invitations/decline", `{"token":"`+tok+`"}`); rec.Code != http.StatusGone {
+			t.Fatalf("%s = %d %s, want 410", tok, rec.Code, rec.Body)
+		}
+	}
+	f = newInvitationFixtureWith(t, svc, allowInviteCheck, nil)
+	for _, tok := range []string{"tok-pending", "tok-accepted", "tok-accepting", "tok-accepted-expired"} {
+		rec := do(t, f.h, "POST", "/auth/invitations/decline", `{"token":"`+tok+`"}`)
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("%s = %d %s, want 409", tok, rec.Code, rec.Body)
+		}
+	}
+	if got := repo.status(t, "tok-accepting"); got != invitations.StatusAccepting {
+		t.Fatalf("accepting claim changed to %q", got)
+	}
+
+	f = newInvitationFixtureWith(t, svc, allowInviteCheck, nil)
+	for _, body := range []string{`{}`, `{"token":""}`, "not-json"} {
+		tokenRoute := do(t, f.h, "POST", "/auth/invitations/decline", body)
+		badBody := do(t, f.h, "POST", "/auth/invitations/inv-1/decline", "not-json")
+		if tokenRoute.Code != http.StatusBadRequest || tokenRoute.Body.String() != badBody.Body.String() {
+			t.Fatalf("body %q = %d %s, want the id route's %d %s", body, tokenRoute.Code, tokenRoute.Body, badBody.Code, badBody.Body)
+		}
+	}
+}
+
+// TestInvitationDeclineByTokenGates pins the token route's transport gates:
+// cross-origin refused as the id route refuses, POST only, and no collision
+// with the resource create route or accept.
+func TestInvitationDeclineByTokenGates(t *testing.T) {
+	svc, _ := newTokenDeclineService(t, map[string]string{"tok": ""})
+	f := newInvitationFixtureWith(t, svc, allowInviteCheck, nil)
+
+	for _, path := range []string{"/auth/invitations/decline", "/auth/invitations/inv-1/decline"} {
+		r := httptest.NewRequest("POST", path, strings.NewReader(`{"token":"tok"}`))
+		r.Header.Set("Sec-Fetch-Site", "cross-site")
+		r.Header.Set("Origin", "https://evil.example")
+		rec := httptest.NewRecorder()
+		f.h.ServeHTTP(rec, r)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), originRejectedCode) {
+			t.Fatalf("cross-site %s = %d %s, want 403 %s", path, rec.Code, rec.Body, originRejectedCode)
+		}
+	}
+	for _, method := range []string{"GET", "HEAD"} {
+		if rec := do(t, f.h, method, "/auth/invitations/decline", ""); rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s decline = %d, want 405", method, rec.Code)
+		}
+	}
+	// A resource type named "decline" stays the create route and accept stays
+	// accept (both session-gated): neither reaches the public decline.
+	for _, path := range []string{"/auth/invitations/decline/p1", "/auth/invitations/project/p1", "/auth/invitations/accept"} {
+		if rec := do(t, f.h, "POST", path, `{"token":"tok"}`); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("POST %s = %d %s, want 401", path, rec.Code, rec.Body)
+		}
+	}
+}
+
+// TestInvitationDeclineByTokenSharesBudget proves both decline routes draw on
+// the one invitation_decline budget: spending it on the id route refuses the
+// token route, and the reverse.
+func TestInvitationDeclineByTokenSharesBudget(t *testing.T) {
+	for _, order := range [][2]string{{"/auth/invitations/inv-1/decline", "/auth/invitations/decline"}, {"/auth/invitations/decline", "/auth/invitations/inv-1/decline"}} {
+		svc, _ := newTokenDeclineService(t, nil)
+		h := web.NewWebHandler()
+		mount(h, mountDeps{
+			Auth:        newServiceWithFakes(authenticationFixture{Users: newMemUsers(), Limiter: ratelimiter.NewMemory(), TokenSigner: newFakeSigner()}),
+			Invitations: svc, InviteCheck: allowInviteCheck, ListStrategy: list.StrategyCursor,
+			RouteLimits: PublicRouteLimits{InvitationDecline: ratelimiter.Limit{Requests: 1, Window: time.Minute}},
+		})
+		first := do(t, h, "POST", order[0], `{"token":"tok"}`)
+		if first.Code == http.StatusTooManyRequests {
+			t.Fatalf("first %s refused: %s", order[0], first.Body)
+		}
+		if second := do(t, h, "POST", order[1], `{"token":"tok"}`); second.Code != http.StatusTooManyRequests {
+			t.Fatalf("%s after %s = %d, want 429 (shared budget)", order[1], order[0], second.Code)
+		}
+	}
+}
+
+// TestInvitationDeclineByTokenUnmountedWithoutDecliner proves a host's
+// InvitationService fake without DeclineByToken still mounts every other route
+// and simply goes without the token decline.
+func TestInvitationDeclineByTokenUnmountedWithoutDecliner(t *testing.T) {
+	h := newInvitationTestHandler(t, stubInvitationService{})
+	if rec := do(t, h, "POST", "/auth/invitations/decline", `{"token":"tok"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("token decline without a decliner = %d, want 404", rec.Code)
+	}
+	if rec := do(t, h, "POST", "/auth/invitations/inv-1/decline", `{"token":"tok"}`); rec.Code != http.StatusOK {
+		t.Fatalf("id decline = %d, want 200", rec.Code)
+	}
+}
+
+func (r *tokenDeclineRepo) Create(_ context.Context, inv invitations.Invitation) (invitations.Invitation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.byHash[inv.TokenHash] = inv
+	return inv, nil
+}
+
+// TestInvitationCreateAttributesCallerActor proves the create handler attributes
+// the invitation_created row to the calling user as Actor, as resend does.
+func TestInvitationCreateAttributesCallerActor(t *testing.T) {
+	events := newSpySecurityEvents()
+	router, err := delivery.NewRouter(nopMailer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := invitations.New(&tokenDeclineRepo{byHash: map[string]invitations.Invitation{}}, unusedInvitationGranter{},
+		invitations.WithDelivery(invitations.DeliveryConfig{Mailer: nopMailer{}, Deliver: router, Queue: stubQueue{}}),
+		invitations.WithSecurityEvents(events))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newInvitationFixtureWith(t, svc, allowInviteCheck, nil)
+	f.seedLoginUser("u1", "alice@example.com")
+	rec := doCSRF(t, f.h, "POST", "/auth/invitations/project/p1", `{"identifier":"bob@example.com","relation":"member"}`, f.login(t, "alice@example.com"))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body)
+	}
+	var created []securityevent.SecurityEvent
+	for _, evt := range events.recorded() {
+		if evt.EventType == securityevent.TypeInvitationCreated {
+			created = append(created, evt)
+		}
+	}
+	if len(created) != 1 {
+		t.Fatalf("created rows = %+v", created)
+	}
+	evt := created[0]
+	if evt.Actor != (securityevent.Principal{Type: sdk.PrincipalTypeUser, ID: "u1"}) || evt.UserID != "u1" || evt.Details["invited_by"] != "u1" {
+		t.Fatalf("created row = %+v", evt)
+	}
+}

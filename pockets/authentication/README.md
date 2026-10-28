@@ -655,7 +655,30 @@ wired kind — by default, immediate revocation), only decline is public:**
   a holder of the permission on the LOADED row's resource (denial → 404); without
   it, `InvitedBy == caller` (denial → 403). A denial performs no update or delivery.
 - `POST /auth/invitations/{id}/decline` — public, token-authorized, IP-limited
-  (the one invitation route with no session gate), behind the Origin-only gate.
+  (no session gate), behind the Origin-only gate. It does not check expiry: an
+  expired pending invitation still declines.
+- `POST /auth/invitations/decline` — `{token}`, the same decline by the mailed
+  token alone, for a landing page that holds only `#token=`. It is public,
+  behind the same Origin-only gate, and shares the id route's limiter and
+  `invitation_decline` budget. It is mounted only when the wired
+  `InvitationService` also has `DeclineByToken(ctx, token)` (`*invitations.Service`
+  does; a host fake without it simply goes without the route). A host that wraps
+  `*invitations.Service` must forward `DeclineByToken` to keep `POST
+  /auth/invitations/decline`. POST only.
+
+  | Request | Response |
+  |---|---|
+  | pending invitation | 200 `{"status":"declined"}` and an `invitation_declined` row |
+  | unknown or wrong token | 404 — the same body as an unknown id on the id route |
+  | token past expiry, unclaimed | 410 `expired` (as accept) |
+  | accepted, or being accepted (any time) | 409 — an accepting claim is never changed |
+  | declined or cancelled, before `ExpiresAt` | 409 — a second click reads as done |
+  | declined or cancelled, past `ExpiresAt` | 410 `expired` — the stores expire every unclaimed row |
+  | missing or empty `token`, malformed body | 400 `invalid request body` (the id route's bad-body shape) |
+  | cross-origin browser page | 403 `origin_rejected` |
+  | over the `invitation_decline` budget | 429 |
+
+  The token never appears in a log line, a security-event detail or an error.
 
 **Cookie clients must double-submit the CSRF token on create, accept, sync, cancel and
 resend**: `GET /auth/csrf`, then echo its `csrf_token`
@@ -794,8 +817,9 @@ The landing page's responsibilities:
 - accept is session-gated: when the invitee must sign in first, hold the token in
   `sessionStorage` across the login detour — never in `return_to` or a query
   string — and scrub the fragment before any redirect;
-- then `POST /auth/invitations/accept` with `{token}` (or
-  `/auth/invitations/{id}/decline`), and clear the stored token;
+- then `POST /auth/invitations/accept` with `{token}` (or decline with
+  `POST /auth/invitations/decline` `{token}`, which needs no id), and clear the
+  stored token;
 - serve the page with `Referrer-Policy: no-referrer` and
   `Cache-Control: no-store`.
 
@@ -1026,7 +1050,10 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
   Headless callers authorize their own commands. To inspect before execution,
   call `invitations.Service.PrepareCreate`, inspect `PreparedCreate.Input()` and
   `ResolvedSubjectID()`, authorize, then call `CreatePrepared` on the same service.
-  `Input()` returns a defensive copy; zero or foreign-service values are rejected.
+  To attribute the create in the audit rail, call `prepared.WithActor(principal)`
+  before `CreatePrepared` (a bootstrap: `PrepareCreate` → `WithActor(sdk.Principal{Type:
+  "system", ID: "bootstrap"})` → `CreatePrepared`). The actor never reaches
+  `Input()` and never authorizes. `Input()` returns a defensive copy; zero or foreign-service values are rejected.
   Preparation is not an authorization capability or a transaction snapshot: hosts
   own wider concurrency requirements. `Create` remains a policy-free convenience;
   `ListByResource` remains a policy-free read. The former `Authorized` methods and
@@ -1073,8 +1100,22 @@ populate the canonical `SecurityEvent.Actor` (persisted as `actor_type` /
 | non-user (e.g. a service account) | its type and ID | empty — never a non-user ID |
 
 The bundled routes always attach the authenticated user, so under rule OFF
-`UserID` is unchanged and `Actor` is now populated. Create, grant and decline
-attribution are unchanged. No store or migration change.
+`UserID` is unchanged and `Actor` is now populated. No store or migration change.
+
+**Create attribution.** `PreparedCreate.WithActor(principal)` applies the same
+table to the `invitation_created` row of a pending create, and adds
+`Details["invited_by"]` whenever an actor is attached. `InvitedBy` stays required
+and stays the host's string (`system:bootstrap` is fine). A zero actor — and the
+headless `Create` — keeps today's row exactly. The bundled create route attaches
+the authenticated user. On a direct add, the `invitation_granted` rows (success
+and failure) gain the `Actor` but keep `UserID` = the granted subject: the row is
+about the invitee. Accept-time grant rows and decline rows carry no `Actor`.
+Audit consumers: a non-user actor's created row has `user_id = ""`, so a query
+keyed `user_id = invited_by` no longer sees it, as with cancel and resend.
+Audit consumers that diff detail shapes should expect three changes: rows from the
+bundled create route now carry `Actor={user,id}`, created rows gain
+`details.invited_by`, and direct-add grant rows gain `Actor`. `user_id` is
+unchanged.
 
 Credential and redemption checks remain in authentication logic:
 
