@@ -5914,3 +5914,83 @@ against the live Auth emulator.
   and every example (set C).
 - production-baseline booted on postgres:18 shows a 21-char NanoID `users.id` and
   version-7 `security_events.id` / `user_identifiers.id`.
+
+## AUDIT-058: Route listing, H10 SQL shape, fenced jobs by default, invitation create actor and decline by token
+
+- **Status:** released 2026-10-28: `sdk` v0.22.0 (`57019402`, #250);
+  `workshop/gopernicus` v0.10.0 (`bf1d0d74`, #249, the owed tag) and v0.10.1 (`14b59468`,
+  #251); `pockets/jobs/stores/pgx` v0.9.0 and `…/stores/turso` v0.8.0 (`eaf1af26`, #252);
+  `pockets/authentication` v0.34.0 (`0850deff`, #253); `workshop/gopernicus` v0.10.2 for the
+  scaffold. Guides: #254. Record: `RELEASING.md`, "Multi-tenant host asks"; executed plan
+  `plans/multi-tenant-host-asks.md`.
+- **Modules:** the above. Untouched: `pockets`, `pockets/jobs`, the authentication stores and
+  views, authorization, pgxdb, every canonical migration set.
+- **Old behavior:**
+  - `web.WebHandler` recorded nothing about its registrations; a host route-inventory test
+    had to wrap the router.
+  - H10 flagged any `cmd/**` string literal whose upper-cased text began with an SQL verb
+    followed by whitespace or the end of the string, so `fmt.Errorf("create invitation: %w")`
+    and a bare `"DELETE"` method literal failed the guard.
+  - `jobspgx.Repositories` and `jobsturso.Repositories` filled `Queue` and `Schedules` only;
+    `jobs.New` over them logged `fenced_queue=false`, and a host needing the fenced queue
+    built `NewFencedQueueStore` by hand. turso had no `StatusCheck`.
+  - `invitation_created` rows carried `UserID = InvitedBy` and no `Actor`; nothing could
+    attribute a create to a non-user actor such as a bootstrap.
+  - Declining needed the invitation id and the token, and the mailed link carries only
+    `#token=`.
+- **New behavior:**
+  - **`(*web.WebHandler).Routes()`** returns a copy of every registration in order as
+    `web.Route{Method, Pattern, Raw}` (upper-cased method, final pattern with group prefixes,
+    `Raw` for `HandleRaw`). Read-only, boot-time; never handlers or middleware. Routes behind
+    a `HandleRaw` subtree are invisible. `pockets.RouteRegistrar` is unchanged.
+  - **H10** reads SQL shape after the verb on upper-cased whitespace tokens (`CREATE|ALTER|DROP`
+    + an object keyword, `INSERT INTO`, `DELETE FROM`, `UPDATE <name> SET`, `SELECT` + `*` /
+    a digit / `$` / `(` / `<name>(` / a later `FROM`), and skips the message argument of
+    `fmt.Errorf`, `errors.New`, the `log` print/fatal/panic functions and the `slog` message
+    functions. `fmt.Sprintf` is still read. The rule's sentence and `guard --list` are
+    unchanged; findings only shrink.
+  - **jobs stores:** `Repositories` fills `FencedQueue` (pgx passes its options through, so
+    `WithSchema` qualifies the fenced store), and `jobs.New` over it logs `fenced_queue=true`.
+    turso gains `StatusCheck(ctx, db)`: a missing jobs table is `sdk.ErrNotFound` naming it;
+    a missing `0005` index is a WARN, as on pgx.
+  - **`PreparedCreate.WithActor(sdk.Principal)`** attributes a create in the audit rail only.
+    The `invitation_created` row follows management's attribution rule (a user actor sets
+    `UserID` to its id; a non-user actor leaves `UserID` empty) and gains
+    `details.invited_by`. Direct-add `invitation_granted` rows gain `Actor` and keep
+    `UserID` = the granted subject. A zero actor writes the old rows byte-identically. The
+    actor never reaches `Input()` or host policy. The bundled create route attaches the caller.
+  - **`Service.DeclineByToken(ctx, token)`** and the public route
+    `POST /auth/invitations/decline` `{token}`: the same Origin-only gate, limiter and
+    `invitation_decline` budget as the id route, POST only, mounted only when the wired
+    service implements `DeclineByToken`. Unknown or wrong token → 404, byte-identical to an
+    unknown id; past expiry → 410; already done or being accepted → 409 (an accepting claim
+    is never changed); empty body → 400. The token never appears in a log line, an event
+    detail or an error. By-id `Decline` is unchanged and still declines an expired pending
+    row (R-8).
+
+**Migration:**
+- Audit consumers that diff invitation detail shapes: rows from the bundled create route now
+  carry `Actor` and `details.invited_by`; direct-add grant rows carry `Actor`. `user_id` is
+  unchanged for both. A host create with a non-user actor writes `user_id = ""`.
+- A host that decorates `*invitations.Service` must forward `DeclineByToken` to keep the new
+  route. Hosts faking `InvitationService` need no change.
+- A host on the jobs stores' `Repositories` should expect `fenced_queue=true` and call
+  `StatusCheck` at boot on either driver; to keep only the ordinary queue, build the stores
+  by hand.
+- Hosts pinning the guard may bump to `@v0.10.1` or later; older pins stay red only for the
+  false positive.
+- Endpoint-matrix hosts list `POST /auth/invitations/decline` as public.
+
+**Verification:**
+- sdk `Routes()` tests: order, copy, raw, empty method, group prefixes, an empty handler.
+- H10 corpus table and fixtures: the reported false positive, a bare `"DELETE"`, SQL as a
+  `Sprintf` format and operand, multi-line raw SQL handed to `Exec`; the existing verdicts
+  kept; every example passes `guard-host-contract`.
+- jobs: hermetic `FencedQueue` / `WithSchema` wiring, `jobs.New` + `EnqueueOnce` through
+  `Repositories` on live pgx and local-file turso, and `StatusCheck` cases (nil db,
+  unmigrated, each table dropped, index dropped).
+- authentication: attribution cases (zero, user and system actor; direct-add success and
+  failure rows), `DeclineByToken` lifecycle cases, and the HTTP response matrix.
+- `live-stores` green on `main` at `bf1d0d74` and `0850deff`; cold verification of every tag,
+  the train set, the battleboardhq shape and set C; `examples/auth-cms` run against the tags:
+  decline by token 200, a second decline 409, and the created row shows the user actor.

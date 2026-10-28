@@ -8,7 +8,7 @@ github.com/gopernicus/gopernicus/pockets/cms v0.7.0 h1:G2XYhNBy0RJp1pX/rdl0nYyfI
 github.com/gopernicus/gopernicus/pockets/cms v0.7.0/go.mod h1:llzeJYCGZOE4nMVe0WIiNTeGL7ACmOwlLcY8/vxo4SQ=
 github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.3.0 h1:le3rBE5WAQhEoNBo+FiE0J5U8O0G33DUV8kE48T7gjg=
 github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.3.0/go.mod h1:Og8blfxYBKp45x2X4e4tp5fPEHsN5CNJmuQyXOpctfs=
-github.com/gopernicus/gopernicus/sdk v0.21.0 h1:Ktx1Pe7Wk/S9a+daYd1RRgtvnr9WoCrCvNQVksefo/o=
-github.com/gopernicus/gopernicus/sdk v0.21.0/go.mod h1:zo9DGgXEfFANGvuo3VAIRWyRmlN4YRqavdncRsnCzu8=
+github.com/gopernicus/gopernicus/sdk v0.22.0 h1:eC975cGtGOd+xzfgJqdPFledH+N1H0KYW6usro9vpjI=
+github.com/gopernicus/gopernicus/sdk v0.22.0/go.mod h1:zo9DGgXEfFANGvuo3VAIRWyRmlN4YRqavdncRsnCzu8=
 github.com/gopernicus/gopernicus/ui/goth v0.2.1 h1:qy8IzRvxKOm6wbqAjsjZ/3FrsMtvaey33MWRtvBWvOY=
 github.com/gopernicus/gopernicus/ui/goth v0.2.1/go.mod h1:geQPeUJwfv4AwJCdMt+Q+faWRuLog0VXb7RhqFVDOA4=

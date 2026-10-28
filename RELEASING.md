@@ -1,5 +1,226 @@
 # Releasing gopernicus modules
 
+## Multi-tenant host asks: route listing, H10 shape, fenced jobs default, invitation actor and decline by token (published 2026-10-28)
+
+Six annotated tags (not signed) on five modules, for issue #232, plus
+`workshop/gopernicus/v0.10.2` for the scaffold, which is cut after this PR merges. Each store
+and core tag was cut at its PR's squash-merge commit on `main` after a green `live-stores`
+dispatch on `main`, pushed one at a time, confirmed on origin, then cold-verified from a
+scratch consumer (`GOWORK=off`, an empty module cache, `proxy.golang.org`, `sum.golang.org`,
+`go mod verify`, `go build ./...`, `go 1.26.10`). Workshop tags are verified by a cold `init`
+instead of a dispatch. Claude cuts and pushes the tags; the owner merges. Design and rulings:
+`plans/multi-tenant-host-asks.md` (ratified 2026-10-27, "all recs", R-4 = ship PR-O1; executed
+copy in `plans/`). The audit entry is **AUDIT-058**. This section is the whole record: there
+is no handoff file and no manifest. The operator surface is the docs site: *Row-level
+security* (catalog posture, roles and the read-only preflight, policies on your own tables,
+pocket tables and the jobs `tenant_id`, the endpoint matrix, scaffolding), *First admin*
+(new), the authentication pocket page (the decline route, `WithActor`, the JSON session
+inventory recipe), the jobs pocket page and the sdk *web* page. Those guides shipped in #254
+(PR-4, docs only, merged at `ae32b413`).
+
+**What changed.**
+- **No tenant concept in the framework (R-1 B-staged).** The tenant model stays host domain:
+  a `TenantScope` port in the host's `internal/logic` and a pgxdb-backed scope in its
+  `internal/outbound`, over pgxdb's `TransactWithSettings` (v0.16.0). Every tenancy sub-ask
+  in #232 now has a written, copyable answer in the RLS guide. The pgxdb row-security probe
+  and `init --tenancy=rls` wait for a second host's copy to diff.
+- **sdk v0.22.0: `web.WebHandler.Routes()`** returns a copy of every registration in order as
+  `web.Route{Method, Pattern, Raw}`. `Method` is upper-cased (`""` for any method),
+  `Pattern` is the final path including group prefixes, and `Raw` marks a `HandleRaw`
+  registration. A route is recorded only after `mux.Handle` succeeds. Handlers and middleware
+  are never exposed; routes behind a `HandleRaw` subtree are invisible. `pockets.RouteRegistrar`
+  is unchanged.
+- **workshop/gopernicus v0.10.1: H10 reads SQL shape after the verb.** A `cmd/**` string
+  literal is SQL when, as upper-cased whitespace tokens, the verb is followed by SQL shape
+  (`CREATE|ALTER|DROP` + an object keyword, `INSERT INTO`, `DELETE FROM`, `UPDATE <name> SET`,
+  `SELECT` + `*` / a digit / `$` / `(` / `<name>(` / a later `FROM`). A bare verb (`"DELETE"`
+  as an HTTP method) no longer matches. The message argument of `fmt.Errorf`, `errors.New`,
+  the `log` print/fatal/panic functions and the `slog` message functions is skipped, so
+  `fmt.Errorf("create invitation: %w", err)` passes. The H10 sentence and `guard --list` are
+  unchanged.
+- **jobs stores pgx v0.9.0 / turso v0.8.0: `Repositories` fills `FencedQueue`.** pgx passes
+  `opts...` through, so `WithSchema` qualifies the fenced store too. `jobs.New(Repositories(db))`
+  now boots with the fenced queue that authentication's jobs-mode delivery needs. turso gains
+  `StatusCheck(ctx, db)`: a missing jobs table is `sdk.ErrNotFound` with pgx's "apply the jobs
+  migration source" message, and a missing `0005` retention index is a WARN, as on pgx.
+- **authentication v0.34.0.** `PreparedCreate.WithActor(sdk.Principal)` attributes a create
+  in the audit rail (audit only; never authorization; never visible through `Input()`); the
+  bundled create route attaches the caller. `Service.DeclineByToken(ctx, token)` declines by
+  the mailed token alone, and `POST /auth/invitations/decline` `{token}` serves it: public,
+  behind the same Origin-only gate as the id route, sharing its limiter and the
+  `invitation_decline` budget, POST only. It is mounted only when the wired
+  `InvitationService` also has `DeclineByToken` (an optional interface; `InvitationService`
+  is not widened). By-id `Decline` is unchanged (R-8).
+
+| Step | Tag | Commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 0 | `workshop/gopernicus/v0.10.0` (the owed tag) | `bf1d0d74` | #249 (PR-0) | 40629529349 @ `bf1d0d74` | OK; cold `init --db pgx` from `@v0.10.0` |
+| 1 | `sdk/v0.22.0` | `57019402` | #250 (PR-O1) | 40702865522 @ `0850deff` | OK; train set |
+| 2 | `workshop/gopernicus/v0.10.1` | `14b59468` | #251 (PR-1) | 40702865522 @ `0850deff` | OK; cold `init --db pgx` from `@v0.10.1`, README cites `@v0.10.1`, `guard --posture` clean (H10 ok) |
+| 3 | `pockets/jobs/stores/pgx/v0.9.0` | `eaf1af26` | #252 (PR-2) | 40702865522 @ `0850deff` | OK; train set |
+| 3 | `pockets/jobs/stores/turso/v0.8.0` | `eaf1af26` | #252 (PR-2) | 40702865522 @ `0850deff` | OK; train set |
+| 4 | `pockets/authentication/v0.34.0` | `0850deff` | #253 (PR-3) | 40702865522 @ `0850deff` | OK; train set, battleboardhq shape |
+| 5 | `workshop/gopernicus/v0.10.2` | this PR's squash commit | this PR (PR-5) | — | after the tag: a cold `init --db pgx` from `@v0.10.2` |
+
+One run (40702865522 on `0850deff`) covered every tag commit at or before it on `main`; no
+tag was cut before a green run had covered its commit. Every module ships MINOR under the v0
+convention except the two workshop patches: v0.10.1 only loosens H10, and v0.10.2 only moves
+the scaffold's sdk pin and its README self-pin. `pockets/jobs` (v0.8.0), `pockets` (v0.1.0),
+the authentication stores (pgx v0.17.0 / turso v0.16.0), views and pgxdb (v0.17.0) are
+untouched: no storetest additions, no DDL, no canonical migration change. PR-3 does not
+require sdk v0.22.0, so the authentication tag never waited on PR-O1.
+
+**The MVS sets.**
+- **Train set:** sdk v0.22.0 + authentication v0.34.0 + authentication pgx v0.17.0 / turso
+  v0.16.0 + jobs v0.8.0 + jobs pgx v0.9.0 / turso v0.8.0 + pgxdb v0.17.0 +
+  datastores/turso v0.10.0: `all modules verified`, builds.
+- **battleboardhq shape:** golang-jwt v0.3.0, google-uuid v0.2.0, sendgrid v0.5.0,
+  oauth/google v0.3.0 + authentication v0.34.0 + authentication pgx v0.17.0 + authorization
+  v0.32.0 + authorization pgx v0.23.0 + jobs v0.8.0 + jobs pgx v0.9.0 + pgxdb v0.17.0 + sdk
+  v0.22.0: `all modules verified`, builds.
+- **Cold `init` from `@v0.10.1 --db pgx`:** tidies and builds; the README cites `@v0.10.1`;
+  `guard --posture` is clean (H10 ok).
+- **Set C** (this PR, from the tags): `auth-cms`, `production-baseline` and `jobs-minimal` at
+  `GOWORK=off` from an EMPTY module cache over `proxy.golang.org` + `sum.golang.org`:
+  `all modules verified` and `go build ./...` in each. Selected:
+  - auth-cms: sdk v0.22.0, authentication v0.34.0, jobs v0.8.0 + pgx v0.9.0 + turso v0.8.0,
+    pgxdb v0.17.0;
+  - production-baseline: sdk v0.22.0, authentication v0.34.0 + pgx v0.17.0, authorization
+    v0.32.0 + pgx v0.23.0, pgxdb v0.17.0;
+  - jobs-minimal: sdk v0.22.0, jobs v0.8.0.
+- **Cold `init --db pgx` from this tree** (empty module cache, `GOWORK=off`, the proxy): pins
+  sdk v0.22.0 + pgxdb v0.17.0, cites the guard `@v0.10.2`, tidies, builds, vets, passes
+  `go mod verify`, and `guard --posture` is clean (25 rules, 2 packages).
+
+**Behaviour changes a host can see.**
+
+| # | Change | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | The bundled create route attaches the caller with `WithActor`: `invitation_created` rows gain `Actor={user,id}` and `details.invited_by` | `user_id` is unchanged for the bundled route; audit consumers that diff detail shapes see the new key and the actor columns | — | authentication@v0.34.0 |
+| 2 | Direct-add (`auto_accept`, known invitee) `invitation_granted` rows, success and failure, gain the create's `Actor` | `user_id` stays the granted subject: the row is about the invitee; accept-time grant rows and decline rows carry no `Actor` | — | authentication@v0.34.0 |
+| 3 | A host create with a non-user actor (`{system, bootstrap}`) writes `user_id = ""` on the created row | a query keyed `user_id = invited_by` no longer sees that row, as with cancel and resend | omit `WithActor`: a zero actor (and headless `Create`) writes today's row byte-identically | authentication@v0.34.0 |
+| 4 | New public route `POST /auth/invitations/decline` `{token}` | 200 `{"status":"declined"}`; 404 byte-identical to an unknown id; 410 `expired` past expiry (including a declined or cancelled row past `ExpiresAt`); 409 already done or being accepted; 400 empty or malformed body; 403 `origin_rejected` cross-origin; 429 over the shared budget; 405 on GET | wrap the service without `DeclineByToken` and the route is not mounted | authentication@v0.34.0 |
+| 5 | A host decorator around `*invitations.Service` that does not forward `DeclineByToken` silently loses the new route | the route is absent (404) | forward `DeclineByToken` | authentication@v0.34.0 |
+| 6 | `Repositories` fills `FencedQueue` | the jobs construction line logs `fenced_queue=true` (was `false`) for hosts on `Repositories`; a host that wants only the ordinary queue builds `NewQueueStore` / `NewScheduleStore` itself | build the stores by hand | jobs pgx@v0.9.0, turso@v0.8.0 |
+| 7 | turso `StatusCheck(ctx, db)` | a turso ledger missing a jobs table (`0003_fenced_job_queue.sql` included) fails at boot, naming the table; a missing `0005` index WARNs `index_missing=idx_job_queue_terminal` | — (call it at boot, as on pgx) | jobs turso@v0.8.0 |
+| 8 | H10 reads SQL shape and skips message arguments | strictly fewer findings; a host on `@v0.9.1` or `@v0.10.0` stays red only for the false positive | — | workshop@v0.10.1 |
+| 9 | `web.WebHandler.Routes()` | new read-only method; no interface change | — | sdk@v0.22.0 |
+| 10 | Scaffold: `init` and `new pocket` pin sdk v0.22.0 (pgxdb v0.17.0, turso v0.10.0 unchanged); the emitted README runs the guard `@v0.10.2` | a cold `init` lands on the train | — | workshop@v0.10.2 |
+
+**Upgrade notes by host shape.** Repin with explicit `GOWORK=off go get <module>@<tag>`, then
+`GOWORK=off go mod tidy`; never `go work sync`.
+- **Audit-row shape (every host using the bundled invitation routes):** rows 1 and 2. Created
+  rows gain `Actor` and `details.invited_by`; direct-add grant rows gain `Actor`; `user_id` is
+  unchanged on both. Update any audit consumer that pins detail shapes.
+- **Decorators:** a host that wraps `*invitations.Service` (logging, metrics, a policy layer)
+  must forward `DeclineByToken(ctx, token)` to keep `POST /auth/invitations/decline`. Hosts
+  that fake `InvitationService` in tests need no change.
+- **jobs boot line:** a host on `jobspgx.Repositories` / `jobsturso.Repositories` now logs
+  `fenced_queue=true`. Alerting or log assertions keyed on `fenced_queue=false` must change.
+  Call `StatusCheck` at boot on both drivers so a ledger missing `0003` fails there.
+- **battleboardhq** (pgxdb v0.14.0, authentication v0.31.0, jobs v0.7.0, guard `@v0.9.1`; no
+  data): first take the PostgreSQL 18 + recreate path its `HANDOFF.md` already plans (the
+  "Default ids by entity class; PostgreSQL 18 floor" section below: bump to pgxdb v0.17.0 and
+  the PG18 store tags, re-export `iam/` + `jobs/`, recreate), then these tags (the
+  battleboardhq MVS shape above):
+  - guard: bump `GOPERNICUS` to `@v0.10.1` or later; the original
+    `fmt.Errorf("create invitation: %w")` wording may be restored;
+  - jobs: drop the manual `NewFencedQueueStore` in its jobs outbound adapter and return
+    `jobspgx.Repositories(db, jobspgx.WithSchema(Schema))` (keep the package: it pins the
+    schema name beside the ledger);
+  - `cmd/bootstrap`: `PrepareCreate` → `WithActor(sdk.Principal{Type: "system", ID:
+    "bootstrap"})` → `CreatePrepared`, and drop the inviter caveat comment; the *First admin*
+    guide places the converge step in host-pocket logic, with `cmd` wiring only;
+  - add a Decline button to the invitation landing page that calls
+    `POST /auth/invitations/decline` with the `#token=` value;
+  - list `POST /auth/invitations/decline` as **public** in its endpoint matrix (the matrix
+    fails the build until it does); optionally replace the route-recording wrapper with
+    `router.Routes()` (sdk v0.22.0) and make the completeness check a set comparison.
+
+  Its acceptance drive (Decline works in a browser, `make bootstrap`'s `invitation_created`
+  shows a system actor, `make check` green with `guard --posture @v0.10.1`) happens in its own
+  repository.
+- **segovia/v2** (sdk v0.15.0, pgxdb v0.9.0, authentication v0.19.1, jobs v0.6.0): defer until
+  its repin milestone. The RLS and *First admin* guides are the inputs for its RLS plan; its
+  catalog test becomes the second data point for the probe follow-up.
+- **gps-360-go and turso hosts:** jobs/turso only. A host on `jobsturso.Repositories` gets
+  `FencedQueue` and should call the new `StatusCheck` at boot (rows 6 and 7). Nothing else in
+  this train needs a change.
+- **Examples (this PR).** Every example builds, vets and tests at `GOWORK=off` on these tags.
+  Pins moved by explicit `GOWORK=off go get`, then tidy:
+  - `auth-cms`: authentication v0.34.0, jobs pgx v0.9.0 + turso v0.8.0, sdk v0.22.0;
+  - `production-baseline` and `external-identity`: authentication v0.34.0, sdk v0.22.0;
+  - `cms`, `minimal`, `jobs-minimal`, `goth-showcase`: sdk v0.22.0.
+
+**Run and look (this PR).** `examples/auth-cms` built at `GOWORK=off` against the tags
+(`go version -m`: authentication v0.34.0, sdk v0.22.0) and booted in development on a free
+port; the boot line read `fenced_queue=true`. A registered, verified and signed-in platform
+admin created a `project/demo` invitation (201). `POST /auth/invitations/decline` with the
+console-mailed token answered **200** `{"status":"declined"}`; the same POST again answered
+**409**; an unknown token **404**; a cross-origin POST **403** `origin_rejected`; a GET **405**.
+The development debug security-event listing showed `invitation_created` with `actor_type=user`, the inviter's
+`actor_id` and `details.invited_by`, then `invitation_declined`. The token appeared in the
+server log only on the console mailer's own line.
+
+**The review record.**
+- **The plan** passed a four-reviewer gate on rev 2 (lead-backend-engineer: ratify-with-edits;
+  architecture-steward: aligned-with-edits; product-manager: ship-with-edits; platform-sre:
+  ship-with-edits), folded under "Decided by gate" in the plan. The PM's dissent (cut PR-O1)
+  is recorded; the owner shipped it (R-4).
+- **PR-3 (#253), lead-backend, ship-with-edits**, all folded: **MED-1**, the 410-after-expiry
+  rows of the decline matrix are documented (a declined or cancelled row past `ExpiresAt`
+  answers 410, because the stores expire every unclaimed row); **LOW-1..4** folded.
+- **PR-1 (#251):** the lead removed `fmt.Sprintf` from the H10 message skip (deviation below).
+  A fixture pins it.
+- **PR-2 (#252):** lead self-review of the turso `StatusCheck`.
+- **PR-O1 (#250):** lead self-check.
+- **PR-4 (#254) and this PR:** gated by `make guard && make check` and `make docs-build`.
+
+**Owner rulings** (2026-10-27, "all recs"):
+- **R-1 (B-staged):** generic primitives plus the guide; the probe and `init --tenancy=rls`
+  follow a second host.
+- **R-2 (a):** `init --tenancy=rls` deferred.
+- **R-3 (a):** pocket tables stay global under RLS; the jobs `tenant_id` is a label, not a wall.
+- **R-4 (b):** ship PR-O1 (`Routes()`).
+- **R-5 (a):** the JSON session arm is deferred; the recipe shipped in PR-4.
+- **R-6 (a):** first admin is a guide; no `EnsurePending` helper.
+- **R-7 (c):** H10 shape plus message-argument skip.
+- **R-8 (a):** `DeclineByToken` surfaces `ErrExpired`; by-id `Decline` keeps declining expired
+  pending rows in this minor.
+- **R-9 (b):** v0.10.0 cut as announced; H10 shipped as v0.10.1.
+
+**As-built deviations a host can see.**
+- **`fmt.Sprintf` is not skipped by H10** (the plan listed it): it builds a value, which may
+  be SQL handed to a database from `cmd`. Its format and operands are still read.
+- **A lost race to an accept answers 409 (`ErrConflict`) with no declined row**; the plan
+  said `ErrNotPending`. Both map to 409.
+- **A declined or cancelled row past `ExpiresAt` answers 410**, not 409 (review MED-1).
+- **turso `StatusCheck` also WARNs on the missing `0005` retention index**, matching pgx.
+- **`workshop/gopernicus/v0.10.2` is cut**: the plan made it conditional on the scaffold's sdk
+  pin moving, which PR-O1 caused.
+
+**Verification record.**
+- `make guard` and `make check` pass on each PR. `live-stores` is green on `main` at
+  `bf1d0d74` (40629529349) and `0850deff` (40702865522).
+- **This PR (PR-5).** Every example: `GOWORK=off go build`, `go vet` and `go test` pass; set C
+  as listed. `TestScaffold*` pass on the v0.22.0 sdk pin. The cold `init` from this tree is
+  above. `gopernicus guard --posture` on `examples/production-baseline` from this tree is
+  clean (25 rules, 6 packages; P9 ok, 2 stores). The docs site builds.
+
+**Known and deferred.**
+- **H10's message skip covers package functions only:** `*slog.Logger` and `*log.Logger`
+  methods are still read, so a method-call message that looks like SQL is still flagged.
+- **The atomic outbox:** an enqueue (or an authentication invitation or user write) inside a
+  held `Transact` / `TransactWithSettings` runs on a second connection. It can run before the
+  domain commit, survives a rollback, and can starve a tight pool. Enqueue after commit; the
+  gap is an open framework item for its own plan.
+- **Deferred to their own plans:** the JSON session arm (R-5; the recipe ships today), the
+  pgxdb row-security / role posture probe (after segovia's catalog test exists), and
+  `init --tenancy=rls` (R-2).
+- **No turso jobs README** (owner rec: none); the turso store is documented on the jobs pocket
+  page.
+- Battleboard's and segovia's repins happen in their own repositories.
+
 ## Default ids by entity class; PostgreSQL 18 floor (published 2026-10-27)
 
 Fourteen annotated tags (not signed) on thirteen modules, plus `workshop/gopernicus/v0.10.0`
