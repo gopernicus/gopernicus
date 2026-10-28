@@ -519,7 +519,7 @@ rail.
   route. Read `location.hash` and `history.replaceState` it away before any network
   call or third-party script; across a sign-in detour hold the token in
   `sessionStorage` (never in `return_to` or a query); then `POST
-  /auth/invitations/accept {token}` (or `…/{id}/decline`); serve the page with
+  /auth/invitations/accept {token}` (or `POST /auth/invitations/decline {token}`); serve the page with
   `Referrer-Policy: no-referrer` and `Cache-Control: no-store`. The pocket ships no
   invitation page.
 - **Identifier resolution.** An invitation is addressed to a `(kind, identifier)`.
@@ -684,6 +684,44 @@ floor under an overridden sensitive group. With the defaults (idle off, access 1
 
 The pocket README's "Session lifetime (SOC 2 S4d part 2)" section is the reference, with the
 per-provider authentication-age table and the residuals.
+
+## Added by v0.34.0 (invitation create actor and decline by token)
+
+Authentication v0.34.0 is additive: no store, migration or views change.
+
+- **Create attribution.** `PreparedCreate.WithActor(principal)` attributes a create the
+  way `PreparedManagement.WithActor` attributes cancel and resend: audit only, never
+  authority, and never visible through `Input()`. On the `invitation_created` row a user
+  actor is the `UserID`; a non-user actor sets `Actor` with `UserID = ""` and
+  `Details["invited_by"]`; a zero actor (and headless `Create`) keeps today's row. A
+  direct add's `invitation_granted` rows gain `Actor` and keep `UserID` = the granted
+  subject. The bundled create route attaches the signed-in user. A host bootstrap goes
+  `PrepareCreate` → `WithActor(sdk.Principal{Type: "system", ID: "bootstrap"})` →
+  `CreatePrepared`. A query keyed `user_id = invited_by` no longer sees a non-user
+  actor's created row. Audit consumers that diff detail shapes should expect this:
+  rows from the bundled create route now carry `Actor={user,id}`, created rows gain
+  `details.invited_by`, and direct-add grant rows gain `Actor`; `user_id` is unchanged.
+- **Decline by token.** `Service.DeclineByToken(ctx, token)` and the public `POST
+  /auth/invitations/decline` `{token}` let a landing page holding only `#token=` offer
+  Decline. Same Origin-only gate and `invitation_decline` budget as `POST
+  /auth/invitations/{id}/decline`, which stays. The route mounts only when the wired
+  `InvitationService` also has `DeclineByToken`, so host fakes keep compiling.
+
+  | Request | Response |
+  |---|---|
+  | pending | 200 `{"status":"declined"}` and an `invitation_declined` row |
+  | unknown or wrong token | 404, the same body as an unknown id |
+  | unclaimed, past expiry | 410 (as accept) |
+  | accepted, or being accepted | 409 |
+  | declined or cancelled, before expiry | 409; a second click reads as done |
+  | declined or cancelled, past expiry | 410 (the stores expire every unclaimed row) |
+  | missing token or malformed body | 400 |
+  | cross-origin | 403 `origin_rejected` |
+
+  The by-id decline keeps declining an expired pending row in this minor; the token
+  route surfaces the expiry.
+- **Host upgrade.** A host whose route matrix test enumerates routes adds `POST
+  /auth/invitations/decline` as public.
 
 ## Production posture
 

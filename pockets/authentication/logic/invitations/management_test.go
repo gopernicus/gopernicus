@@ -438,3 +438,132 @@ func TestListActiveByResource(t *testing.T) {
 		t.Fatalf("active page=%+v %v", page, err)
 	}
 }
+
+// TestCreateAuditAttributesActor pins PreparedCreate.WithActor on the
+// invitation_created row: the management attribution rule, and a zero actor
+// keeping today's exact row.
+func TestCreateAuditAttributesActor(t *testing.T) {
+	baseKeys := []string{"resource_type", "resource_id", "relation", "identifier_kind", "identifier_digest"}
+	cases := []struct {
+		name      string
+		actor     sdk.Principal
+		wantActor securityevent.Principal
+		wantUser  string
+		wantKeys  []string
+	}{
+		{"no actor", sdk.Principal{}, securityevent.Principal{}, "issuer", baseKeys},
+		{"user", sdk.Principal{Type: sdk.PrincipalTypeUser, ID: "admin-1"}, securityevent.Principal{Type: sdk.PrincipalTypeUser, ID: "admin-1"}, "admin-1", append([]string{"invited_by"}, baseKeys...)},
+		{"system", sdk.Principal{Type: "system", ID: "bootstrap"}, securityevent.Principal{Type: "system", ID: "bootstrap"}, "", append([]string{"invited_by"}, baseKeys...)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newFakeInvRepo()
+			events := &fakeSecurityEvents{}
+			svc := newSvc(t, repo, &fakeGranter{}, constructorConfig{SecurityEvents: events})
+			p, err := svc.PrepareCreate(t.Context(), CreateInput{ResourceType: "project", ResourceID: "p1", Relation: "member", Identifier: "new@x.com", InvitedBy: "issuer"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p = p.WithActor(tc.actor)
+			if p.Input().InvitedBy != "issuer" {
+				t.Fatalf("WithActor changed Input: %+v", p.Input())
+			}
+			if _, err := svc.CreatePrepared(t.Context(), p); err != nil {
+				t.Fatal(err)
+			}
+			if len(events.created) != 1 {
+				t.Fatalf("events=%+v", events.created)
+			}
+			evt := events.created[0]
+			if evt.EventType != securityevent.TypeInvitationCreated || evt.Actor != tc.wantActor || evt.UserID != tc.wantUser {
+				t.Fatalf("event=%+v", evt)
+			}
+			if len(evt.Details) != len(tc.wantKeys) {
+				t.Fatalf("details=%v want keys %v", evt.Details, tc.wantKeys)
+			}
+			for _, k := range tc.wantKeys {
+				if _, ok := evt.Details[k]; !ok {
+					t.Fatalf("details=%v missing %q", evt.Details, k)
+				}
+			}
+			if v, ok := evt.Details["invited_by"]; ok && v != "issuer" {
+				t.Fatalf("invited_by=%v", v)
+			}
+		})
+	}
+}
+
+// TestDirectAddGrantRowsCarryActorKeepSubject pins that a create actor rides the
+// direct-add invitation_granted rows' Actor only: UserID stays the granted
+// subject on success and failure, and accept-time grant rows stay actor-less.
+func TestDirectAddGrantRowsCarryActorKeepSubject(t *testing.T) {
+	actor := sdk.Principal{Type: "system", ID: "bootstrap"}
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fail=%v", fail), func(t *testing.T) {
+			events := &fakeSecurityEvents{}
+			granter := grantFunc(func(context.Context, GrantInput) error {
+				if fail {
+					return errors.New("grant down")
+				}
+				return nil
+			})
+			svc := newSvc(t, newFakeInvRepo(), granter, constructorConfig{
+				SecurityEvents: events,
+				UserLookup:     func(context.Context, string) (string, bool, error) { return "user-known", true, nil },
+			})
+			p, err := svc.PrepareCreate(t.Context(), CreateInput{ResourceType: "project", ResourceID: "p1", Relation: "member", Identifier: "known@x.com", InvitedBy: "system:bootstrap", AutoAccept: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = svc.CreatePrepared(t.Context(), p.WithActor(actor))
+			if fail != (err != nil) {
+				t.Fatalf("CreatePrepared err=%v", err)
+			}
+			wantStatus := securityevent.StatusSuccess
+			if fail {
+				wantStatus = securityevent.StatusFailure
+			}
+			var granted []securityevent.SecurityEvent
+			for _, evt := range events.created {
+				if evt.EventType == securityevent.TypeInvitationGranted {
+					granted = append(granted, evt)
+				}
+			}
+			if len(granted) != 1 {
+				t.Fatalf("granted rows=%+v", granted)
+			}
+			evt := granted[0]
+			if evt.EventStatus != wantStatus || evt.UserID != "user-known" || evt.Actor != (securityevent.Principal{Type: "system", ID: "bootstrap"}) || evt.Details["invited_by"] != "system:bootstrap" {
+				t.Fatalf("granted row=%+v", evt)
+			}
+		})
+	}
+
+	repo := newFakeInvRepo()
+	events := &fakeSecurityEvents{}
+	svc := newSvc(t, repo, &fakeGranter{}, constructorConfig{SecurityEvents: events})
+	p, err := svc.PrepareCreate(t.Context(), CreateInput{ResourceType: "project", ResourceID: "p1", Relation: "member", Identifier: "invitee@x.com", InvitedBy: "issuer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := svc.CreatePrepared(t.Context(), p.WithActor(actor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.mu.Lock()
+	inv := repo.byID[created.Invitation.ID]
+	inv.TokenHash = hashOf(t, "known-secret")
+	repo.byID[inv.ID] = inv
+	repo.mu.Unlock()
+	if _, err := svc.Accept(t.Context(), AcceptInput{Token: "known-secret", SubjectType: "user", SubjectID: "user-9"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, evt := range events.created {
+		if evt.EventType == securityevent.TypeInvitationGranted && (evt.Actor != (securityevent.Principal{}) || evt.UserID != "user-9") {
+			t.Fatalf("accept-time grant row=%+v", evt)
+		}
+	}
+	if !events.grantSuccessRecorded() {
+		t.Fatal("no accept-time grant row")
+	}
+}

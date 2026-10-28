@@ -68,12 +68,24 @@ func (p PreparedManagement) checked(ctx context.Context, s *Service) (Invitation
 // actor is the attributed user; a non-user actor never lands in UserID; no actor
 // keeps the headless InvitedBy fallback.
 func (p PreparedManagement) attribution() (securityevent.Principal, string) {
-	if p.actor == (sdk.Principal{}) {
-		return securityevent.Principal{}, p.invitation.InvitedBy
+	return attribute(p.actor, p.invitation.InvitedBy)
+}
+
+// attribute is the audit attribution rule both prepared commands share: a user
+// actor is the attributed user; a non-user actor never lands in UserID; no
+// actor keeps the headless invitedBy fallback.
+func attribute(actor sdk.Principal, invitedBy string) (securityevent.Principal, string) {
+	if actor == (sdk.Principal{}) {
+		return securityevent.Principal{}, invitedBy
 	}
-	actor := securityevent.Principal{Type: p.actor.Type, ID: p.actor.ID}
-	if p.actor.Type == sdk.PrincipalTypeUser {
-		return actor, p.actor.ID
+	if actor.Type == sdk.PrincipalTypeUser {
+		return auditActor(actor), actor.ID
 	}
-	return actor, ""
+	return auditActor(actor), ""
+}
+
+// auditActor converts a principal into a security event's canonical Actor; the
+// zero principal stays the zero Actor.
+func auditActor(actor sdk.Principal) securityevent.Principal {
+	return securityevent.Principal{Type: actor.Type, ID: actor.ID}
 }

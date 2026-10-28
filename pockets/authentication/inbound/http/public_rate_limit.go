@@ -50,8 +50,9 @@ type PublicRouteLimits struct {
 	// It is the IP arm only; the per-session arm in the service stays a fixed
 	// 30/min.
 	Refresh ratelimiter.Limit
-	// InvitationDecline budgets POST /auth/invitations/{id}/decline (key
-	// "invitation_decline"). Zero → 10/min.
+	// InvitationDecline budgets both public decline routes, POST
+	// /auth/invitations/{id}/decline and POST /auth/invitations/decline (one key
+	// shared by both, "invitation_decline"). Zero → 10/min.
 	InvitationDecline ratelimiter.Limit
 	// Passkey budgets the public passkey sign-in pair, POST
 	// /auth/passkeys/assertion/options and /auth/passkeys/assertion (one key

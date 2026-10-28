@@ -33,6 +33,14 @@ type InvitationService interface {
 	Resend(ctx context.Context, prepared invitations.PreparedManagement, redirectTo string) (invitations.Invitation, error)
 }
 
+// invitationTokenDecliner is the optional token-only decline an InvitationService
+// may also offer (*invitations.Service does). POST /auth/invitations/decline is
+// mounted only when the wired service satisfies it, so host fakes of
+// InvitationService keep compiling and simply go without the route.
+type invitationTokenDecliner interface {
+	DeclineByToken(ctx context.Context, token string) error
+}
+
 // ---------------------------------------------------------------------------
 // DTOs
 // ---------------------------------------------------------------------------
@@ -161,7 +169,9 @@ func newMyInvitationResponse(inv invitations.Invitation) myInvitationResponse {
 // (allowlisted Origin + double-submit CSRF, design §9.1); bearer-only callers
 // skip it. Decline has no session and so no __Host-auth_csrf cookie to
 // double-submit — the token in its body is the credential — so, like the other
-// session-less routes, it carries the ORIGIN-ONLY gate.
+// session-less routes, it carries the ORIGIN-ONLY gate. The token-only decline
+// shares that gate and the same declineLimit instance, so both decline routes
+// draw on one invitation_decline budget.
 func mountInvitations(r pockets.RouteRegistrar, h *handlers, invitations, declineLimit web.Middleware) {
 	browserSafe := requireBrowserSafeMutation(h.mutation.csrf())
 	r.Handle("POST", "/auth/invitations/{resource_type}/{resource_id}", h.createInvitation, invitations, browserSafe)
@@ -174,6 +184,9 @@ func mountInvitations(r pockets.RouteRegistrar, h *handlers, invitations, declin
 	r.Handle("POST", "/auth/invitations/{id}/cancel", h.cancelInvitation, invitations, browserSafe)
 	r.Handle("POST", "/auth/invitations/{id}/resend", h.resendInvitation, invitations, browserSafe)
 	r.Handle("POST", "/auth/invitations/{id}/decline", h.declineInvitation, requireBrowserSafeOrigin(h.mutation.csrf()), declineLimit)
+	if decliner, ok := h.inv.(invitationTokenDecliner); ok {
+		r.Handle("POST", "/auth/invitations/decline", h.declineInvitationByToken(decliner), requireBrowserSafeOrigin(h.mutation.csrf()), declineLimit)
+	}
 }
 
 // createInvitation prepares once, authorizes the inspected command, then executes
@@ -221,7 +234,7 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	res, err := h.inv.CreatePrepared(r.Context(), prepared)
+	res, err := h.inv.CreatePrepared(r.Context(), prepared.WithActor(principal))
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
@@ -436,6 +449,29 @@ func (h *handlers) declineInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	web.RespondJSONOK(w, map[string]string{"status": "declined"})
+}
+
+// declineInvitationByToken declines the pending invitation a token addresses
+// (PUBLIC, IP-rate-limited) for a landing page holding only the mailed secret.
+// An unknown or wrong token is the same 404 as the id route; a token past
+// expiry is 410; an invitation already accepted or declined is 409, so a second
+// click reads as done.
+func (h *handlers) declineInvitationByToken(decliner invitationTokenDecliner) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req declineInvitationRequest
+		if !strictJSONBody(w, r, &req, maxJSONBodyBytes) {
+			return
+		}
+		if req.Token == "" {
+			web.RespondJSONError(w, web.ErrBadRequest("invalid request body"))
+			return
+		}
+		if err := decliner.DeclineByToken(r.Context(), req.Token); err != nil {
+			web.RespondJSONDomainError(w, err)
+			return
+		}
+		web.RespondJSONOK(w, map[string]string{"status": "declined"})
+	}
 }
 
 // syncInvitationsResponse is the body of POST /auth/invitations/sync: how many
