@@ -41,7 +41,7 @@ Mirrors the turso store's exported surface (a host switches dialect by one impor
 
 | member | shape |
 |---|---|
-| `Repositories(db *postgres.DB, opts ...QueueOption) jobs.Repositories` | the two stores, no migration side effects |
+| `Repositories(db *postgres.DB, opts ...QueueOption) jobs.Repositories` | all three stores (`Queue`, `FencedQueue`, `Schedules`; `opts` reach each, so `WithSchema` qualifies the fenced store too), no migration side effects; a host that wants only the ordinary queue builds `NewQueueStore` itself |
 | `NewQueueStore(db, opts...) *Queue` / `WithLease(d)` | the queue store + its lease option (default 15m) |
 | `NewScheduleStore(db, opts...) *Schedules` | the schedule store (`WithLease` accepted and ignored) |
 | `NewFencedQueueStore(db, opts...) *FencedQueue` | the fenced store (`WithLease` accepted and ignored — the lease is per-claim) |
@@ -82,6 +82,9 @@ any store exists. Call `StatusCheck` at boot whenever a schema is configured:
 `Repositories` is deliberately probe-less and error-less, so a store built for a
 schema the migrations never reached would otherwise read and write the host's own
 unqualified `job_queue`/`job_schedules`/`fenced_job_queue` instead of failing.
+Because `Repositories` fills `FencedQueue`, `jobs.New` logs `fenced_queue=true`,
+and a ledger missing `0003_fenced_job_queue.sql` fails at `StatusCheck` rather
+than at the first fenced enqueue.
 
 Two limits worth knowing:
 

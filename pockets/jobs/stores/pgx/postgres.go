@@ -128,13 +128,18 @@ func StatusCheck(ctx context.Context, db *pgxdb.DB, opts ...Option) error {
 // Repositories returns the jobs repository set backed by db, WITHOUT touching
 // migrations. This is the store half of the scaffold model: the host owns and
 // applies the schema (see ExportMigrations) and the store just provides repos.
-// opts configure both stores (WithLease, WithSchema); db is the connector wrapper
-// (error mapping + Tx), not a raw *pgxpool.Pool.
+// It fills all three ports — Queue, FencedQueue and Schedules — so jobs.New
+// boots with the fenced queue; a host that wants only the ordinary queue builds
+// NewQueueStore itself. opts configure every store (WithSchema reaches all three;
+// WithLease applies to Queue and is ignored by the per-claim FencedQueue); db is
+// the connector wrapper (error mapping + Tx), not a raw *pgxpool.Pool. Call
+// StatusCheck at boot so a ledger missing a jobs table fails there.
 // It panics if db is nil; the caller owns the database lifecycle.
 func Repositories(db *pgxdb.DB, opts ...QueueOption) jobs.Repositories {
 	return jobs.Repositories{
-		Queue:     NewQueueStore(db, opts...),
-		Schedules: NewScheduleStore(db, opts...),
+		Queue:       NewQueueStore(db, opts...),
+		FencedQueue: NewFencedQueueStore(db, opts...),
+		Schedules:   NewScheduleStore(db, opts...),
 	}
 }
 

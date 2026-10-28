@@ -245,12 +245,19 @@ _, err := parts.Schedules.EnsureSchedule(ctx, schedules.Ensure{
 handler shape runs other pockets' retention from a schedule — authentication's
 `Components.Maintenance.Pass`, authorization's `Mutations.ExpireOperations`.
 `0005_job_queue_terminal_purge.sql` adds the partial index the purge walks; it is admitted, not
-required — the pgx store's `StatusCheck` WARNs `index_missing=idx_job_queue_terminal` without it.
+required — each SQL store's `StatusCheck` (pgx and Turso) WARNs `index_missing=idx_job_queue_terminal` without it.
 Its build blocks enqueue, claim and complete on `job_queue`, so on a large queue pre-build it with
 `CREATE INDEX CONCURRENTLY IF NOT EXISTS` outside the runner (drop an INVALID leftover first).
 
 ## Stores
 
 Use the public `pockets/jobs/stores/memory` for zero-infrastructure hosts, or select pgx/Turso sibling modules. All run the pocket conformance suite. The SQL migration source includes the ordinary queue, schedules, and fenced queue.
+
+The pgx and Turso `Repositories` fill all three ports — `Queue`, `FencedQueue` and `Schedules` — so
+`jobs.New(jobspgx.Repositories(db))` boots with the fenced queue and the construction line logs
+`fenced_queue=true`. A host that wants only the ordinary queue builds `NewQueueStore` (and
+`NewScheduleStore`) itself. `Repositories` never probes; call the store's `StatusCheck(ctx, db, …)` at
+boot so a ledger missing a jobs table — `0003_fenced_job_queue.sql` included — fails there, naming the
+table, rather than at the first enqueue.
 
 See `examples/jobs-minimal` for the executable queue/retry/dead-letter/schedule protocol.

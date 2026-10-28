@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 
 // TestExportMigrations verifies the scaffold step copies every canonical
@@ -38,5 +40,39 @@ func TestExportMigrations(t *testing.T) {
 		if string(got) != string(want) {
 			t.Errorf("exported %s differs from canonical source", e.Name())
 		}
+	}
+}
+
+// TestRepositoriesFillsFencedQueue pins that Repositories fills the fenced port
+// with this package's store over the same database, and that WithSchema reaches
+// it: a fenced store left unqualified would read and write the host's own
+// unqualified fenced_job_queue.
+func TestRepositoriesFillsFencedQueue(t *testing.T) {
+	db := &pgxdb.DB{}
+	schema, err := pgxdb.NewSchema("jobs_tenant")
+	if err != nil {
+		t.Fatalf("NewSchema: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		opts []Option
+		want string
+	}{
+		{"unqualified", nil, "fenced_job_queue"},
+		{"WithSchema", []Option{WithSchema(schema)}, `"jobs_tenant".fenced_job_queue`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repos := Repositories(db, tc.opts...)
+			fenced, ok := repos.FencedQueue.(*FencedQueue)
+			if !ok || fenced == nil {
+				t.Fatalf("Repositories FencedQueue = %T; want non-nil *FencedQueue", repos.FencedQueue)
+			}
+			if fenced.db != db {
+				t.Error("FencedQueue did not retain the supplied database")
+			}
+			if got := fenced.table("fenced_job_queue"); got != tc.want {
+				t.Errorf("FencedQueue table = %q; want %q", got, tc.want)
+			}
+		})
 	}
 }

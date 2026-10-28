@@ -237,6 +237,42 @@ func TestLive_StatusCheck(t *testing.T) {
 	})
 }
 
+// TestLive_RepositoriesFencedQueue pins that the fenced store Repositories fills
+// writes where the migrations put fenced_job_queue: through jobs.New, a keyed
+// enqueue lands in the (possibly schema-qualified) table and a second admission
+// of the same key returns the active generation.
+func TestLive_RepositoriesFencedQueue(t *testing.T) {
+	dsn := requireDSN(t)
+	db, opts := openAndMigrate(t, dsn)
+	ctx := context.Background()
+	if err := StatusCheck(ctx, db, opts...); err != nil {
+		t.Fatalf("StatusCheck: %v", err)
+	}
+	parts, err := jobs.New(Repositories(db, opts...))
+	if err != nil {
+		t.Fatalf("jobs.New: %v", err)
+	}
+	first, err := parts.Queue.EnqueueOnce(ctx, "email", "repos-fenced-key", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("EnqueueOnce through Repositories: %v", err)
+	}
+	again, err := parts.Queue.EnqueueOnce(ctx, "email", "repos-fenced-key", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("second EnqueueOnce: %v", err)
+	}
+	if again != first {
+		t.Errorf("second EnqueueOnce = %q; want the active generation %q", again, first)
+	}
+	var n int
+	q := "SELECT count(*) FROM " + testSchema(t).Table("fenced_job_queue") + " WHERE logical_key = $1"
+	if err := db.QueryRow(ctx, q, "repos-fenced-key").Scan(&n); err != nil {
+		t.Fatalf("count fenced rows: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("fenced_job_queue rows for the key = %d; want 1", n)
+	}
+}
+
 // captureDefaultLog routes slog.Default into a text buffer for the test's
 // duration.
 func captureDefaultLog(t *testing.T) *bytes.Buffer {
