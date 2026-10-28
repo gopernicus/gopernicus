@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/gopernicus/gopernicus/sdk"
@@ -195,6 +197,10 @@ func (r *AESGCMRing) ActiveKeyID() string { return r.active }
 // LegacyKeyID is the key that reads unprefixed single-key ciphertext, or ""
 // when the ring reads only the v1 form.
 func (r *AESGCMRing) LegacyKeyID() string { return r.legacy }
+
+// KeyIDs is every key id in the ring, sorted. The slice is a fresh copy;
+// changing it does not change the ring.
+func (r *AESGCMRing) KeyIDs() []string { return slices.Sorted(maps.Keys(r.keys)) }
 
 // Encrypt seals plaintext under the active key and prefixes the scheme and
 // key id, except while the active key is the legacy key: then it writes the

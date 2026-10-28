@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -314,5 +315,23 @@ func TestAESGCMRingLegacyErrorsCarryNoBytes(t *testing.T) {
 	}
 	if _, err := ring.Decrypt("!!!" + foreign); !errors.Is(err, ErrCiphertextMalformed) {
 		t.Fatalf("not base64: %v", err)
+	}
+}
+
+func TestAESGCMRingKeyIDs(t *testing.T) {
+	ring, err := NewAESGCMRing(KeyRing{Active: "k2", Keys: map[string][]byte{"k2": testKey(2), "legacy": testKey(1), "a1": testKey(3)}}, WithLegacyKeyID("legacy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := ring.KeyIDs()
+	if want := []string{"a1", "k2", "legacy"}; !slices.Equal(ids, want) {
+		t.Fatalf("KeyIDs: %v, want %v", ids, want)
+	}
+	ids[0] = "mutated"
+	if got := ring.KeyIDs(); got[0] != "a1" {
+		t.Fatalf("KeyIDs leaks its slice: %v", got)
+	}
+	if _, err := ring.Decrypt("v1.mutated.AAAA"); !errors.Is(err, ErrUnknownKeyID) {
+		t.Fatalf("mutation reached the ring: %v", err)
 	}
 }
