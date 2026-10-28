@@ -47,6 +47,22 @@ func TestReferencePasskeys(t *testing.T) {
 	})
 }
 
+// TestReferenceIDs runs the supplied-id suite, separate from Run, against the
+// reference implementation.
+func TestReferenceIDs(t *testing.T) {
+	RunIDs(t, func(t *testing.T) auth.Repositories {
+		return newReference().repositories()
+	})
+}
+
+// TestReferenceDelegatedRotationFence runs the delegated-row rotation fence,
+// separate from Run, against the reference implementation.
+func TestReferenceDelegatedRotationFence(t *testing.T) {
+	RunDelegatedRotationFence(t, func(t *testing.T) auth.Repositories {
+		return newReference().repositories()
+	})
+}
+
 // TestReferencePasskeySchema runs the schema-probe contract and the unwired
 // rail over a reference store marked without migration 0025, where every
 // passkey read or write fails.
@@ -751,6 +767,13 @@ func (r refIdentifiers) ApplyVerifiedChange(_ context.Context, input identifier.
 			return identifier.Identifier{}, sdk.ErrAlreadyExists
 		}
 	}
+	// A supplied id is the row key (the primary key); empty mimics the schema default.
+	id := input.ID
+	if id == "" {
+		id = ids.MustGenerate()
+	} else if _, taken := r.userIdentifiers[id]; taken {
+		return identifier.Identifier{}, sdk.ErrAlreadyExists
+	}
 
 	now := verifiedAt.UTC()
 	for id := range retire {
@@ -759,7 +782,7 @@ func (r refIdentifiers) ApplyVerifiedChange(_ context.Context, input identifier.
 		r.userIdentifiers[id] = it
 	}
 	newIdent := identifier.Identifier{
-		ID:                  ids.MustGenerate(),
+		ID:                  id,
 		UserID:              input.UserID,
 		Kind:                input.Kind,
 		NormalizedValue:     input.NormalizedValue,
@@ -865,7 +888,7 @@ func (r refSessions) Rotate(_ context.Context, id, expectedCurrentHash, newHash 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s, ok := r.sessions[id]
-	if !ok || s.RefreshTokenHash != expectedCurrentHash {
+	if !ok || s.RefreshTokenHash != expectedCurrentHash || !firstPartyProfile(s) {
 		return session.ErrRotationConflict
 	}
 	s.PreviousRefreshTokenHash = expectedCurrentHash
@@ -883,12 +906,18 @@ func (r refSessions) ConsumeGrace(_ context.Context, id, previousHash string) er
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s, ok := r.sessions[id]
-	if !ok || s.PreviousUsed || s.PreviousRefreshTokenHash == "" || s.PreviousRefreshTokenHash != previousHash {
+	if !ok || s.PreviousUsed || s.PreviousRefreshTokenHash == "" || s.PreviousRefreshTokenHash != previousHash || !firstPartyProfile(s) {
 		return session.ErrRotationConflict
 	}
 	s.PreviousUsed = true
 	r.sessions[id] = s
 	return nil
+}
+
+// firstPartyProfile mirrors the SQL stores' empty-or-first_party session_profile
+// filter on the first-party rotation paths.
+func firstPartyProfile(s session.Session) bool {
+	return s.Profile == "" || s.Profile == session.ProfileFirstParty
 }
 
 func (r refSessions) Delete(_ context.Context, id string) error {
@@ -922,7 +951,7 @@ func (r refSessions) RotateAt(_ context.Context, id, expectedCurrentHash, newHas
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s, ok := r.sessions[id]
-	if !ok || s.RefreshTokenHash != expectedCurrentHash {
+	if !ok || s.RefreshTokenHash != expectedCurrentHash || !firstPartyProfile(s) {
 		return session.ErrRotationConflict
 	}
 	s.PreviousRefreshTokenHash = expectedCurrentHash
@@ -1090,6 +1119,11 @@ func (r refContactChanges) Create(_ context.Context, p contactchange.PendingChan
 	// Empty ID → mimic a schema default (the greenfield DB-generated convention).
 	if p.ID == "" {
 		p.ID = ids.MustGenerate()
+	}
+	for key, ex := range r.contactChanges {
+		if ex.ID == p.ID && key != contactChangeKey(p.UserID, p.Kind) {
+			return contactchange.PendingChange{}, sdk.ErrAlreadyExists
+		}
 	}
 	// Replace-per-(user, kind): the composite key overwrites any prior pending row.
 	r.contactChanges[contactChangeKey(p.UserID, p.Kind)] = p
@@ -3286,6 +3320,8 @@ func (r refPasskeys) Create(_ context.Context, in passkey.CreateInput) (passkey.
 	}
 	if p.ID == "" {
 		p.ID = ids.MustGenerate()
+	} else if _, taken := r.passkeys[p.ID]; taken {
+		return passkey.Passkey{}, sdk.ErrAlreadyExists
 	}
 	p.CreatedAt = p.CreatedAt.UTC()
 	p.LastUsedAt = nil
@@ -3433,6 +3469,9 @@ func (r refTOTP) Confirm(_ context.Context, in totp.Confirmation) error {
 		}
 		seen[code.Digest] = true
 	}
+	if r.recoveryCodeIDTakenLocked(in.UserID, in.Codes) {
+		return sdk.ErrAlreadyExists
+	}
 	at := in.ConfirmedAt
 	c.ConfirmedAt, c.LastUsedStep = &at, in.Step
 	c.SessionID, c.Tier, c.AuthRevision, c.ExpiresAt, c.FailedAttempts, c.LockedUntil = "", "", 0, nil, 0, nil
@@ -3492,8 +3531,28 @@ func (r refTOTP) ReplaceRecoveryCodes(_ context.Context, userID string, codes []
 			return sdk.ErrConflict
 		}
 	}
+	if r.recoveryCodeIDTakenLocked(userID, codes) {
+		return sdk.ErrAlreadyExists
+	}
 	r.totpCodes[userID] = slices.Clone(codes)
 	return nil
+}
+
+// recoveryCodeIDTakenLocked reports whether a supplied code id is already
+// another user's row key (the SQL stores' primary key; userID's own codes are
+// replaced in the same operation).
+func (r refTOTP) recoveryCodeIDTakenLocked(userID string, codes []totp.RecoveryCode) bool {
+	for owner, held := range r.totpCodes {
+		if owner == userID {
+			continue
+		}
+		for _, h := range held {
+			if h.ID != "" && slices.ContainsFunc(codes, func(c totp.RecoveryCode) bool { return c.ID == h.ID }) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (r refTOTP) ConsumeRecoveryCode(_ context.Context, userID string, candidates []challenge.DigestCandidate, _ time.Time) (int, error) {
