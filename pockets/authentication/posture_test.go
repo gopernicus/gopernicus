@@ -522,13 +522,14 @@ func TestKeysBootLine(t *testing.T) {
 	}
 }
 
+// activeOnlyRing reports an active key id and nothing else.
+type activeOnlyRing struct{ active string }
+
+func (r activeOnlyRing) ActiveKeyID() string { return r.active }
+
 // TestDescribeKeyRole covers every kind the boot line can report.
 func TestDescribeKeyRole(t *testing.T) {
 	single, err := cryptids.NewAESGCM(bytes.Repeat([]byte{1}, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ring, err := cryptids.NewAESGCMRing(cryptids.KeyRing{Active: "d1", Keys: map[string][]byte{"d1": bytes.Repeat([]byte{2}, 32)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,7 +548,10 @@ func TestDescribeKeyRole(t *testing.T) {
 		{"single AESGCM", single, keyRole{kind: "single"}},
 		{"opaque signer", stubSigner{}, keyRole{kind: "opaque"}},
 		{"reporting signer", ringSignerFake{active: "k1", ids: []string{"k1"}}, keyRole{kind: "ring", active: "k1", ids: []string{"k1"}}},
-		{"active-id-only ring (sdk v0.21.0 AESGCMRing)", ring, keyRole{kind: "ring", active: "d1"}},
+		// A ring that reports only its active id, as a third-party KeyedEncrypter
+		// or an sdk ≤ v0.22.0 AESGCMRing does. A real AESGCMRing is not used:
+		// under go.work the sdk is at HEAD, where it also reports KeyIDs.
+		{"active-id-only ring", activeOnlyRing{active: "d1"}, keyRole{kind: "ring", active: "d1"}},
 		{"challenge protector", protector, keyRole{kind: "ring", active: "p2", ids: []string{"dev", "p2"}}},
 	}
 	for _, tc := range cases {
