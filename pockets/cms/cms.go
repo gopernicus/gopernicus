@@ -113,10 +113,14 @@ type Config struct {
 
 	// IDs is the app's entity-ID strategy, decided once at wiring (amended D9):
 	// it mints the keys of entries, assets, menus, menu items, inquiries, and
-	// terms. The zero value generates default nanoids; sdk.DatabaseID delegates
-	// key generation to the database (the bundled stores omit the id column and
-	// read it back with RETURNING); an integration's GenerateFunc (e.g.
-	// google-uuid) chooses another shape.
+	// terms. These are all records, so the zero value selects the record-class
+	// default, sdk.UUIDv7(); a configured generator overrides it for every key.
+	// To keep NanoIDs, pass sdk.NewIDGenerator with a generator from
+	// sdk.NanoID("", 0) (the zero value no longer means NanoID here).
+	// sdk.DatabaseID delegates key generation to the database (the bundled
+	// stores omit the id column and read it back with RETURNING); an
+	// integration's GenerateFunc (e.g. google-uuid) chooses another shape.
+	// Media storage keys never follow IDs.
 	IDs sdk.IDGenerator
 
 	// AdminMiddleware wraps every admin route the pocket mounts (the CRUD/
@@ -195,14 +199,15 @@ func Register(m pockets.Mount, repos Repositories, cfg Config) error {
 		}
 	}
 
-	entrySvc := entrysvc.NewService(repos.Entries, registry, cfg.IDs, nil, m.Events)
-	termSvc := taxonomysvc.NewService(repos.Terms, cfg.IDs, nil)
-	menuSvc := menussvc.NewService(repos.Menus, cfg.IDs, nil)
-	mediaSvc := mediasvc.NewService(repos.Media, cfg.Blobs, cfg.IDs, nil)
+	ids := cfg.IDs.Or(sdk.UUIDv7())
+	entrySvc := entrysvc.NewService(repos.Entries, registry, ids, nil, m.Events)
+	termSvc := taxonomysvc.NewService(repos.Terms, ids, nil)
+	menuSvc := menussvc.NewService(repos.Menus, ids, nil)
+	mediaSvc := mediasvc.NewService(repos.Media, cfg.Blobs, ids, nil)
 	if err := mediaSvc.SetUploadPolicy(mediasvc.UploadPolicy{AllowedMediaTypes: allowedMediaTypes}); err != nil {
 		return fmt.Errorf("cms: Config.AllowedMediaTypes: %w", err)
 	}
-	contactSvc := messagingsvc.NewService(repos.Inquiries, cfg.Mailer, cfg.MailFrom, cfg.ContactTo, cfg.IDs, nil)
+	contactSvc := messagingsvc.NewService(repos.Inquiries, cfg.Mailer, cfg.MailFrom, cfg.ContactTo, ids, nil)
 
 	inbound.Mount(m.Router, inbound.Deps{
 		Registry:       registry,
