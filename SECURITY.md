@@ -28,8 +28,8 @@ each module receives fixes. Latest tags at the time of writing:
 
 | Module | Latest |
 |---|---|
-| `sdk` | v0.21.0 |
-| `pockets/authentication` | v0.33.1 |
+| `sdk` | v0.22.0 |
+| `pockets/authentication` | v0.34.0 |
 | `pockets/authentication/stores/pgx` | v0.17.0 |
 | `pockets/authentication/stores/turso` | v0.16.0 |
 | `pockets/authentication/views/goth` | v0.9.0 |
@@ -42,8 +42,8 @@ each module receives fixes. Latest tags at the time of writing:
 | `pockets/cms/stores/turso` | v0.4.0 |
 | `pockets/events` | v0.3.0 |
 | `pockets/jobs` | v0.8.0 |
-| `pockets/jobs/stores/pgx` | v0.8.0 |
-| `pockets/jobs/stores/turso` | v0.7.0 |
+| `pockets/jobs/stores/pgx` | v0.9.0 |
+| `pockets/jobs/stores/turso` | v0.8.0 |
 | `pockets/secrets` | v0.2.0 |
 | `integrations/authentication/firebase` | v0.2.0 |
 | `integrations/cryptids/go-oidc` | v0.2.0 |
@@ -59,7 +59,7 @@ each module receives fixes. Latest tags at the time of writing:
 | `integrations/oauth/github` | v0.3.0 |
 | `integrations/oauth/google` | v0.3.0 |
 | `ui/goth` | v0.2.1 |
-| `workshop/gopernicus` | v0.10.0 |
+| `workshop/gopernicus` | v0.10.2 |
 
 Every module declares `go 1.26.10`; a host that honors the pin builds with a standard
 library carrying the fixes listed in `plans/soc2-s8-toolchain-pgx-repin-handoff.md`.

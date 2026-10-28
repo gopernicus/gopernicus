@@ -6,8 +6,8 @@ require (
 	github.com/gopernicus/gopernicus/integrations/authentication/auth0 v0.1.0
 	github.com/gopernicus/gopernicus/integrations/cryptids/go-oidc v0.2.0
 	github.com/gopernicus/gopernicus/pockets v0.1.0
-	github.com/gopernicus/gopernicus/pockets/authentication v0.33.1
-	github.com/gopernicus/gopernicus/sdk v0.21.0
+	github.com/gopernicus/gopernicus/pockets/authentication v0.34.0
+	github.com/gopernicus/gopernicus/sdk v0.22.0
 )
 
 require (

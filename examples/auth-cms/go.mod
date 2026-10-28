@@ -10,7 +10,7 @@ require (
 	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.17.0
 	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.10.0
 	github.com/gopernicus/gopernicus/integrations/encoding/rsc-qr v0.1.0
-	github.com/gopernicus/gopernicus/pockets/authentication v0.33.1
+	github.com/gopernicus/gopernicus/pockets/authentication v0.34.0
 	github.com/gopernicus/gopernicus/pockets/authentication/views/goth v0.9.0
 	github.com/gopernicus/gopernicus/pockets/authorization v0.32.0
 	github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx v0.23.0
@@ -18,9 +18,9 @@ require (
 	github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.3.0
 	github.com/gopernicus/gopernicus/pockets/events v0.3.0
 	github.com/gopernicus/gopernicus/pockets/jobs v0.8.0
-	github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx v0.8.0
-	github.com/gopernicus/gopernicus/pockets/jobs/stores/turso v0.7.0
-	github.com/gopernicus/gopernicus/sdk v0.21.0
+	github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx v0.9.0
+	github.com/gopernicus/gopernicus/pockets/jobs/stores/turso v0.8.0
+	github.com/gopernicus/gopernicus/sdk v0.22.0
 	github.com/gopernicus/gopernicus/ui/goth v0.2.1
 	github.com/jackc/pgx/v5 v5.9.2
 )
