@@ -82,6 +82,9 @@ func (r totpRepo) Confirm(_ context.Context, in totp.Confirmation) error {
 		}
 		seen[code.Digest] = true
 	}
+	if r.recoveryCodeIDTakenLocked(in.UserID, in.Codes) {
+		return sdk.ErrAlreadyExists
+	}
 	at := in.ConfirmedAt
 	c.ConfirmedAt, c.LastUsedStep = &at, in.Step
 	c.SessionID, c.Tier, c.AuthRevision, c.ExpiresAt, c.FailedAttempts, c.LockedUntil = "", "", 0, nil, 0, nil
@@ -141,8 +144,38 @@ func (r totpRepo) ReplaceRecoveryCodes(_ context.Context, userID string, codes [
 			return sdk.ErrConflict
 		}
 	}
+	if r.recoveryCodeIDTakenLocked(userID, codes) {
+		return sdk.ErrAlreadyExists
+	}
 	r.totpCodes[userID] = slices.Clone(codes)
 	return nil
+}
+
+// recoveryCodeIDTakenLocked reports whether a supplied code id repeats within
+// codes or matches another user's stored code — the primary key a SQL store
+// enforces. userID's own codes are about to be replaced, so they never clash.
+func (r totpRepo) recoveryCodeIDTakenLocked(userID string, codes []totp.RecoveryCode) bool {
+	seen := map[string]bool{}
+	for _, code := range codes {
+		if code.ID == "" {
+			continue
+		}
+		if seen[code.ID] {
+			return true
+		}
+		seen[code.ID] = true
+	}
+	for owner, stored := range r.totpCodes {
+		if owner == userID {
+			continue
+		}
+		for _, code := range stored {
+			if seen[code.ID] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (r totpRepo) ConsumeRecoveryCode(_ context.Context, userID string, candidates []challenge.DigestCandidate, _ time.Time) (int, error) {

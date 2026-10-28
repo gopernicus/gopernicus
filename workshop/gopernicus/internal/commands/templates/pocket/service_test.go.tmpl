@@ -28,6 +28,9 @@ func TestPublicConstruction(t *testing.T) {
     if err != nil {
         t.Fatal(err)
     }
+    if len(created.ID) != 36 || created.ID[14] != '7' {
+        t.Fatalf("default ID = %q, want a UUIDv7 (the record-class default)", created.ID)
+    }
     got, err := svc.Get(ctx, created.ID)
     if err != nil || got.Name != created.Name {
         t.Fatalf("created entity: %#v, %v", got, err)

@@ -5,10 +5,10 @@ go 1.26.10
 require (
 	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.10.0
 	github.com/gopernicus/gopernicus/integrations/tracing/otel v0.3.0
-	github.com/gopernicus/gopernicus/pockets/cms v0.6.0
+	github.com/gopernicus/gopernicus/pockets/cms v0.7.0
 	github.com/gopernicus/gopernicus/pockets/cms/stores/turso v0.4.0
 	github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.3.0
-	github.com/gopernicus/gopernicus/sdk v0.20.0
+	github.com/gopernicus/gopernicus/sdk v0.21.0
 	github.com/gopernicus/gopernicus/ui/goth v0.2.1
 )
 

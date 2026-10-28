@@ -59,7 +59,7 @@ Everything below is in the root package and needs no other import.
 | Caller context | `Principal`, `WithPrincipal`, `PrincipalFromContext` |
 | Identity projection | `IdentityInfo`, `IdentityAddress`, `IdentityResolver` |
 | Conventional strings | `PrincipalTypeUser`, `PrincipalTypeServiceAccount`, `AddressKindEmail`, `AddressKindPhone` |
-| Entity IDs | `IDGenerator`, `IDGenerateFunc`, `NewIDGenerator`, `NanoID`, `DatabaseID`, `DefaultIDAlphabet`, `DefaultIDLength` |
+| Entity IDs | `IDGenerator`, `IDGenerateFunc`, `NewIDGenerator`, `IDGenerator.Or`, `NanoID`, `UUIDv7`, `DatabaseID`, `DefaultIDAlphabet`, `DefaultIDLength` |
 | Optional values | `Deref`, `DerefOr` |
 | URL slugs | `Slugify` |
 
@@ -81,13 +81,26 @@ owning pocket or application. The authentication pocket is the first real
 implementation.
 
 **Entity IDs.** The zero-value `sdk.IDGenerator` emits 21-character
-nanoid-shaped identifiers. Hosts choose a strategy once, at composition time:
+nanoid-shaped identifiers when called directly. Pockets resolve it per entity
+class with `ids.Or(fallback)`, which returns `ids` when it is configured and a
+generator over `fallback` otherwise: identities (users, service accounts,
+invitations) default to NanoID, every other generated record id to
+`sdk.UUIDv7()`, and a configured generator wins everywhere. Hosts choose a
+strategy once, at composition time:
 
 ```go
-ids := sdk.IDGenerator{}                         // default nanoid
+ids := sdk.IDGenerator{}                         // class defaults (NanoID identities, UUIDv7 records)
+nano := sdk.NewIDGenerator(sdk.NanoID("", 0))     // NanoID for every class
+v7 := sdk.NewIDGenerator(sdk.UUIDv7())            // UUIDv7 for every class
 dbIDs := sdk.NewIDGenerator(sdk.DatabaseID)       // empty ID; the store assigns it
 uuidIDs := sdk.NewIDGenerator(googleuuid.V7())    // integrations/cryptids/google-uuid
 ```
+
+`UUIDv7()` is stdlib-only: RFC 9562 canonical lowercase text, a millisecond
+timestamp with a sub-millisecond fraction, then 62 random bits. Mints from one
+returned generator never sort before earlier mints from it; nothing is promised
+across generators or processes. A UUIDv7 reveals when it was minted, which is why
+identities default to NanoID (the user id is the JWT `sub`).
 
 `NanoID(alphabet, size)` returns an `IDGenerateFunc` and validates its unique
 ASCII alphabet and size at construction; empty inputs select the defaults. An

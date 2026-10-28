@@ -239,6 +239,10 @@ is gone.
 Store `WithAudit()` records every committed change as one `added` or `removed`
 row in `iam_audit`, **in the same commit as the fact**. If the audit row cannot
 be written the fact rolls back. No-ops, refusals and rollbacks leave no history.
+Each write's `event_id` is a UUIDv7 by default (row ids stay `<event_id>:<n>`);
+the pgx and turso stores' `WithIDs(sdk.IDGenerator)` substitutes the host's
+generator, and an empty mint (`sdk.DatabaseID`) is refused with
+`sdk.ErrInvalidInput`.
 
 Every recording write needs attribution on the context:
 
@@ -427,9 +431,9 @@ routes and the authentication pocket's machine routes.
 
 | Module | Version | Notes |
 | --- | --- | --- |
-| `pockets/authorization` | v0.31.0 | Core, `stores/memory`, `stores/storetest` conformance |
-| `pockets/authorization/stores/pgx` | v0.21.0 | `migrations/0001_iam_tuples.sql` and `0003`–`0007` (the operation ledger, fencing, audit integrity and immutability, operation expiry), optional `tuple_cache_migrations/0002_iam_tuple_cache.sql` |
-| `pockets/authorization/stores/turso` | v0.20.0 | The same files for SQLite/Turso |
+| `pockets/authorization` | v0.32.0 | Core, `stores/memory`, `stores/storetest` conformance |
+| `pockets/authorization/stores/pgx` | v0.23.0 | `migrations/0001_iam_tuples.sql` and `0003`–`0007` (the operation ledger, fencing, audit integrity and immutability, operation expiry), optional `tuple_cache_migrations/0002_iam_tuple_cache.sql` |
+| `pockets/authorization/stores/turso` | v0.22.0 | The same files for SQLite/Turso |
 | `pockets/authorization/stores/goredis` | v0.6.0 | TupleCache backend, protocol 2; optional `WithIntegrityKeys` |
 
 Hosts apply the schema before boot; constructors validate it and never migrate.

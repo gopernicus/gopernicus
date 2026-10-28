@@ -79,7 +79,7 @@ required, and the pgx store WARNs without it. No admin route deletes an inquiry 
 | `MaxUploadBytes` | caps one media upload's request body; zero → 32 MiB; negative → `sdk.ErrInvalidInput` at `Register`; a larger upload answers 413 |
 | `AllowedMediaTypes` | media upload allow-list matched against the sniffed type; nil or empty → `DefaultAllowedMediaTypes()`; an entry `mime.ParseMediaType` rejects → `sdk.ErrInvalidInput` at `Register` |
 | `Mailer` | host-owned contact delivery |
-| `IDs` | zero uses default nanoids; database/custom strategies supported |
+| `IDs` | zero selects the record default, `sdk.UUIDv7()`, for every cms record (entries, terms, menus, menu items, assets, inquiries); a configured generator wins; `sdk.DatabaseID` defers to the store |
 | `AdminMiddleware` | wraps every admin route; empty → the admin routes are not mounted (deny-by-absence, WARN) |
 | `AdminUngatedAcknowledged` | development only: mounts the admin routes ungated with a WARN; refused in production, an error beside `AdminMiddleware` |
 | `RuntimeMode` | the host's `environment.Mode`, no env tag; zero is mode-blind; production refuses the acknowledgement and a development-only `Mailer` |

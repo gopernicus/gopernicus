@@ -5834,3 +5834,83 @@ against the live Auth emulator.
   sites: they fail on main 25eadbd0 and pass with the change.
 - `make guard && make check`, the pgx live suites (fresh PG17, bare and
   schema-scoped) and the local-file turso `-tags=integration` legs.
+
+## AUDIT-057: Ids minted by entity class; jobs stores reject empty ids; PostgreSQL 18 floor
+
+- **Status:** released 2026-10-27: `sdk` v0.21.0 and `integrations/datastores/pgxdb`
+  v0.17.0 (`7622522b`, #239); `pockets/authorization` v0.32.0 (`531ed18f`, #240);
+  `pockets/cms` v0.7.0 (`7791a381`, #241); `pockets/jobs` v0.8.0 (`2b3cc0b3`, #242);
+  `pockets/authentication` v0.33.0 (`4d8ce3cc`, #243) and v0.33.1 (`efeae231`, #245,
+  storetest only); `pockets/authorization/stores/pgx` v0.23.0 and `…/stores/turso` v0.22.0
+  (`627bc8c3`, #244); `pockets/authentication/stores/pgx` v0.17.0 and `…/stores/turso`
+  v0.16.0 (`181472d6`, #246); `pockets/cms/stores/pgx` v0.6.0 (`d350f081`, #247);
+  `pockets/jobs/stores/pgx` v0.8.0 and `…/stores/turso` v0.7.0 (`d5af245f`, #248);
+  `workshop/gopernicus` v0.10.0 for the scaffold. Record: `RELEASING.md`, "Default ids by
+  entity class; PostgreSQL 18 floor"; executed plan `plans/database-default-ids.md`.
+- **Modules:** the above. Untouched: events, secrets, goredis, cms turso, views, `ui/goth`.
+- **Old behavior:**
+  - The zero `sdk.IDGenerator` (a 21-char NanoID) minted every pocket id, and several sites
+    bypassed `WithIDs`: the authorization audit `event_id` (an `sdk.IDGenerator{}`
+    literal), the OAuth2 fallback recorder, and two identifier rows the database minted.
+  - The jobs stores minted `job_<32 hex>` and `sched_<32 hex>` ids themselves, with no
+    option.
+  - pgx id columns defaulted to `gen_random_uuid()::text` (UUIDv4), and only some carried
+    `COLLATE "C"`.
+  - pgxdb migrated on any PostgreSQL server version.
+- **New behavior:**
+  - **Ids per class.** With no `WithIDs`, users, service accounts and invitations get NanoIDs
+    (identities: the user id is the JWT `sub`, and a UUIDv7 would reveal signup time).
+    Every other generated record id gets an `sdk.UUIDv7()`: identifiers, API keys, security
+    events, passkeys, recovery codes, challenges, contact changes, authentication grants,
+    the maintenance archive marker row, the cms records, jobs and schedules, and the
+    authorization audit `event_id`. One host generator overrides every class.
+    `IDGenerator.Or(fallback)` applies the class default at each minting layer.
+  - **jobs.** The core mints job and schedule ids (`jobs.WithIDs`). The pgx, turso and memory
+    stores reject an empty id with `sdk.ErrInvalidInput` and never mint. The `job_` and
+    `sched_` prefixes are gone; occurrence ids stay `schedules.OccurrenceID(scheduleID, slot)`.
+  - **authorization.** `audit.NewRecordsWith(ctx, changes, now, ids)` mints the event id and
+    refuses an empty mint with `sdk.ErrInvalidInput`. `NewRecords` delegates with the zero
+    value. The pgx and turso stores gain `WithIDs`.
+  - **PostgreSQL 18 floor.** pgxdb `RunMigrations` refuses a server below
+    `server_version_num` 180000 with `ErrServerVersion`; `Open` warns once and never fails
+    on it. `MapError` maps 23001 (`restrict_violation`, PostgreSQL 18's code for
+    `ON DELETE RESTRICT`) to `sdk.ErrInvalidReference`.
+  - **pgx DDL.** Every generated id column, and every column referencing one, is
+    `TEXT COLLATE "C"`. Record columns default to `uuidv7()::text` and identity columns keep
+    `gen_random_uuid()::text`, both as raw-SQL backstops only. The edits are to the original
+    `CREATE` files (26 files), so their checksums changed. turso DDL is unchanged.
+
+**Migration:**
+- Run PostgreSQL 18 or later before taking any tag that selects pgxdb ≥ v0.17.0 through
+  MVS, including events, secrets and authorization store hosts. Otherwise hold pgxdb at
+  v0.16.x and the pgx stores at their previous tags. There is no PostgreSQL 17 line.
+- A database that applied the old canonical pgx files fails the checksum check and guard
+  P9: recreate it and re-export the ledger (a renumbered ledger copies the new bytes over
+  its own names). There is no in-place upgrade in this release.
+- Host checks that assume 21-char ids (`VARCHAR(21)`, length CHECKs, route regexes,
+  validators) must accept 36-char UUIDs. Dashboards, logs or URLs keyed on the `job_` /
+  `sched_` prefixes must drop them.
+- To keep NanoIDs everywhere, pass `WithIDs(sdk.NewIDGenerator(sdk.NanoID("", 0)))`; the
+  zero value now means "the class default". A host already passing its own generator sees
+  no id change.
+- Never pass `sdk.DatabaseID` to `jobs.WithIDs` or to an authorization store's `WithIDs`:
+  both refuse an empty id with `sdk.ErrInvalidInput`. A host calling a jobs store directly
+  must supply the id.
+- A contact change in flight at the authentication deploy (at most 15 minutes) is refused
+  once and must be restarted: the stale-request guard now binds a digest of the pending
+  payload.
+- A host-written store that adopts `storetest.RunIDs` must persist supplied ids verbatim
+  and refuse a colliding one with `sdk.ErrAlreadyExists`.
+
+**Verification:**
+- Wiring tests per pocket with a counting generator (`fixed-N`) under the defaults and
+  under `WithIDs`, and pin tests for every excluded secret and key site.
+- pgx live suites on fresh postgres:18, bare and schema-scoped. Raw-SQL inserts with the id
+  omitted yield version-7 ids. Catalog checks read `collation_name = 'C'` on every
+  inventoried column. A non-C cluster ordering test passes.
+- The PostgreSQL 17.4 negative: `RunMigrations` returns `ErrServerVersion` and creates
+  nothing.
+- turso `-tags=integration` on a local file. Cold verification of every tag, the MVS sets
+  and every example (set C).
+- production-baseline booted on postgres:18 shows a 21-char NanoID `users.id` and
+  version-7 `security_events.id` / `user_identifiers.id`.

@@ -139,6 +139,25 @@ pgx opens with `SET LOCAL lock_timeout = '5s'`. Behind a long reader it fails af
 Turso the `ALTER` briefly holds the database write lock. The only supported manual write to
 the new column is the NULL reset above.
 
+## Move a PostgreSQL server from 17 to 18
+
+pgxdb v0.17.0 and the pgx store tags that pin it require PostgreSQL 18: `RunMigrations`
+refuses an older server with `ErrServerVersion` before touching the ledger, even with nothing
+pending, and `Open` logs one `WARN` (attrs `server_version_num`, `required=180000`,
+`server_version`). There is no maintenance line for older servers. Either upgrade, or hold pgxdb at
+v0.16.x and the pgx stores at their previous tags.
+
+- **An image-tag change never upgrades a data directory.** The official `postgres:18` image
+  keeps `PGDATA` in a versioned subdirectory under `/var/lib/postgresql`, so a compose volume
+  mounted at `…/data` does not carry over; a disposable dev database is simply recreated.
+- **`pg_upgrade`:** PostgreSQL 18's `initdb` enables data checksums by default. Upgrading a
+  cluster created without them needs `--no-data-checksums` on the new `initdb`, or checksums
+  enabled on the old cluster first.
+- **Dump and restore:** `pg_dump` / `pg_restore` clients must be 18 or later. An 18 dump does not
+  restore onto 17 (the canonical migrations use `uuidv7()` defaults).
+- **Replicas and DR targets** must be 18 before the first migrate under the new tags.
+- **Verify:** `SHOW server_version_num;` reads `180000` or higher, then run the migrator.
+
 ## An abusive IP
 
 There is no bundled block list. What exists:

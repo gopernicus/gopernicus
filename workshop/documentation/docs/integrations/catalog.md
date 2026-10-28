@@ -11,7 +11,7 @@ Integrations isolate concrete technology at the edge of the dependency graph. A 
 
 | Module | Technology | Surface |
 |---|---|---|
-| `integrations/datastores/pgxdb` | pgx v5 / PostgreSQL | connection pool, transactions, error mapping, status, migrations, CRUD list toolkit, durable rate limiter |
+| `integrations/datastores/pgxdb` | pgx v5 / PostgreSQL 18+ | `RunMigrations` refuses a server below PostgreSQL 18 (`ErrServerVersion`), `Open` warns; connection pool, transactions, error mapping, status, migrations, CRUD list toolkit, durable rate limiter |
 | `integrations/datastores/turso` | libSQL / Turso, or a local SQLite file | symmetric database wrapper, transactions and read snapshots, error mapping, status, migrations, CRUD list toolkit; `file:` URLs need the sibling `turso/localfile` driver import |
 
 Datastore integrations own how to talk to a database. They do not own pocket tables or SQL; those live in pocket `stores/<dialect>` modules.
@@ -42,7 +42,7 @@ Query logging is opt-in, logs arguments verbatim, and is development-only.
 | `integrations/cryptids/go-oidc` | `cryptids.JWTVerifier` | external OIDC issuer tokens: pinned iss/aud, asymmetric allow-list, hardened JWKS cache; `oidctest` dev issuer ([details](go-oidc.md)) |
 | `integrations/cryptids/go-webauthn` | `webauthn.RelyingParty` | passkey ceremonies over go-webauthn v0.18.2: `Validate` at `New` in every mode, per-ceremony origin admission, ceremony-kind marked state, flags read from this ceremony's authenticator data; passes `webauthntest.Run` |
 | `integrations/cryptids/golang-jwt` | `cryptids.JWTSigner` | HMAC JWTs with method pinning and minimum secret length |
-| `integrations/cryptids/google-uuid` | `sdk.IDGenerateFunc` | UUID v4 or time-ordered v7 entity IDs |
+| `integrations/cryptids/google-uuid` | `sdk.IDGenerateFunc` | UUID v4 or time-ordered v7 entity IDs; the stdlib `sdk.UUIDv7()` is the pockets' record default, so pick this when the host already links google/uuid or wants its v7 semantics |
 
 Password policy stays in authentication; bcrypt owns hashing mechanics. Entity ID choice is made once in pocket config and never controls secret/token generation.
 
