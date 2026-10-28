@@ -28,10 +28,10 @@ each module receives fixes. Latest tags at the time of writing:
 
 | Module | Latest |
 |---|---|
-| `sdk` | v0.22.0 |
-| `pockets/authentication` | v0.34.0 |
-| `pockets/authentication/stores/pgx` | v0.17.0 |
-| `pockets/authentication/stores/turso` | v0.16.0 |
+| `sdk` | v0.23.0 |
+| `pockets/authentication` | v0.35.0 |
+| `pockets/authentication/stores/pgx` | v0.18.0 |
+| `pockets/authentication/stores/turso` | v0.17.0 |
 | `pockets/authentication/views/goth` | v0.9.0 |
 | `pockets/authorization` | v0.32.0 |
 | `pockets/authorization/stores/pgx` | v0.23.0 |
@@ -46,9 +46,10 @@ each module receives fixes. Latest tags at the time of writing:
 | `pockets/jobs/stores/turso` | v0.8.0 |
 | `pockets/secrets` | v0.2.0 |
 | `integrations/authentication/firebase` | v0.2.0 |
+| `integrations/cryptids/bcrypt` | v0.3.0 |
 | `integrations/cryptids/go-oidc` | v0.2.0 |
 | `integrations/cryptids/go-webauthn` | v0.1.0 |
-| `integrations/cryptids/golang-jwt` | v0.3.0 |
+| `integrations/cryptids/golang-jwt` | v0.4.0 |
 | `integrations/datastores/pgxdb` | v0.17.0 |
 | `integrations/datastores/turso` | v0.10.0 |
 | `integrations/email/sendgrid` | v0.5.0 |
@@ -58,6 +59,7 @@ each module receives fixes. Latest tags at the time of writing:
 | `integrations/kvstores/goredis` | v0.4.0 |
 | `integrations/oauth/github` | v0.3.0 |
 | `integrations/oauth/google` | v0.3.0 |
+| `integrations/passwords/hibp` | v0.1.0 |
 | `ui/goth` | v0.2.1 |
 | `workshop/gopernicus` | v0.10.2 |
 

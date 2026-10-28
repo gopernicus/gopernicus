@@ -1,5 +1,383 @@
 # Releasing gopernicus modules
 
+## Key management and password policy (SOC 2 slice S4d part 3 — published 2026-10-28)
+
+Seven annotated tags (not signed) on seven modules, one of them new
+(`integrations/passwords/hibp`). Each tag was cut at its PR's squash-merge commit on `main`
+after a green `live-stores` dispatch on `main`, pushed one at a time, confirmed on origin,
+then cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache,
+`proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build ./...`, `go 1.26.10`).
+Claude cuts and pushes the tags; the owner merges. No migration, no views tag, no workshop
+tag. Design and rulings: `plans/s4d3-keys-passwords.md` (ratified 2026-10-28, "all recs";
+executed copy in `plans/`). The audit entry is **AUDIT-059**. This section is the whole
+record: there is no handoff file and no manifest. The operator surface is the docs site:
+*Operations runbooks* ("Rotate a key", one subsection per key, and "Raise the password hash
+cost (rehash on login)"), *Keys and rotation* (the inventory table), *Production posture* and
+the authentication pocket page ("Added by S4d part 3"). Those shipped in #266 (PR-5, examples
+and docs, merged at `4b654e0f`, no tags). The references are the authentication README's "Key
+rings and the `auth: keys` boot line (SOC 2 S4d part 3)" and "Host password policy", the
+golang-jwt README's "Key rings and rotation", and the bcrypt and hibp READMEs.
+
+Closes `review.md` **M7** (FAC-12, FAF-12, FSK-7, FAC-15) and **M8** (FAC-11, FAC-14; FAC-14
+by a documented per-account budget, not a lockout, R-4).
+
+**What changed.**
+- **sdk v0.23.0: `AESGCMRing` reads single-key ciphertext.** `NewAESGCMRing(ring, opts
+  ...RingOption)` is variadic, so existing callers compile unchanged. `WithLegacyKeyID(id)`
+  opens a value with no `.` (the plain `AESGCM` form) under the named ring key, and `KeyIDOf`
+  reports that id. While the legacy key is active, `Encrypt` writes the plain single-key form,
+  so a rolling deploy works in both directions; once another key is active every write is
+  `v1.<id>.` prefixed. A legacy id outside the ring refuses (`ErrLegacyKeyMissing`, matches
+  `sdk.ErrInvalidInput`). `LegacyKeyID()` and `KeyIDs()` (a sorted copy, #260) let a ring
+  report itself. `KeyRing.Validate()` is exported (exactly 32 bytes);
+  `KeyRing.ValidateMinimum(min)` and `ParseKeyRingMinimum(keys, active, min)` accept longer
+  HMAC keys, with a floor of 32 (a lower `min` is raised). No error carries plaintext,
+  ciphertext or key bytes.
+- **golang-jwt v0.4.0: `NewRing`, an HS256 key-ring signer with `kid`.** `NewRing(ring,
+  ...RingOption) (*RingSigner, error)` validates with `ValidateMinimum(32)` and copies the
+  keys. `Sign` stamps `kid` = the active id, except while the legacy id is active (no `kid`).
+  `Verify` picks the key by `kid`; an unknown, malformed or non-string `kid` is
+  `ErrUnknownKeyID` and no other key is tried; a token with no `kid` verifies only under the
+  `WithLegacyKeyID` key, else `ErrMissingKeyID`. The method pin and claim checks are one
+  shared code path with `Signer`, whose behaviour is unchanged. `RingSigner` reports
+  `ActiveKeyID` / `KeyIDs` / `LegacyKeyID`; `Format` and `LogValue` never print a key. go.mod
+  moves sdk v0.18.0 → v0.23.0. HS384/HS512 hosts stay on `Signer`.
+- **authentication v0.35.0 (core stays on sdk v0.21.0).**
+  - **Ring forms in `NewKeys`** for the JWT signer, the challenge pepper and the delivery and
+    provider-token encrypters (`AUTH_JWT_KEYS` / `AUTH_JWT_ACTIVE_KEY`,
+    `AUTH_CHALLENGE_PEPPERS` / `AUTH_CHALLENGE_ACTIVE_PEPPER`,
+    `AUTH_DELIVERY_ENCRYPTER_KEYS` / `…_ACTIVE_KEY`, `AUTH_TOKEN_ENCRYPTER_KEYS` /
+    `…_ACTIVE_KEY`). For the JWT and the two encrypters, a single variable set beside its ring
+    joins it under the reserved id `legacy` (`authentication.LegacyKeyID`) and fills
+    `JWTLegacyKeyID` / `DeliveryLegacyKeyID` / `TokenLegacyKeyID`; `…_ACTIVE_KEY=legacy` is
+    legal (phase (a)). The pepper ring names its own ids; both pepper forms together refuse.
+    JWT and pepper keys are at least 32 bytes, encrypter keys exactly 32. A set ring
+    satisfies `need` and leaves its single field nil. Every new field is redacted.
+  - **The `auth: keys` boot line**: per role, the kind (`ring`, `single`, `opaque`, `none`), a
+    ring's active id, ids and legacy state, the identifier keyer, and the first-party token
+    issuer and audience. Never key material. Roles report through the named optional
+    interface `authlogic.KeyRingReporter`. Production logs one
+    `posture_warning=legacy_key_read_enabled key=<role>` per role while a legacy id is set.
+  - **First-party `iss`/`aud`**: `SessionsConfig.Issuer` (`AUTH_TOKEN_ISSUER`) and `Audience`
+    (`AUTH_TOKEN_AUDIENCE`), optional, matched exactly. Construction refuses an issuer equal
+    to the OAuth2 issuer or an external provider's issuer, or an audience equal to an OAuth2
+    MCP or API resource (`ErrTokenAudienceCollides`); surrounding whitespace refuses
+    (`ErrTokenIssuerInvalid`). Logout still revokes the session across an enable, change or
+    rollback of either value.
+  - **Password posture**: production WARNs `password_breach_check_none` (password flows on,
+    no checker) and `password_hash_cost_low` (a `CostReporter` hasher below
+    `RecommendedHashCost`, 12). A checker failure logs one
+    `password_breach_check_unavailable outcome=refused|allowed error_kind=<kind>` WARN on both
+    branches; fail-closed returns `ErrPasswordBreachCheckUnavailable` (`sdk.ErrUnavailable`,
+    **503**). `protection.NewBlocklistChecker(r io.Reader)` ships with no list. Every login
+    miss path spends one dummy `VerifyPassword`. No lockout (R-4).
+  - **Rehash on login** (pulled into the slice by the owner): an optional `authlogic.Rehasher`
+    on the hasher and an optional compare-and-swap `user.PasswordHashUpgrader`
+    (`UpgradeHash(ctx, userID, oldHash, newHash) (bool, error)`) on the store. It runs after
+    a successful login, `/auth/token` or step-up; it bumps no revision, revokes nothing and
+    records no security event; a failure is one `password_rehash_failed` WARN and never fails
+    the login. `storetest.RunPasswordHashUpgrade` is a separate runner, outside `Run`.
+- **authentication stores pgx v0.18.0 / turso v0.17.0: `UpgradeHash` goes live.** One
+  conditional statement on the pool path (`UPDATE user_passwords SET hash = @new WHERE
+  user_id = @id AND hash = @old`), true only when one row changed; it never touches
+  `auth_revision`, sessions or grants. pgx honours `WithSchema`. Both run
+  `RunPasswordHashUpgrade` and repin core v0.33.1 → v0.35.0; sdk stays v0.21.0, pgxdb v0.17.0.
+  No migration.
+- **bcrypt v0.3.0: cost 12.** `DefaultCost = 12` for `New()`, the `WithCost` out-of-range
+  fallback and the zero-value `Hasher`; `(*Hasher).Cost()`; `(*Hasher).NeedsRehash(hash)`
+  (true when the stored cost is below the hasher's; a malformed hash is false and never
+  panics). Existing hashes verify at their stored cost.
+- **hibp v0.1.0 (new module, stdlib + sdk v0.22.0 only):** a `CompromisedPasswordChecker`
+  over the Pwned Passwords range API. Only the 5-character SHA-1 prefix leaves the process,
+  with `Add-Padding: true`; padding rows are ignored and every line is compared in constant
+  time. 3 s timeout, 1 MiB body cap, redirects refused on a copy of the host's client; no
+  retries, cache or logging. Errors are a fresh `sdk.ErrUnavailable` plus a class, never the
+  URL, the prefix or the transport error. The range API is keyless and free (the paid HIBP
+  API is the breached-account search, which the module does not call). **No example wires
+  it** (owner ruling); it is a documented option.
+
+| Step | Tag | Commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `sdk/v0.23.0` | `d3fc9dcf` | #258 (PR-1) + #260 (follow-up) | 40722442910 @ `d3fc9dcf` | OK |
+| 2 | `integrations/cryptids/bcrypt/v0.3.0` | `d403f6a1` | #259 (PR-4) | 40727926525 @ `d403f6a1` | OK |
+| 2 | `integrations/passwords/hibp/v0.1.0` | `d403f6a1` | #259 (PR-4) | 40727926525 @ `d403f6a1` | OK |
+| 3 | `pockets/authentication/v0.35.0` | `409e030e` | #261 (PR-3) | 40730117775 @ `409e030e` | OK; set A |
+| 4 | `integrations/cryptids/golang-jwt/v0.4.0` | `6d0acbe1` | #262 (PR-2) | 40731499863 @ `6d0acbe1` | OK; the auth-cms shape |
+| 5 | `pockets/authentication/stores/pgx/v0.18.0` | `82fd7c13` | #265 (PR-3b) | 40739145196 @ `82fd7c13` | OK; the full set |
+| 5 | `pockets/authentication/stores/turso/v0.17.0` | `82fd7c13` | #265 (PR-3b) | 40739145196 @ `82fd7c13` | OK; the full set |
+| — | none | `4b654e0f` | #266 (PR-5, examples + docs) | — | set C |
+
+#258 merged (`f6ff28f3`) before its `KeyIDs()` commit was pushed, so that commit followed as
+#260 and `sdk/v0.23.0` was cut only after #260 merged, at `d3fc9dcf`: the tag carries both.
+PR-2 needed tag 1 (`KeyRing.Validate`), so golang-jwt was tagged after the core. Every module
+ships MINOR under the v0 convention. The authorization tags cut on the same day
+(authorization v0.33.0 / v0.34.0, its stores pgx v0.24.0 / turso v0.23.0) belong to the host
+asks for #224/#225 and are recorded separately. **Not tagged:** views/goth (v0.9.0),
+`pockets`, workshop, ui/goth, pgxdb (v0.17.0), the examples, and every other module. Nothing
+retracts.
+
+**The MVS sets.**
+- **Set A** (step 3): authentication v0.35.0 + the RELEASED stores pgx v0.17.0 / turso v0.16.0
+  + views/goth v0.9.0: `all modules verified`, builds. The old stores work with the new core;
+  the core stays on sdk v0.21.0, so no store repin is forced. Rehash-on-login is dormant on
+  those stores (no `UpgradeHash`).
+- **The auth-cms shape** (step 4): golang-jwt v0.4.0 + authentication v0.35.0 + bcrypt v0.3.0
+  + hibp v0.1.0: verified, builds; golang-jwt lifts sdk to v0.23.0.
+- **The full set** (step 5): authentication v0.35.0 + pgx v0.18.0 + turso v0.17.0 + golang-jwt
+  v0.4.0 + bcrypt v0.3.0 + hibp v0.1.0 + sdk v0.23.0 + pgxdb v0.17.0: verified, builds.
+- **Set C** (#266, from the tags): auth-cms, production-baseline and external-identity at
+  `GOWORK=off` from an EMPTY module cache over `proxy.golang.org` + `sum.golang.org`: each
+  verifies and builds.
+
+**Upgrade notes.** One behaviour change arrives on a plain repin (row 9, bcrypt cost 12, for
+password hosts); rows 12 and 13 change what a password host observes; everything else is
+opt-in, additive or a WARN. Rows 1, 2, 4, 6, 7, 9 and 10 are the plan's; rows 3 and 5 gain the
+as-built refusals (a set ring leaves its single field nil; the external-issuer collision);
+row 8 records R-4 (b); row 11 is amended for the HIBP ruling; rows 12–14 are added from the
+PR-3 review (MED-3, MED-4) and the rehash ruling.
+
+> **Read first:** `grep -rnE 'golangjwt\.New\(|cryptids\.NewAESGCM\(|NewHMACChallengeProtector|AUTH_JWT_SECRET|
+> AUTH_CHALLENGE_PEPPER|AUTH_DELIVERY_ENCRYPTER_KEY|AUTH_TOKEN_ENCRYPTER_KEY|bcrypt\.New\(|CompromisedPasswordChecker'
+> --include='*.go' --include='.env*'`.
+> - **Pins:** authentication **v0.35.0**; a store host pins stores **pgx v0.18.0** or **turso v0.17.0** for rehash on
+>   login; golang-jwt **v0.4.0** and sdk **v0.23.0** to wire the ring forms; bcrypt **v0.3.0**; hibp **v0.1.0** only if
+>   wired. views/goth stays **v0.9.0**. Repin with explicit `GOWORK=off go get <module>@<tag>`, then
+>   `GOWORK=off go mod tidy`; never `go work sync`.
+
+| # | Flip | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | `cryptids.WithLegacyKeyID` on `NewAESGCMRing` | opt-in; nothing changes without the option | — | sdk@v0.23.0 |
+| 2 | `golangjwt.NewRing`, `RingSigner`, `kid`; go.mod → sdk v0.23.0 | opt-in; `New` unchanged; an HS384/HS512 `Signer` host cannot read its old tokens through the HS256 ring | stay on `Signer`, or accept one 401 wave | golang-jwt@v0.4.0 |
+| 3 | ring variables in `NewKeys`; `Keys` ring + legacy-id fields; `LegacyKeyID` | opt-in; a host setting only the single variables is unchanged; a ring key named `legacy` beside the single var refuses; pepper single + ring refuses; a set ring leaves its single field nil (build from the ring) | use one form | authentication@v0.35.0 |
+| 4 | the `auth: keys` boot line; production `posture_warning=legacy_key_read_enabled` | one INFO line; one WARN per role while a legacy id is set | drop the single variable after the window | authentication@v0.35.0 |
+| 5 | `SessionsConfig.Issuer`/`Audience` | opt-in; enabling → every outstanding access token refreshes once; a value colliding with an OAuth2 or external issuer or an OAuth2 resource refuses boot | leave empty | authentication@v0.35.0 |
+| 6 | production `posture_warning=password_breach_check_none` | password hosts with no checker see one WARN | wire hibp or a blocklist | authentication@v0.35.0 |
+| 7 | production `posture_warning=password_hash_cost_low` | a host on bcrypt v0.2.0 (`Cost()` absent) sees nothing; on v0.3.0 with `WithCost(10)` sees one WARN | `WithCost(12)` | authentication@v0.35.0 + bcrypt@v0.3.0 |
+| 8 | no lockout (R-4 (b)) | nothing; the per-account control is `AuthenticationLimits.Login.PerSubject` (5 a minute by default) | an hourly budget on a shared limiter | authentication@v0.35.0 |
+| 9 | **bcrypt `New()` defaults to cost 12** | registration, password set/change/reset and logins against NEW hashes take ~4× longer (≈250 ms); logins against existing cost-10 hashes verify at the stored cost | `WithCost(10)` | bcrypt@v0.3.0 |
+| 10 | `integrations/passwords/hibp` | new module; fail-closed by the core's default | `CompromisedPasswordFailOpen` | hibp@v0.1.0 |
+| 11 | **(amended)** auth-cms / production-baseline ring wiring; `.env.example`; runbooks; no example wires hibp | example behaviour; docs | — | examples (untagged), docs |
+| 12 | **(added, MED-4)** a fail-closed breach check returns `ErrPasswordBreachCheckUnavailable` (503) instead of wrapping the checker's error; the fail-open WARN's message and keys changed (`warning=password_breach_check_unavailable outcome=allowed error_kind=<kind>`, was "compromised-password check failed open") | `errors.Is` against the checker's own error no longer matches; log alerts keyed on the old message stop matching | match `ErrPasswordBreachCheckUnavailable` or `sdk.ErrUnavailable`; re-key alerts | authentication@v0.35.0 |
+| 13 | **(added, MED-4)** every login miss path pays one dummy `VerifyPassword`; every `New` with password flows pays one `HashPassword` at boot | miss-path logins cost what a wrong password does; boot gains ≈250 ms at cost 12; a hasher that cannot mint the dummy logs `password_timing_dummy_unavailable` | — | authentication@v0.35.0 |
+| 14 | **(added, rehash ruling + MED-3)** rehash on login: `authlogic.Rehasher` + `user.PasswordHashUpgrader` | with bcrypt v0.3.0 and a store implementing `UpgradeHash` (pgx v0.18.0, turso v0.17.0), a hash below the configured cost is rewritten on the user's next successful login or step-up, with no revision bump, no session revoked and no security event; a store without it never rehashes | — (a host-own store adopts `RunPasswordHashUpgrade`) | authentication@v0.35.0 + stores pgx@v0.18.0, turso@v0.17.0 + bcrypt@v0.3.0 |
+
+The plan's text for row 11 was: "auth-cms / production-baseline ring wiring; `.env.example`;
+runbooks | example behaviour; docs | — | examples (untagged), docs", with auth-cms wiring hibp
+behind `AUTH_HIBP=1`. The owner ruled that no example wires hibp. Row 8 replaces the plan's
+conditional `PasswordConfig.Lockout` row. **Row 14's residual (MED-3):** the dummy is hashed
+at the configured cost, so after a host moves to cost 12, users whose stored hashes are still
+cost 10 answer faster than the dummy until their hashes are rehashed. The signal closes as
+users log in; accounts that never log in keep their old hashes until a host sweep (for
+example a forced reset). **Not touched:** views/goth, `pockets`, workshop, ui/goth, pgxdb, any
+existing port's method set, any schema.
+
+**Key inventory** (the authentication pocket, as of v0.35.0; the docs site's *Keys and
+rotation* table is the operator copy).
+
+| # | Key (env) | Type | Where its output lives | Rotation window | Gate to drop the old key |
+|---|---|---|---|---|---|
+| 1 | `AUTH_JWT_SECRET` → `AUTH_JWT_KEYS` + `AUTH_JWT_ACTIVE_KEY` | HS256 ring (`golangjwt.NewRing`), `kid` stamped; the single secret beside the ring is `legacy` for `kid`-less tokens | the access JWT (cookie or bearer), ≤ `AccessTokenTTL` | `max(AccessTokenTTL, OAuth2 AccessTTL, ConsentTTL) + 60 s` (the same signer mints delegated tokens) | the window has passed since the last instance reached phase (b) |
+| 2 | `AUTH_CHALLENGE_PEPPER` → `AUTH_CHALLENGE_PEPPERS` + `AUTH_CHALLENGE_ACTIVE_PEPPER` | HMAC-SHA-256 ring; the host names every id, keeping its CURRENT id | `challenges.code_digest` + `protector_key_id` (minutes); recovery-code digests + key id (long-lived); link tokens are unkeyed SHA-256 | the longest challenge TTL; recovery codes are the long tail | recovery codes regenerated, or the loss accepted with the WARN's `key_ids` kept as evidence |
+| 3 | `AUTH_IDENTIFIER_KEY` | one HMAC key, unchanged (R-3) | rate-limit and idempotency keys (minutes); `identifier_digest` on audit rows (correlation only) | the longest budget window | none: rotate freely; budgets reset once, older audit digests no longer match recomputed ones |
+| 4 | `AUTH_DELIVERY_ENCRYPTER_KEY` → `AUTH_DELIVERY_ENCRYPTER_KEYS` + `…_ACTIVE_KEY` | AES-GCM ring with legacy read | sealed delivery envelopes, seconds to minutes | the queue drained | no envelope sealed under the legacy key remains |
+| 5 | `AUTH_TOKEN_ENCRYPTER_KEY` → `AUTH_TOKEN_ENCRYPTER_KEYS` + `…_ACTIVE_KEY` (optional) | AES-GCM ring with legacy read | `oauth_accounts.access_token` / `refresh_token`; a legacy row persists until unlink/relink or a host-Go sweep (a returning login never rewrites it) | until the count reaches zero | the runbook's count SQL over both token columns returns zero |
+| 6 | `AUTH_TOTP_KEYS` + `AUTH_TOTP_ACTIVE_KEY` | AES-GCM ring (unchanged; the model the others copy) | `totp_credentials` sealed secrets | while any secret is sealed under the old id | no row names the old id |
+| — | not keys | CSRF (per render), refresh tokens and API keys (unkeyed SHA-256 at rest), passkeys (public keys), `oauth_states.payload`, the secrets pocket's `APP_SECRETS_KEYS` (already a ring) | | | no change |
+
+Every ring rotation runs in three phases so a rolling fleet never refuses a token or
+dead-letters an envelope: **(a)** ring-capable code with the ring set, the single variable
+kept and `legacy` active (reads both shapes, writes the old one); **(b)** once every instance
+runs (a), activate the new id; **(c)** after the window and the gate, unset the single
+variable (`…_legacy=no` on the boot line is the evidence). Re-activating `legacy` before (c)
+is a key rollback and loses nothing; a code rollback below the three new tags after (b) is
+lossy. On a compromise, rotate with no legacy id and accept the cost; the
+`legacy_key_read_enabled` WARN is never acceptable then.
+
+**Upgrade notes by host shape.**
+- **battleboardhq** (magic link + Google, `invitation_only`, pooled PostgreSQL under RLS, SPA;
+  no passwords; no `TokenEncrypter`): first the path the "Multi-tenant host asks" section
+  below names, then authentication v0.35.0 (+ golang-jwt v0.4.0, sdk v0.23.0 for the ring
+  forms; stores pgx v0.18.0 when it repins the store). Rows 3–5 in the three phases on the JWT
+  and, if it seals deliveries, the delivery key. **The pepper:** its challenge protector is
+  built today with the id **`primary`**, so the ring form MUST keep that id —
+  `AUTH_CHALLENGE_PEPPERS="primary:<current hex>,<new id>:<new hex>"` with
+  `AUTH_CHALLENGE_ACTIVE_PEPPER=primary` first — or every outstanding challenge and recovery
+  code stops verifying. Rows 6–10, 12–14 do not apply (no password flows).
+- **gps-three-sixty** (native Google OAuth → first-party sessions, bearer SPA, pgx + goredis;
+  no `TokenEncrypter`, no challenge pepper): the JWT ring is the one key it adopts. (a) repin,
+  set `AUTH_JWT_KEYS="k1:<new hex>"` and `AUTH_JWT_ACTIVE_KEY=legacy`, KEEP `AUTH_JWT_SECRET`
+  → boot line `jwt_active_key_id=legacy … jwt_legacy=yes`, nothing changes on the wire; (b)
+  with the fleet on (a), `AUTH_JWT_ACTIVE_KEY=k1`; (c) after the JWT window, unset
+  `AUTH_JWT_SECRET` → `jwt_legacy=no`. `AUTH_TOKEN_ISSUER` / `AUTH_TOKEN_AUDIENCE` are
+  optional (row 5). The delivery, provider-token and pepper rows and rows 6–10, 12–14 do not
+  apply. gps-360-go: nothing until it repins, then as gps-three-sixty.
+- **segovia/v2** (sdk v0.15.0, authentication v0.19.1): defer to its repin milestone. Its
+  pepper ring keeps whatever id it builds the protector with today.
+- **Generic hosts.** Run the Read-first grep. A host that sets only the single variables
+  repins with no change except the boot line (and row 9 if it hashes passwords). To adopt a
+  ring, follow *Operations runbooks* "Rotate a key" per key. Every ring field, once set,
+  leaves its single field nil: build the adapter from the ring (the README and the docs page
+  carry the snippet). A host that decrypts `oauth_accounts` tokens itself moves its reader to
+  the ring with legacy at the same time as the writer.
+- **Password hosts** (the auth-cms shape): rows 6, 7, 9, 10, 12–14. Wire hibp (fail-closed;
+  decide `CompromisedPasswordFailOpen`) or a blocklist file, or keep the
+  `password_breach_check_none` WARN; take cost 12 or a conscious `WithCost(10)`; repin the
+  store (pgx v0.18.0 / turso v0.17.0) or implement `UpgradeHash` and adopt
+  `RunPasswordHashUpgrade` so old hashes upgrade on login.
+- **Examples (#266).** Every example builds, vets and tests at `GOWORK=off` on these tags.
+  Pins moved by explicit `GOWORK=off go get`, then tidy:
+  - `auth-cms`: sdk v0.23.0, golang-jwt v0.4.0, authentication v0.35.0, bcrypt v0.3.0. It
+    wires the JWT, pepper, delivery and provider-token rings behind env (the single variables
+    otherwise), bcrypt at cost 12 and `authmem.UpgradeHash` (it runs
+    `RunPasswordHashUpgrade`); no breach checker.
+  - `production-baseline`: the same, plus authentication pgx v0.18.0 and authorization
+    v0.34.0. It signs with a JWT ring and no legacy id; `.env.example` moves to
+    `AUTH_JWT_KEYS` / `AUTH_JWT_ACTIVE_KEY` with `AUTH_JWT_SECRET` commented; the production
+    test asserts `auth: keys jwt_signer=ring jwt_active_key_id=k1 jwt_key_ids=k1 jwt_legacy=no`
+    beside the zero-WARN control, and a new test asserts the legacy WARN. Password flows are
+    disabled, so `password_breach_check_none` does not fire.
+  - `external-identity`: authentication v0.35.0 (no signer; nothing else).
+
+**Run and look.**
+- **#261 (core) on a real auth-cms binary:** the `auth: keys` line appears; with
+  `AUTH_TOKEN_ISSUER` and `AUTH_TOKEN_AUDIENCE` set, a fresh token answers **200** on
+  `/auth/me`, while a token missing `iss`, with the wrong `aud`, or expired answers **401**.
+  Across an issuer enable and rollback the old-shape bearer gets **401**, logout with the
+  refresh token **200**, and that refresh token **401** afterwards (the session was revoked).
+  Neither the JWT secret nor the refresh token appears in the logs.
+- **#262 (golang-jwt, `GOWORK=off`, sdk v0.23.0):** a token minted by the RELEASED golang-jwt
+  v0.3.0 verifies under `NewRing({legacy, k2}, WithLegacyKeyID("legacy"))`; a ring token
+  carries `kid:"k2"` and the old single-key verifier rejects it; a `kid`-less token without
+  the option is `ErrMissingKeyID`; a `kid=k2` token under a `{k1}` ring is refused naming
+  `"k2"` and no key.
+- **#259 (hibp, local HTTP servers, through the core's own policy):** found → **400**; not
+  found → accepted; upstream 500 fail-closed → **503**; fail-open → accepted with the WARN;
+  timeout fail-closed → **503**. No error carried the URL, the prefix or a hash. The tests
+  never call the real API.
+- **#265 (PG18, published authentication v0.35.0 + bcrypt v0.3.0):** a seeded cost-10 user
+  logs in through the real service at cost 12; the stored hash becomes `$2a$12$`,
+  `auth_revision` stays 1, the access token and refresh both work; a second login leaves the
+  hash unchanged; both sessions remain.
+- **#266 (auth-cms built at `GOWORK=off` against the tags):** boot line `auth: keys
+  jwt_signer=ring jwt_active_key_id=k2 jwt_key_ids=k1,k2,legacy jwt_legacy=yes …`; a login
+  token header `{"alg":"HS256","kid":"k2"}` and `/auth/me` **200**; a `kid`-less token from the
+  single-key signer **200** through legacy; a `kid`-less token under a key outside the ring
+  **401**; phase (a) boots with `jwt_active_key_id=legacy`. No key, token or password in the
+  logs.
+
+**The review record.**
+- **The plan** passed a four-reviewer gate on the draft (data-integration-reviewer: ship with
+  edits; lead-backend-engineer, platform-sre, architecture-steward), folded under "Decided by
+  gate": DI-1 (a legacy `oauth_accounts` row is never re-sealed by a login; the host sweep
+  and the zero-count gate), SRE-2 (the three-phase rotation, the legacy-active write), SRE-3
+  (hibp never wraps the transport error), SRE-9 (fail-closed is 503), BE-1 (minimum-length
+  rings), BE-2 (logout under an issuer), AS-3 (hibp is an integration; the new `passwords/`
+  category), and the rest as listed there.
+- **#261 (PR-3), lead-backend, ship-with-edits**, all folded before merge: **HIGH-1**, logout
+  decides "delegated" from the token's shape, so it still revokes across an Issuer/Audience
+  enable, change or rollback; **MED-1**, one shared shape helper; **MED-2**, the collision
+  check covers external providers' issuers; **MED-3**, the README states the timing residual
+  (row 14); **MED-4**, the README's "On repin (v0.35.0)" notes (rows 12, 13); **MED-5**, the
+  ring wiring docs; **L1–L6**. MED-3 triggered the rehash ruling below.
+- **#258, #260, #259, #262, #265, #266:** gated by `make guard && make check`, `GOWORK=off`
+  builds and mutation (bite) proofs: 11 (#258), 3 (#260), 23 (#259), 33 + 21 (#261), 16
+  (#262); #265 and #266 bite-proved the compare-and-swap and each ring wiring.
+- **CodeQL `go/weak-sensitive-data-hashing` on #259** (alert #18): hibp hashes the password
+  with SHA-1 because the k-anonymity range protocol requires it; the hash is never stored and
+  only its prefix is sent. The owner dismissed the alert, and a code comment in `hibp.go`
+  records why.
+
+**Owner rulings.** Ratified 2026-10-28 ("all recs"): **R-1 (a)** HS256 ring now, asymmetric +
+JWKS later; **R-2 (a)** WARN for a password host with no checker; **R-3 (a)** identifier-key
+rotation is documented only; **R-4 (b)** no lockout, the per-account budget is the control;
+**R-5 (a)** single-key roles log INFO only; **R-6 (a)** hibp + a list-less
+`BlocklistChecker`; **R-7 (a)** bcrypt 12 with the `WithCost(10)` hatch; **R-8 (b)** the WARN
+and phase (c), no `WithLegacyNotAfter`. During the build (2026-10-28): **rehash on login is
+pulled into the slice** (from MED-3); **(a) make it live now**, which added PR-3b (#265, the
+store `UpgradeHash`); **HIBP is not wired into any example**; CodeQL #18 dismissed.
+
+**As-built deviations a host can see.**
+- **`KeyIDs()` shipped as #260**, after #258 merged without it; `sdk/v0.23.0` carries both.
+- **Rehash on login is in the slice** (the plan's Notes had it as a follow-up), through a new
+  optional CAS port: `PasswordRepository.Set` / `Change` bump `auth_revision` and revoke every
+  session, so they cannot carry a rehash. It shipped dormant in authentication v0.35.0 and went
+  live with stores pgx v0.18.0 / turso v0.17.0 (#265, a store tag the plan did not have).
+- **No example wires hibp** (the plan had auth-cms behind `AUTH_HIBP=1`); the module is
+  published and documented.
+- **The boot line prefixes every attribute by role and joins ids with commas**
+  (`jwt_active_key_id=k2 jwt_key_ids=k1,k2,legacy jwt_legacy=yes`), not the plan's
+  `active_key_id=… key_ids=[…] legacy=yes`. An older `AESGCMRing` or a ring that reports only
+  an active id prints `_active_key_id` alone.
+- **A set ring leaves its single `Keys` field nil**, so wiring that still reads the single
+  field fails loudly.
+- **The issuer collision also covers external providers' issuers** (MED-2), and a
+  first-party token refused only because `Issuer`/`Audience` changed since it was minted
+  still logs out with its refresh token (HIGH-1; the plan covered only the expired-token
+  logout).
+- **`ParseKeyRingMinimum` / `ValidateMinimum` floor at 32**: a lower `min` is raised.
+- **Fail-closed returns the named sentinel `ErrPasswordBreachCheckUnavailable`** (still
+  `sdk.ErrUnavailable`, 503, as the plan said) and no longer wraps the checker's error (row
+  12); the fail-open WARN carries `error_kind`.
+- **The dummy hash is minted once per `New`** (boot cost, row 13); a hasher that cannot mint
+  it logs `password_timing_dummy_unavailable`.
+- **`ARCHITECTURE.md` counts fifty modules** with hibp; the plan's 48 was stale.
+- **#261's CI failed `TestDescribeKeyRole` under `go.work`**: sdk HEAD's `AESGCMRing` already
+  had `KeyIDs()`, so a real ring reported more than the test expected for the core's pinned
+  sdk v0.21.0. The test now uses a fake ring; the core's behaviour did not change.
+- **production-baseline did not build at `GOWORK=off` on `main` between #264 and #266**: #264
+  made its `main.go` call `DefaultIntegrityPolicyFor` while its go.mod pinned authorization
+  v0.32.0. #266 repinned authorization v0.34.0 and authentication pgx v0.18.0, which fixed it.
+- **The plan's step-3 host shapes were cold-verified after the last tag**, not at step 3,
+  against the final versions:
+  - **gps-three-sixty shape:** authentication v0.35.0 + authentication pgx v0.18.0 +
+    authorization v0.34.0 + authorization pgx v0.24.0 + goredis v0.6.0 + golang-jwt v0.4.0 +
+    bcrypt v0.3.0 + pgxdb v0.17.0 + sdk v0.23.0.
+  - **battleboardhq shape:** authentication v0.35.0 + authentication pgx v0.18.0 +
+    authorization v0.34.0 + authorization pgx v0.24.0 + jobs v0.8.0 + jobs pgx v0.9.0 +
+    golang-jwt v0.4.0 + google-uuid v0.2.0 + sendgrid v0.5.0 + oauth/google v0.3.0 +
+    pgxdb v0.17.0 + sdk v0.23.0.
+
+  Both select exactly these versions, report all modules verified, and build.
+
+**Verification record.**
+- `make guard` and `make check` pass on every PR. `live-stores` is green on `main` before each
+  tag (runs 40722442910, 40727926525, 40730117775, 40731499863, 40739145196).
+- **Store legs (#265).** pgx live on PostgreSQL 18: all five `PasswordHashUpgrade` cases pass,
+  bare and with `POSTGRES_TEST_SCHEMA=ids`, and the full suite passes under the schema. turso
+  `-tags=integration` on a local file: all five cases pass. Dropping `AND hash = @old` fails
+  both stores (`StaleOldHashNoChange`; `ConcurrentSingleWinner` with 8 of 8 reporting true).
+- **In-process rotation proofs (#266, `key_rotation_test.go`, the host's real config from
+  env).** JWT: in phase (a) old and new instances accept each other's tokens; in (b) every
+  token verifies and a pre-ring instance refuses `kid`-stamped tokens with 401 (why (b) waits
+  for the fleet); in (c) old tokens 401 and new ones pass. Delivery: pre-ring envelopes open
+  under the ring with legacy and fail once it is dropped. Provider tokens: legacy rows read
+  correctly and the count finds them. Pepper: an old code verifies through the overlap and is
+  refused after it. Errors carry no key material. Breaking each ring wiring fails its test.
+- **From the tags (#266):** every example `GOWORK=off go build`, `vet` and `test`; set C; the
+  run above; `make docs-build` builds the runbooks.
+- **This PR:** docs only; `make guard` and `make check` pass.
+
+**Known and deferred.**
+- **Part 4** (from S4d part 2 R-4 / R-5, carried by `NEXT.md`): `aal` / `methods` on delegated
+  tokens; `Identity.AuthTimeAsserted` (an sdk minor and three adapters).
+- **Follow-ups from the plan:** `ContextEncrypter` (AAD, FSK-7 (b)); HS384/HS512 rings; the
+  asymmetric signer + JWKS (R-1 (b)); `WithLegacyNotAfter` (R-8 (a)); a `guard --posture` ring
+  line; a pocket re-seal port for `oauth_accounts` (today a host-Go compare-and-swap sweep,
+  DI-1).
+- **No lockout** (R-4 (b)); the corrected opt-in shape stays in the plan if an auditor needs
+  the word.
+- **Unused accounts keep their old hashes** until a host sweep; the timing residual (row 14)
+  closes only as users log in.
+- **The blocklist compares after `TrimSpace` + `ToLower` only** (no Unicode normalization;
+  NFKC is not stdlib).
+- **A third-party signer that does not implement `KeyRingReporter`** prints `opaque` and gets
+  no legacy WARN.
+- **Pre-existing, not from this slice:** in a bare (no schema) local pgx run,
+  `TestInvitationAcceptanceUpgrade` and `TestOAuth2SessionUpgradePreservesBrowserSession` fail
+  with "oauth_clients table missing". They fail the same way on unchanged `main` and pass under
+  `POSTGRES_TEST_SCHEMA`. Follow-up.
+- battleboardhq's, gps-three-sixty's and segovia's repins happen in their own repositories.
+
 ## Multi-tenant host asks: route listing, H10 shape, fenced jobs default, invitation actor and decline by token (published 2026-10-28)
 
 Six annotated tags (not signed) on five modules, for issue #232, plus
