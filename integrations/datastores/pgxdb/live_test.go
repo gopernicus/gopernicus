@@ -58,10 +58,12 @@ func TestLive_OpenAndMigrate(t *testing.T) {
 		t.Fatalf("apply: %v", err)
 	}
 
-	// Ledger recorded exactly one row for the host-owned stream.
+	// Ledger recorded exactly one row for this fixture's migration. Other
+	// suites (the store suites) share the default source on a shared test
+	// database, so only this version is counted.
 	var n int
 	if err := db.QueryRow(ctx,
-		"SELECT count(*) FROM schema_migrations WHERE source = $1", defaultMigrationSource).Scan(&n); err != nil {
+		"SELECT count(*) FROM schema_migrations WHERE source = $1 AND version = '0001_init.sql'", defaultMigrationSource).Scan(&n); err != nil {
 		t.Fatalf("count ledger rows: %v", err)
 	}
 	if n != 1 {

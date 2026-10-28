@@ -64,7 +64,7 @@ func (r sessionActivityRow) sessionRow() sessionRow {
 }
 
 // SRE9: every ActivityRepository method runs on s.db, the pool, never on a
-// transaction the context carries (tursodb.QuerierFrom). A refresh reached
+// transaction the context carries (s.db.QuerierFrom). A refresh reached
 // inside a host Transact would otherwise CAS-miss on a connection that cannot
 // see the row and burn the session as reuse.
 
