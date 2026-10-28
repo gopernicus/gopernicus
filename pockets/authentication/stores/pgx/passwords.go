@@ -17,7 +17,10 @@ type PasswordStore struct {
 	qualified
 }
 
-var _ user.PasswordRepository = (*PasswordStore)(nil)
+var (
+	_ user.PasswordRepository   = (*PasswordStore)(nil)
+	_ user.PasswordHashUpgrader = (*PasswordStore)(nil)
+)
 
 // NewPasswordStore returns a PasswordStore backed by db.
 // It panics if db is nil; the caller owns the database lifecycle.
@@ -58,4 +61,16 @@ func (s *PasswordStore) Get(ctx context.Context, userID string) (string, error) 
 		return "", pgxdb.MapError(err)
 	}
 	return hash, nil
+}
+
+// UpgradeHash replaces the stored hash with newHash only while it still equals
+// oldHash, in one conditional UPDATE so concurrent upgrades have one winner. It
+// is not a credential change: auth_revision, sessions and grants are untouched.
+func (s *PasswordStore) UpgradeHash(ctx context.Context, userID, oldHash, newHash string) (bool, error) {
+	q := `UPDATE ` + s.table(passwordsTable) + ` SET hash = @new WHERE user_id = @id AND hash = @old`
+	tag, err := s.db.Exec(ctx, q, pgx.NamedArgs{"id": userID, "old": oldHash, "new": newHash})
+	if err != nil {
+		return false, pgxdb.MapError(err)
+	}
+	return tag.RowsAffected() == 1, nil
 }

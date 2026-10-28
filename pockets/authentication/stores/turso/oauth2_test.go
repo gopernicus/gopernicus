@@ -47,10 +47,12 @@ func oauthSQLite(t *testing.T) (*tursodb.DB, auth.Repositories, string) {
 }
 
 func TestConformance_LocalSQLite(t *testing.T) {
-	storetest.Run(t, func(t *testing.T) auth.Repositories {
+	newRepos := func(t *testing.T) auth.Repositories {
 		_, repos, _ := oauthSQLite(t)
 		return repos
-	})
+	}
+	storetest.Run(t, newRepos)
+	storetest.RunPasswordHashUpgrade(t, newRepos)
 }
 
 func seedOAuthBrowser(t *testing.T, db *tursodb.DB, id string, now time.Time) session.Session {

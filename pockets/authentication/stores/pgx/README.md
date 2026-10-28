@@ -47,6 +47,7 @@ option — SQLite has no schemas** (a host switches dialect by one import + one
 | `AuditTables(opts ...Option) []pgxdb.AppendOnlyTable` | the append-only tables this store owns — `security_events`, schema-qualified under `WithSchema`, verified against the trigger function `0022` ships, with the one `DefinerFunction` `0024` ships (`security_events_purge_before(pg_catalog.timestamptz, pg_catalog.int4)`). A migrator preflights the runtime role with `pgxdb.InspectTablePrivileges(ctx, q, role, pgx.AuditTables(opts...)...)`, deciding exactly as the boot probe will |
 | `Option` | construction option, accepted by `Repositories` and by every `NewXStore(db, opts ...Option)` constructor, so a host composing its own bundle gets the same seam |
 | `WithSchema(s pgxdb.Schema) Option` | places every table these stores touch in `s`; the zero `Schema` is the default and renders today's unqualified SQL byte-for-byte. It never panics — validation happened in `pgxdb.NewSchema` at the host |
+| `PasswordStore.UpgradeHash(ctx, userID, oldHash, newHash string) (bool, error)` | implements `user.PasswordHashUpgrader`: one conditional `UPDATE user_passwords SET hash = @new WHERE user_id = @id AND hash = @old` on the pool, schema-qualified under `WithSchema`; true only when it swapped the row. It bumps no `auth_revision` and revokes no session, grant or challenge. See [Rehash on login](#rehash-on-login) |
 | `ExportMigrations(dst string) error` | copies the canonical `migrations/*.sql` into the host's dir |
 | `MigrationsFS` / `MigrationsDir` | the embedded canonical migration files |
 
@@ -187,6 +188,22 @@ DISTINCT FROM` the observed stamp, and the observed `rotation_count`. All four
 run on the pool, never on a transaction the context carries. The only
 supported manual write is the grandfather reset, `UPDATE sessions SET
 last_rotated_at = NULL …`; never backfill a value.
+
+### Rehash on login
+
+`PasswordStore` implements `user.PasswordHashUpgrader` (no schema change).
+`UpgradeHash` is one compare-and-swap statement, `UPDATE user_passwords SET hash = @new WHERE user_id = @id AND hash = @old`: it reports true
+only when it replaced the row, so concurrent upgrades from the same old hash
+have exactly one winner, and a stale old hash, a user with no password or an
+unknown user report false with a nil error. It runs on the pool, outside any transaction, and honours `WithSchema`. Unlike `Set` and `Change` it is
+not a credential change: `auth_revision` is untouched and no session, grant or
+challenge is revoked. `storetest.RunPasswordHashUpgrade` is its conformance
+suite.
+
+Rehash-on-login is live with this store tag together with
+`pockets/authentication` v0.35.0 and `integrations/cryptids/bcrypt` v0.3.0:
+after a successful password verification the service re-hashes a password
+stored below the hasher's cost and stores it through `UpgradeHash`.
 
 ### Global session revocation
 
