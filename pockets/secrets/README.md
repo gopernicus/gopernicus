@@ -125,7 +125,7 @@ executable contract every store runs, including the atomicity cases (a failing
 audit append leaves the change unwritten; one refused record in an
 `AppendAudit` batch writes none of it). `stores/pgx` is the PostgreSQL module;
 see its README for the schema option and the live suite. It requires
-PostgreSQL 14 or later and ships three migrations:
+PostgreSQL 18 or later and ships three migrations:
 
 - `0002_secrets_audit_integrity.sql` is **required**: `pgx.Open` refuses a
   database without it, naming the file. It adds the outcome and correlation

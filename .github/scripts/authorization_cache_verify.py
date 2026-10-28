@@ -248,8 +248,8 @@ def sql_baseline(fixture, source, postgres_bin, mode="all"):
     pg = Path(postgres_bin)
     fixture.env["PATH"] = str(pg) + os.pathsep + fixture.env.get("PATH", "")
     version = fixture.run([pg / "postgres", "--version"])
-    if " 17." not in version:
-        raise ValueError("fixture requires PostgreSQL 17")
+    if " 18." not in version:
+        raise ValueError("fixture requires PostgreSQL 18")
     data = fixture.root / "pgdata"
     fixture.run([pg / "initdb", "-D", data, "-U", "fixture", "-A", "trust",
                  "--encoding=UTF8", "--locale=en_US.UTF-8"])
@@ -352,7 +352,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("sql", "mounted", "benchmark", "all"), default="all")
     parser.add_argument("--source", type=Path, default=Path(__file__).resolve().parents[2])
-    parser.add_argument("--postgres-bin", default="/opt/homebrew/opt/postgresql@17/bin")
+    parser.add_argument("--postgres-bin", default="/opt/homebrew/opt/postgresql@18/bin")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args(argv)
     report = {"mode": args.mode, "status": "failed",

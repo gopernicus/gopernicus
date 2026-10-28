@@ -2,8 +2,11 @@ package sdk
 
 import (
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 )
 
 const (
@@ -33,7 +36,10 @@ type IDGenerateFunc func() (string, error)
 func DatabaseID() (string, error) { return "", nil }
 
 // IDGenerator generates identifiers using Func. Its zero value emits NanoIDs
-// containing DefaultIDLength characters drawn from DefaultIDAlphabet.
+// containing DefaultIDLength characters drawn from DefaultIDAlphabet. A layer
+// that resolves a class default through Or treats the zero value as "the class
+// default" instead; to force NanoIDs there, pass NewIDGenerator with a
+// generator from NanoID("", 0).
 type IDGenerator struct {
 	Func IDGenerateFunc // nil → the default nanoid generator
 }
@@ -51,6 +57,17 @@ func (g IDGenerator) Generate() (string, error) {
 		fn = defaultNanoID
 	}
 	return fn()
+}
+
+// Or returns g when it is configured (Func != nil); otherwise a generator over
+// fn. The zero IDGenerator therefore means "the class default wherever Or is
+// used" — a host that wants NanoID for a class that defaults to UUIDv7 passes
+// sdk.NewIDGenerator(nano) with nano from sdk.NanoID("", 0), not the zero value.
+func (g IDGenerator) Or(fn IDGenerateFunc) IDGenerator {
+	if g.Func != nil {
+		return g
+	}
+	return IDGenerator{Func: fn}
 }
 
 // MustGenerate is Generate for call sites that cannot propagate an error
@@ -123,6 +140,58 @@ func NanoID(alphabet string, size int) (IDGenerateFunc, error) {
 		}
 		return string(id), nil
 	}, nil
+}
+
+// UUIDv7 returns an IDGenerateFunc emitting RFC 9562 version-7 UUIDs in the
+// canonical lowercase 8-4-4-4-12 text form: a 48-bit Unix-millisecond timestamp,
+// a 12-bit sub-millisecond fraction (RFC 9562 §6.2 method 3), then 62 random
+// bits. Mints from ONE returned generator never sort before earlier mints from
+// the same generator; no ordering is promised across generators or processes.
+func UUIDv7() IDGenerateFunc {
+	var (
+		mu   sync.Mutex
+		last uint64
+	)
+	return func() (string, error) {
+		now := time.Now()
+		frac := uint64(now.Nanosecond()%1_000_000) * 4096 / 1_000_000
+		v := uint64(now.UnixMilli())<<12 | frac
+
+		// Clamping the combined 60-bit value lets a full fraction carry into
+		// the milliseconds, so a burst or a clock step back stays ordered.
+		mu.Lock()
+		if v <= last {
+			v = last + 1
+		}
+		last = v
+		mu.Unlock()
+
+		var b [16]byte
+		ms := v >> 12
+		b[0] = byte(ms >> 40)
+		b[1] = byte(ms >> 32)
+		b[2] = byte(ms >> 24)
+		b[3] = byte(ms >> 16)
+		b[4] = byte(ms >> 8)
+		b[5] = byte(ms)
+		b[6] = 0x70 | byte(v>>8)&0x0f
+		b[7] = byte(v)
+		// crypto/rand.Read never returns an error and always fills b (Go 1.24+).
+		rand.Read(b[8:])
+		b[8] = 0x80 | b[8]&0x3f
+
+		var out [36]byte
+		hex.Encode(out[0:8], b[0:4])
+		out[8] = '-'
+		hex.Encode(out[9:13], b[4:6])
+		out[13] = '-'
+		hex.Encode(out[14:18], b[6:8])
+		out[18] = '-'
+		hex.Encode(out[19:23], b[8:10])
+		out[23] = '-'
+		hex.Encode(out[24:36], b[10:16])
+		return string(out[:]), nil
+	}
 }
 
 func uniqueBytes(alphabet string) error {

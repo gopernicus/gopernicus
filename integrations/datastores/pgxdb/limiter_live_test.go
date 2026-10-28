@@ -3,7 +3,7 @@
 // sliding-window arithmetic. Absent POSTGRES_TEST_DSN they skip LOUDLY — a silent
 // green here would claim ratelimiter.Limiter conformance with nothing verified.
 //
-//	docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+//	docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:18
 //	POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' go test -race ./...
 package pgxdb
 
@@ -477,7 +477,7 @@ func openScopedToSchema(t *testing.T, schema string) *DB {
 
 // errMapDDL makes both halves of the port fail with a SQLSTATE MapError knows:
 // the CHECK rejects Allow changing request_count to 1 (23514 → ErrInvalidInput)
-// and the ON DELETE RESTRICT child row rejects Reset's DELETE (23503 →
+// and the ON DELETE RESTRICT child row rejects Reset's DELETE (23001 on PostgreSQL 18 →
 // ErrInvalidReference). The seeded row uses a count the CHECK permits.
 var errMapDDL = []string{
 	`CREATE SCHEMA IF NOT EXISTS ` + errMapSchema,

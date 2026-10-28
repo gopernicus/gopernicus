@@ -1,9 +1,11 @@
 package pgxdb
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
@@ -589,4 +591,119 @@ func TestLive_RunMigrations_SchemaPrivilegeMatrix(t *testing.T) {
 			t.Fatalf("err = %v, want wrapping sdk.ErrForbidden", err)
 		}
 	})
+}
+
+// floorAdvisories decodes buf's JSON log lines and returns the ones carrying
+// the Open-time version advisory's stable attrs.
+func floorAdvisories(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, rec := range jsonRecords(t, buf) {
+		if _, ok := rec["server_version_num"]; ok && rec["level"] == "WARN" {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+// TestLive_ServerVersion_AtOrAboveFloorMigrates proves the positive side of the
+// floor on POSTGRES_TEST_DSN: Open logs no advisory, the probe reads a server
+// at or above MinServerVersionNum, and a migration calling uuidv7() applies.
+func TestLive_ServerVersion_AtOrAboveFloorMigrates(t *testing.T) {
+	dsn := schemaLiveDSN(t)
+	ctx := context.Background()
+
+	var buf bytes.Buffer
+	db, err := Open(ctx, Config{DSN: sdk.Secret(dsn), Logger: slog.New(slog.NewJSONHandler(&buf, nil))})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if got := floorAdvisories(t, &buf); len(got) != 0 {
+		t.Fatalf("Open logged a floor advisory on a supported server: %v", got)
+	}
+
+	num, version, err := readServerVersion(ctx, db)
+	if err != nil {
+		t.Fatalf("readServerVersion: %v", err)
+	}
+	if num < MinServerVersionNum {
+		t.Fatalf("POSTGRES_TEST_DSN server %q (%d) is below the floor %d; point it at PostgreSQL 18 or later", version, num, MinServerVersionNum)
+	}
+
+	schema := disposableSchema(t, db, "pgxdb_floor_live")
+	fsys := fstest.MapFS{
+		"m/0001_floor.sql": {Data: []byte(`CREATE TABLE floor_check (id TEXT COLLATE "C" PRIMARY KEY DEFAULT uuidv7()::text, note TEXT);`)},
+	}
+	if err := RunMigrations(ctx, db, fsys, "m", WithSchema(schema)); err != nil {
+		t.Fatalf("RunMigrations on a supported server: %v", err)
+	}
+	var id string
+	if err := db.QueryRow(ctx, `INSERT INTO "pgxdb_floor_live".floor_check (note) VALUES ('x') RETURNING id`).Scan(&id); err != nil {
+		t.Fatalf("insert with the uuidv7() default: %v", err)
+	}
+	if len(id) != 36 || id[14] != '7' {
+		t.Fatalf("default id %q is not a version-7 UUID", id)
+	}
+}
+
+// TestLive_BelowFloor_RunMigrationsRefuses proves the negative side on
+// POSTGRES_BELOW_FLOOR_TEST_DSN (a server older than PostgreSQL 18): both Open
+// paths succeed and log exactly one advisory, and RunMigrations refuses with
+// ErrServerVersion before creating the schema or the ledger.
+func TestLive_BelowFloor_RunMigrationsRefuses(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_BELOW_FLOOR_TEST_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_BELOW_FLOOR_TEST_DSN not set — the PostgreSQL 18 floor refusal NOT verified")
+	}
+	ctx := context.Background()
+
+	for name, retry := range map[string]RetryPolicy{"ping": {}, "retry": {Attempts: 2}} {
+		var buf bytes.Buffer
+		db, err := Open(ctx, Config{DSN: sdk.Secret(dsn), Retry: retry, Logger: slog.New(slog.NewJSONHandler(&buf, nil))})
+		if err != nil {
+			t.Fatalf("%s: Open must not fail below the floor: %v", name, err)
+		}
+		got := floorAdvisories(t, &buf)
+		_ = db.Close()
+		if len(got) != 1 {
+			t.Fatalf("%s: floor advisories = %d, want 1: %s", name, len(got), buf.String())
+		}
+		if got[0]["required"] != float64(MinServerVersionNum) || got[0]["server_version_num"].(float64) >= MinServerVersionNum {
+			t.Fatalf("%s: advisory attrs = %v", name, got[0])
+		}
+		if strings.Contains(buf.String(), dsn) {
+			t.Fatalf("%s: advisory carries the DSN: %s", name, buf.String())
+		}
+	}
+
+	db := openLive(t, dsn)
+	const schemaName = "pgxdb_below_floor_live"
+	disposableSchema(t, db, schemaName)
+	schema, err := NewSchema(schemaName)
+	if err != nil {
+		t.Fatalf("NewSchema: %v", err)
+	}
+	ledgerBefore := relationExists(t, db, "public."+migrationsTable)
+	fsys := fstest.MapFS{"m/0001_floor.sql": {Data: []byte("CREATE TABLE below_floor_check (id TEXT PRIMARY KEY);")}}
+
+	for name, opts := range map[string][]MigrateOption{"default": nil, "schema": {WithSchema(schema)}} {
+		err := RunMigrations(ctx, db, fsys, "m", opts...)
+		if !errors.Is(err, ErrServerVersion) {
+			t.Fatalf("%s stream: RunMigrations = %v, want ErrServerVersion", name, err)
+		}
+		t.Logf("%s stream refusal: %v", name, err)
+		if !strings.Contains(err.Error(), "hold pgxdb at v0.16.x") || strings.Contains(err.Error(), dsn) {
+			t.Fatalf("%s stream: refusal text = %q", name, err)
+		}
+	}
+	if n := countRows(t, db, "SELECT count(*) FROM pg_namespace WHERE nspname = $1", schemaName); n != 0 {
+		t.Fatalf("the refused schema stream created %q", schemaName)
+	}
+	if relationExists(t, db, "public.below_floor_check") {
+		t.Fatal("the refused default stream applied its migration")
+	}
+	if ledgerAfter := relationExists(t, db, "public."+migrationsTable); ledgerAfter != ledgerBefore {
+		t.Fatalf("public ledger existence changed across a refused run: %v → %v", ledgerBefore, ledgerAfter)
+	}
 }

@@ -5105,7 +5105,7 @@ SMTP/real body senders, a durable/shared limiter, and an HTTPS `PublicAuthBaseUR
 ## Datastores — {turso, pgx} out of the box, or none at all
 
 Both dialect stores ship and pass the same `storetest` suite (live runs recorded
-in NOTES.md; turso against libSQL, pgx against docker postgres:17 with `C`
+in NOTES.md; turso against libSQL, pgx against docker PostgreSQL with `C`
 collation). A host may satisfy `Repositories` itself —
 `examples/auth-cms/pockets/authentication/outbound/authmem` is the zero-infra proof for every port.
 Conformance is env-gated: turso via `-tags=integration` + `TURSO_*`; pgx via

@@ -1,6 +1,6 @@
 // Conformance tests hit a live PostgreSQL database. Run with:
 //
-//	docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+//	docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:18
 //	POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' go test ./...
 //
 // Absent POSTGRES_TEST_DSN the suite skips loudly. POSTGRES_TEST_SCHEMA is

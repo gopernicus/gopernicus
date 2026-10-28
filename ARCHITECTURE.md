@@ -16,7 +16,7 @@ worked example `examples/cms`.
     cryptids/go-webauthn/ module …/integrations/cryptids/go-webauthn    — a connector (go-webauthn/webauthn; the WebAuthn relying-party port)
     cryptids/golang-jwt/  module …/integrations/cryptids/golang-jwt     — a connector (golang-jwt/jwt v5)
     cryptids/google-uuid/ module …/integrations/cryptids/google-uuid    — a connector (google/uuid v4/v7)
-    datastores/pgxdb/       module …/integrations/datastores/pgxdb          — a connector (jackc/pgx v5; multi-port: transaction.Transactor + ratelimiter)
+    datastores/pgxdb/       module …/integrations/datastores/pgxdb          — a connector (jackc/pgx v5; multi-port: transaction.Transactor + ratelimiter; PostgreSQL 18 floor: RunMigrations refuses older servers)
     datastores/turso/     module …/integrations/datastores/turso        — a connector (sdk + libsql); its opt-in localfile package adds modernc.org/sqlite because libsql's file: mode delegates to a registered SQLite driver
     email/sendgrid/       module …/integrations/email/sendgrid          — a connector (sendgrid/sendgrid-go)
     encoding/rsc-qr/      module …/integrations/encoding/rsc-qr         — a connector (rsc.io/qr; QR modules for the views/goth TOTP page)

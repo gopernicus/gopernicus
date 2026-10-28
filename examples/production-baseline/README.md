@@ -138,10 +138,10 @@ migrator is a member of the owner of `security_events`.
 
 ## First run
 
-Postgres 17 in docker, on a free port:
+Postgres 18 in docker, on a free port:
 
 ```sh
-docker run --rm -d --name baseline-pg -p 127.0.0.1:55491:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+docker run --rm -d --name baseline-pg -p 127.0.0.1:55491:5432 -e POSTGRES_PASSWORD=postgres postgres:18
 cd examples/production-baseline
 cp .env.example .env
 # in .env: uncomment DB_SSLMODE=disable (local docker has no TLS), comment out

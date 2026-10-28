@@ -160,7 +160,7 @@ altered. It never refuses — SQLite has no privileges to probe.
 - **`INSERT OR REPLACE` never.** It deletes the conflicting row without firing
   DELETE triggers. No path on this table may use it, or any upsert: the rail is
   INSERT-only.
-- PostgreSQL hosts use the pgx sibling instead: it needs PostgreSQL 14 or later
+- PostgreSQL hosts use the pgx sibling instead: it needs PostgreSQL 18 or later
   and a two-role posture whose runtime role holds USAGE on the
   `security_events_seq` sequence. Turso has neither roles nor a sequence.
 

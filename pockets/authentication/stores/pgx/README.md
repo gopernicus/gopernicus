@@ -203,7 +203,7 @@ committed, and the operation is safe to re-run.
 
 ### Audit rail (`0021` and `0022`)
 
-Both files require **PostgreSQL 14 or later** (`CREATE OR REPLACE TRIGGER`) and
+Both files require **PostgreSQL 18 or later** (the pgxdb migration floor) and
 begin with `SET LOCAL lock_timeout = '5s'`: the pending stream runs in one
 transaction, so a file blocked behind a long-running reader aborts the whole
 stream — nothing applied — and the host retries, instead of queueing logins
@@ -433,7 +433,7 @@ The live conformance run is this store's dialect-parity gate. Spin a local
 database and run it:
 
 ```sh
-docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:18
 POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' \
   go test ./...
 ```

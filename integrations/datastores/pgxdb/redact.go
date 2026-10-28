@@ -1,6 +1,9 @@
 package pgxdb
 
-import "net/url"
+import (
+	"net/url"
+	"strings"
+)
 
 // redactedDSN replaces both a masked password and an entirely unparseable DSN
 // in RedactDSN's output.
@@ -35,4 +38,16 @@ func RedactDSN(dsn string) string {
 		u.RawQuery = q.Encode()
 	}
 	return u.String()
+}
+
+// redactText masks every occurrence of dsn (as RedactDSN renders it) and of
+// password in s, for free text such as a driver error that may echo either.
+func redactText(s, dsn, password string) string {
+	if dsn != "" {
+		s = strings.ReplaceAll(s, dsn, RedactDSN(dsn))
+	}
+	if password != "" {
+		s = strings.ReplaceAll(s, password, redactedDSN)
+	}
+	return s
 }

@@ -136,7 +136,7 @@ The live conformance run is this store's dialect-parity gate. Spin a local
 database and run it:
 
 ```sh
-docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:18
 POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' \
   go test -count=1 ./...
 ```
