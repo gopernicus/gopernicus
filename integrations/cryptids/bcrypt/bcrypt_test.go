@@ -153,3 +153,40 @@ func TestSeventyTwoByteBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestNeedsRehash(t *testing.T) {
+	mint := func(cost int) string {
+		t.Helper()
+		hash, err := xbcrypt.GenerateFromPassword([]byte("stored password"), cost)
+		if err != nil {
+			t.Fatalf("GenerateFromPassword(%d): %v", cost, err)
+		}
+		return string(hash)
+	}
+	cases := []struct {
+		name string
+		hash string
+		want bool
+	}{
+		{"cost 10", mint(10), true},
+		{"cost 12", mint(12), false},
+		{"cost 14", mint(14), false},
+		{"garbage", "not-a-bcrypt-hash", false},
+		{"empty", "", false},
+		{"truncated prefix", "$2a$", false},
+	}
+	var zero bcrypt.Hasher
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := bcrypt.New().NeedsRehash(tc.hash); got != tc.want {
+				t.Errorf("New().NeedsRehash = %v, want %v", got, tc.want)
+			}
+			if got := zero.NeedsRehash(tc.hash); got != tc.want {
+				t.Errorf("zero-value NeedsRehash = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if bcrypt.New(bcrypt.WithCost(10)).NeedsRehash(cases[0].hash) {
+		t.Error("a cost-10 hash under WithCost(10) needs no rehash")
+	}
+}

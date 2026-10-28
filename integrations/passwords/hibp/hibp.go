@@ -145,6 +145,10 @@ func New(opts ...Option) (*Checker, error) {
 // configured minimum count. A non-nil error means the check could not complete;
 // it never carries the password, its hash, the prefix or the request URL.
 func (c *Checker) IsCompromised(ctx context.Context, password string) (bool, error) {
+	// The Pwned Passwords range API requires SHA-1 for its k-anonymity prefix
+	// lookup. The digest lives only in memory: just its 5-character prefix is
+	// sent and the rest is compared locally against the response. It is never
+	// stored, logged or sent whole; password storage uses bcrypt.
 	sum := sha1.Sum([]byte(password))
 	digest := strings.ToUpper(hex.EncodeToString(sum[:]))
 	prefix, suffix := digest[:prefixLength], digest[prefixLength:]

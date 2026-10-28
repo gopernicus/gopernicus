@@ -15,6 +15,7 @@ bcrypt's algorithm limit without adding minimum-length or complexity rules.
 | `New(opts ...Option) *Hasher` | Constructs a hasher using `DefaultCost`. |
 | `WithCost(cost int) Option` | Sets hashing cost; values outside the library's supported range fall back to `DefaultCost`. |
 | `Hasher.Cost() int` | Reports the cost new hashes are generated at (authentication's optional `CostReporter` shape). |
+| `Hasher.NeedsRehash(hash) bool` | True when the stored hash's cost is below `Cost()`; false for an equal or higher cost and for a malformed or empty hash (never panics). |
 | `Hasher.HashPassword(password) (string, error)` | Returns a self-describing bcrypt hash. |
 | `Hasher.VerifyPassword(hash, password) error` | Returns nil on a match; uses the hash's stored cost and the library's constant-time comparison. |
 | `ErrPasswordTooLong` | Returned by both methods for passwords over 72 bytes; wraps `sdk.ErrInvalidInput`. |
@@ -28,8 +29,11 @@ Since v0.3.0 the default cost is **12** (it was the library default, 10). Cost 1
 takes roughly 250 ms per hash on a 2024 server core, about four times cost 10.
 Registration, password set, change and reset, and logins against hashes minted at
 12 pay that latency; logins against existing cost-10 hashes are unchanged because
-verification uses the cost stored in the hash. There is no rehash on login:
-existing hashes stay at their stored cost until the password is next set.
+verification uses the cost stored in the hash. Existing hashes stay at their
+stored cost until rehashed: after a successful `VerifyPassword`, a caller can
+check `NeedsRehash(hash)` and store `HashPassword(password)` to lift a cost-10
+hash to the configured cost (rehash-on-login). A hash at or above the configured
+cost is never downgraded.
 
 A host that needs the old latency opts back with `bcrypt.New(bcrypt.WithCost(10))`.
 `Cost()` lets authentication report a production `password_hash_cost_low` posture
@@ -50,7 +54,7 @@ lets standard HTTP handling report unsupported password input as a client error.
 ## Testing
 
 Run `go test ./...`. Tests cover round trips, mismatches, randomized salts,
-configured/default cost (12, `Cost()`, a cost-10 hash still verifying), and the 72-byte boundary for hashing and verification,
+configured/default cost (12, `Cost()`, a cost-10 hash still verifying, `NeedsRehash`), and the 72-byte boundary for hashing and verification,
 including multibyte passwords and input-error classification. A local interface
 assertion checks the consumer's method set without importing a pocket.
 

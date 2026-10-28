@@ -79,6 +79,18 @@ func (h *Hasher) Cost() int {
 	return h.cost
 }
 
+// NeedsRehash reports whether hash was generated below Cost(), so a caller that
+// has just verified the password can store a fresh hash (rehash-on-login). A
+// malformed or empty hash reports false: it cannot be judged, and replacing it
+// is not this method's decision.
+func (h *Hasher) NeedsRehash(hash string) bool {
+	cost, err := bcrypt.Cost([]byte(hash))
+	if err != nil {
+		return false
+	}
+	return cost < h.Cost()
+}
+
 // HashPassword returns a self-describing bcrypt hash of password. It returns
 // ErrPasswordTooLong for input over bcrypt's 72-byte limit rather than letting
 // the algorithm truncate.
