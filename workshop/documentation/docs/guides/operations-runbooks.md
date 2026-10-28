@@ -559,9 +559,17 @@ Erasure is irreversible and composes across pockets; run every step and record e
    sessions, grants, challenges and the act-as-user service accounts with their keys, removes or
    blanks the invitations addressed to the person, and appends `user_erased` with the counts. A
    retry is a 200 with `changed:false`. The `users` row and every pseudonymous id survive.
-3. **Remove the authorization facts** for `user:<id>`: list them with
-   `Roles.ListRoleAssignmentsBySubject` and remove each through the bundled role routes or
-   `Mutations.UnassignRole`/`RevokeRelationship` — an executed step, not a note.
+3. **Remove the authorization facts** for `user:<id>`. A host that wires
+   `AdministrationConfig.BeforeErase` (authentication v0.36.0) has this done server-side by step
+   2: the hook runs before the erase transaction and revokes the person's role assignments in
+   every scope, protected relations first, with the administrator as audit actor and reason
+   `user_erase`. A **409** with the roles intact is the host's integrity rule (the last owner or
+   admin): add another, re-run. A **409** after the roles vanished means the hook ran and the
+   store refused (a held claim; logged `auth: erase refused after BeforeErase ran`): settle the
+   claim (step 1), re-run. Re-running the erase is idempotent and sweeps a grant that raced in.
+   Without the hook, list them with `Roles.ListRoleAssignmentsBySubject` and remove each through
+   the bundled role routes or `Mutations.UnassignRole`/`RevokeRelationship` — an executed step,
+   not a note.
 4. **Delete the person's inquiries**: `DeleteByEmail(ctx, email)` on the wired cms eraser (ASCII
    case-fold equality), for each address the person used.
 5. **Purge sealed delivery rows**: `Queue.PurgeTerminal` for the terminal fenced jobs that carried

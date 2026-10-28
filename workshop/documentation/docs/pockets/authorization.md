@@ -448,9 +448,9 @@ routes and the authentication pocket's machine routes.
 
 | Module | Version | Notes |
 | --- | --- | --- |
-| `pockets/authorization` | v0.32.0 | Core, `stores/memory`, `stores/storetest` conformance |
-| `pockets/authorization/stores/pgx` | v0.23.0 | `migrations/0001_iam_tuples.sql` and `0003`–`0007` (the operation ledger, fencing, audit integrity and immutability, operation expiry), optional `tuple_cache_migrations/0002_iam_tuple_cache.sql` |
-| `pockets/authorization/stores/turso` | v0.22.0 | The same files for SQLite/Turso |
+| `pockets/authorization` | v0.34.0 | Core, `stores/memory`, `stores/storetest` conformance |
+| `pockets/authorization/stores/pgx` | v0.24.0 | `migrations/0001_iam_tuples.sql` and `0003`–`0007` (the operation ledger, fencing, audit integrity and immutability, operation expiry), optional `tuple_cache_migrations/0002_iam_tuple_cache.sql` |
+| `pockets/authorization/stores/turso` | v0.23.0 | The same files for SQLite/Turso |
 | `pockets/authorization/stores/goredis` | v0.6.0 | TupleCache backend, protocol 2; optional `WithIntegrityKeys` |
 
 Hosts apply the schema before boot; constructors validate it and never migrate.
