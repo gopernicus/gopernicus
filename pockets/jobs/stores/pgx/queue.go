@@ -121,13 +121,13 @@ func NewQueueStore(db *pgxdb.DB, opts ...Option) *Queue {
 
 // Enqueue inserts one pending job. A caller-supplied ID that already exists
 // yields sdk.ErrAlreadyExists (the idempotency key, via the primary-key unique
-// violation); an empty ID is generated. The scheduled_for, priority, and
-// max_attempts are stored verbatim — the store invents no defaults (that is the
+// violation); an empty ID yields sdk.ErrInvalidInput. The scheduled_for,
+// priority, and max_attempts are stored verbatim — the store invents no defaults (that is the
 // service's job).
 func (q *Queue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error) {
 	id := in.ID
 	if id == "" {
-		id = newID("job")
+		return job.Job{}, errIDRequired
 	}
 	now := time.Now().UTC()
 	j := job.Job{

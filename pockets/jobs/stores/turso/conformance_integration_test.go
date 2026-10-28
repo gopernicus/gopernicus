@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/jobs"
 	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	schedule "github.com/gopernicus/gopernicus/pockets/jobs/logic/schedules"
 	"github.com/gopernicus/gopernicus/pockets/jobs/stores/storetest"
@@ -65,6 +66,22 @@ func TestConformance_Schedules(t *testing.T) {
 	storetest.RunSchedules(t, func(t *testing.T) schedule.Repository {
 		db := openAndMigrate(t, url, token)
 		return NewScheduleStore(db)
+	})
+}
+
+// TestConformance_IDs runs the shared id-minting suite through jobs.New over a
+// live Turso/libSQL database: the services mint, the stores persist verbatim,
+// and an empty id is sdk.ErrInvalidInput.
+func TestConformance_IDs(t *testing.T) {
+	url, token := requireTursoEnv(t)
+
+	storetest.RunIDs(t, func(t *testing.T) jobs.Repositories {
+		db := openAndMigrate(t, url, token)
+		return jobs.Repositories{
+			Queue:       NewQueueStore(db, WithLease(storetest.Lease)),
+			FencedQueue: NewFencedQueueStore(db),
+			Schedules:   NewScheduleStore(db),
+		}
 	})
 }
 

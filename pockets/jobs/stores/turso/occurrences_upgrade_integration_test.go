@@ -18,7 +18,7 @@ func TestOccurrencesMigrationPreservesSchedules(t *testing.T) {
 	// Restore this disposable fixture to migration 0003, retaining its schedule.
 	repo := NewScheduleStore(db)
 	now := time.Now().UTC()
-	sch, err := repo.Ensure(ctx, schedule.Ensure{Name: "legacy", Kind: "demo", Spec: schedule.Spec{Every: time.Hour}, Payload: []byte(`{"legacy":true}`)}, now)
+	sch, err := repo.Ensure(ctx, schedule.Ensure{ID: "legacy-schedule", Name: "legacy", Kind: "demo", Spec: schedule.Spec{Every: time.Hour}, Payload: []byte(`{"legacy":true}`)}, now)
 	if err != nil {
 		t.Fatal(err)
 	}

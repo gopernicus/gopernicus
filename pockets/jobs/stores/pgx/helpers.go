@@ -1,11 +1,11 @@
 package pgx
 
 import (
-	"crypto/rand"
 	"embed"
-	"encoding/hex"
+	"fmt"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // MigrationsFS holds the embedded schema (app-owned). cmd wires it into the
@@ -16,6 +16,11 @@ var MigrationsFS embed.FS
 
 // MigrationsDir is the directory within MigrationsFS holding the .sql files.
 const MigrationsDir = "migrations"
+
+// errIDRequired rejects an empty job or schedule id: the jobs services mint ids
+// and the store never does, so an empty-id generator fails loudly instead of
+// turning the next insert into a false sdk.ErrAlreadyExists.
+var errIDRequired = fmt.Errorf("jobs pgx: id required; the jobs service mints it: %w", sdk.ErrInvalidInput)
 
 // scanner abstracts pgx.Row and pgx.Rows for the shared Claim scan.
 type scanner = pgxdb.Scanner
@@ -28,11 +33,4 @@ func payloadValue(p []byte) string {
 		return "{}"
 	}
 	return string(p)
-}
-
-// newID returns a random, collision-free identifier with the given prefix.
-func newID(prefix string) string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	return prefix + "_" + hex.EncodeToString(b[:])
 }

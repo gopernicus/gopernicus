@@ -8,8 +8,11 @@
 --
 -- payload is JSON, not JSONB (same reasoning as 0001: opaque bytes, byte-exact
 -- round-trip preserved).
+--
+-- schedule_id is Go-minted like job_id (see 0001); the default is the raw-SQL
+-- backstop. last_job_id holds a job id, so it shares the "C" collation.
 CREATE TABLE IF NOT EXISTS job_schedules (
-    schedule_id  TEXT        NOT NULL,
+    schedule_id  TEXT        COLLATE "C" NOT NULL DEFAULT uuidv7()::text,
     name         TEXT        NOT NULL,
     kind         TEXT        NOT NULL,
     tenant_id    TEXT,
@@ -19,7 +22,7 @@ CREATE TABLE IF NOT EXISTS job_schedules (
     enabled      BOOLEAN     NOT NULL DEFAULT TRUE,
     next_run_at  TIMESTAMPTZ NOT NULL,
     last_run_at  TIMESTAMPTZ,
-    last_job_id  TEXT,
+    last_job_id  TEXT        COLLATE "C",
     created_at   TIMESTAMPTZ NOT NULL,
     updated_at   TIMESTAMPTZ NOT NULL,
     CONSTRAINT job_schedules_pk PRIMARY KEY (schedule_id),
