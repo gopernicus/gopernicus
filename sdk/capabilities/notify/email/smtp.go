@@ -38,8 +38,9 @@ type SMTPConfig struct {
 	Host     string
 	Port     string
 	Username string
-	// Password renders as sdk.Redacted. One that contains sdk.Redacted (composed
-	// through fmt or + instead of Reveal) makes Probe and Send return
+	// Password renders as sdk.Redacted. One that contains sdk.Redacted, literally
+	// or percent-encoded (sdk.ContainsRedacted: composed through fmt, + or
+	// net/url instead of Reveal), makes Probe and Send return
 	// sdk.ErrRedactedSecret before dialing.
 	Password sdk.Secret
 	// Timeout bounds a complete attempt, including the greeting and DATA reply.
@@ -87,7 +88,7 @@ func NewSMTP(cfg SMTPConfig) *SMTP {
 	}
 	return &SMTP{
 		addr: net.JoinHostPort(cfg.Host, cfg.Port), host: cfg.Host, auth: auth, timeout: timeout, requireTLS: cfg.RequireTLS,
-		redactedPassword: strings.Contains(cfg.Password.Reveal(), sdk.Redacted),
+		redactedPassword: sdk.ContainsRedacted(cfg.Password.Reveal()),
 	}
 }
 
@@ -96,8 +97,8 @@ func NewSMTP(cfg SMTPConfig) *SMTP {
 // ErrTLSRequired when RequireTLS is set and the relay does not. It ends with
 // QUIT and never authenticates or sends a message. Production hosts call it at
 // boot, so a relay that would refuse every Send stops the boot instead. A
-// Password containing sdk.Redacted fails with sdk.ErrRedactedSecret before it
-// dials.
+// Password containing sdk.Redacted, literally or percent-encoded, fails with
+// sdk.ErrRedactedSecret before it dials.
 func (s *SMTP) Probe(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -126,7 +127,8 @@ func (s *SMTP) Probe(ctx context.Context) error {
 // Send validates and delivers one email. Cancellation closes the active
 // connection, including while awaiting a greeting, STARTTLS or a DATA reply.
 // A successful DATA acknowledgement remains success even if QUIT fails. A
-// Password containing sdk.Redacted fails with sdk.ErrRedactedSecret.
+// Password containing sdk.Redacted, literally or percent-encoded, fails with
+// sdk.ErrRedactedSecret.
 func (s *SMTP) Send(ctx context.Context, msg Message) error {
 	if err := ctx.Err(); err != nil {
 		return err
