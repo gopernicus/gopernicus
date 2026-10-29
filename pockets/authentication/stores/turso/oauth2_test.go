@@ -53,6 +53,7 @@ func TestConformance_LocalSQLite(t *testing.T) {
 	}
 	storetest.Run(t, newRepos)
 	storetest.RunPasswordHashUpgrade(t, newRepos)
+	storetest.RunOAuth2CodeAuthentication(t, newRepos)
 }
 
 func seedOAuthBrowser(t *testing.T, db *tursodb.DB, id string, now time.Time) session.Session {

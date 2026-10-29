@@ -83,6 +83,14 @@ func (r oauthCodeRow) toDomain() (oauth2.Code, error) {
 }
 
 func (s *OAuth2Store) CreateCode(ctx context.Context, code oauth2.Code, approvingSessionID string) error {
+	return s.createCode(ctx, code, approvingSessionID, false)
+}
+
+// createCode is CreateCode's transaction. With recordAuthentication it also
+// copies the approving session's Authentication — read from the row
+// lockSession holds FOR UPDATE, so no lock or statement is added — into the
+// 0030 columns; without it the INSERT names only the 0019 columns.
+func (s *OAuth2Store) createCode(ctx context.Context, code oauth2.Code, approvingSessionID string, recordAuthentication bool) error {
 	now := time.Now().UTC()
 	if code.Hash == "" || code.UserID == "" || approvingSessionID == "" || !validOAuthBinding(code.Delegation) || code.AuthRevision != code.Delegation.AuthRevision || code.RedirectURI == "" || code.CodeChallenge == "" || !code.ExpiresAt.After(now) || !code.ExpiresAt.After(code.CreatedAt) {
 		return oauth2.ErrInvalidGrant
@@ -107,9 +115,18 @@ func (s *OAuth2Store) CreateCode(ctx context.Context, code oauth2.Code, approvin
 		if !sess.FirstParty() || sess.Expired(now) || !code.ExpiresAt.After(now) {
 			return oauth2.ErrInvalidGrant
 		}
+		args := pgx.NamedArgs{
+			"hash": code.Hash, "user": code.UserID, "revision": code.AuthRevision, "delegation": string(binding), "redirect": code.RedirectURI, "challenge": code.CodeChallenge, "created": code.CreatedAt.UTC(), "expires": code.ExpiresAt.UTC()}
+		if recordAuthentication {
+			if err := codeAuthenticationArgs(args, sess.Authentication); err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `INSERT INTO `+s.table(oauthCodesTable)+` (`+oauthCodeAuthenticationColumns+`)
+ VALUES (@hash,@user,@revision,@delegation,@redirect,@challenge,@created,@expires,@authenticated_at,@authentication_methods,@assurance_level)`, args)
+			return pgxdb.MapError(err)
+		}
 		_, err = tx.Exec(ctx, `INSERT INTO `+s.table(oauthCodesTable)+` (`+oauthCodeColumns+`)
- VALUES (@hash,@user,@revision,@delegation,@redirect,@challenge,@created,@expires)`, pgx.NamedArgs{
-			"hash": code.Hash, "user": code.UserID, "revision": code.AuthRevision, "delegation": string(binding), "redirect": code.RedirectURI, "challenge": code.CodeChallenge, "created": code.CreatedAt.UTC(), "expires": code.ExpiresAt.UTC()})
+ VALUES (@hash,@user,@revision,@delegation,@redirect,@challenge,@created,@expires)`, args)
 		return pgxdb.MapError(err)
 	})
 }

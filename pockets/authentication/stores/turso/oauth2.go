@@ -58,6 +58,15 @@ func (s *OAuth2Store) GetClient(ctx context.Context, id string) (oauth2.Client, 
 }
 
 func (s *OAuth2Store) CreateCode(ctx context.Context, code oauth2.Code, approvingSessionID string) error {
+	return s.createCode(ctx, code, approvingSessionID, false)
+}
+
+// createCode is CreateCode's BEGIN IMMEDIATE transaction. With
+// recordAuthentication it also copies the approving session's Authentication —
+// read by oauthSession under the write lock the transaction already holds, so
+// no lock or statement is added — into the 0030 columns; without it the INSERT
+// names only the 0019 columns.
+func (s *OAuth2Store) createCode(ctx context.Context, code oauth2.Code, approvingSessionID string, recordAuthentication bool) error {
 	return s.db.InTx(ctx, func(tx *tursodb.Tx) error {
 		revision, err := lockCredentialUser(ctx, tx, code.UserID)
 		if err != nil {
@@ -77,6 +86,17 @@ func (s *OAuth2Store) CreateCode(ctx context.Context, code oauth2.Code, approvin
 		}
 		delegation, err := json.Marshal(code.Delegation)
 		if err != nil {
+			return err
+		}
+		if recordAuthentication {
+			recorded, err := codeAuthenticationValues(approver.Authentication)
+			if err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `INSERT INTO oauth_authorization_codes
+			(`+oauthCodeAuthenticationColumns+`)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, append([]any{code.Hash, code.UserID, code.AuthRevision, string(delegation),
+				code.RedirectURI, code.CodeChallenge, tursodb.FormatTime(code.CreatedAt), tursodb.FormatTime(code.ExpiresAt)}, recorded...)...)
 			return err
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO oauth_authorization_codes

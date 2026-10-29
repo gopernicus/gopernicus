@@ -77,7 +77,9 @@ var externalProbeTables = []string{"external_subjects"}
 // the pocket calls ServiceAccountStatusStore.ProbeSchema only under
 // AdministrationConfig.ServiceAccountStatus. Nor 0029 (sessions.last_rotated_at,
 // deliberately absent from probeColumns): the pocket calls
-// SessionStore.ProbeSchema only under SessionsConfig.IdleTimeout.
+// SessionStore.ProbeSchema only under SessionsConfig.IdleTimeout. Nor 0030
+// (the oauth_authorization_codes authentication columns): the pocket calls
+// OAuth2Store.ProbeSchema only under OAuth2Config.DelegatedAssurance.
 // Last it checks the 0022 immutability
 // triggers (AuditTables) under the RuntimeMode db was opened with, logging a
 // WARN when they are missing or altered.

@@ -18,7 +18,7 @@ with `db.ProbeAuditImmutable` last. The bundle fills `Maintenance`
 ## Migrations
 
 `migrations/*.sql` carry the same version (filename) set as the pgx tree,
-`0001`–`0029` with `0017` and `0028` absent.
+`0001`–`0030` with `0017` and `0028` absent.
 
 ### Passkeys (`0025`)
 
@@ -114,6 +114,42 @@ backfill a value. A value the store did not write breaks that session's
 refresh: `datetime('now')` (not the fixed-width encoding) fails every wired
 refresh's scan, and `''` reads as unstamped but misses `DeleteIfIdle`'s
 compare-and-swap, so an idle judgement fails as an internal error.
+
+### OAuth2 code authentication (`0030`)
+
+**`0030_oauth_code_authentication.sql` ships; it is required only when
+`OAuth2Config.DelegatedAssurance` is set** — apply it ahead of time to turn
+delegated assurance on later. It adds three nullable columns to
+`oauth_authorization_codes` in the `sessions` encodings — `authenticated_at
+TEXT` (`created_at`'s fixed-width encoding, `tursodb.FormatTime`),
+`authentication_methods TEXT` (the JSON method array) and `assurance_level
+TEXT` — NULL for every existing row. No index: the table holds only short-lived
+codes and is pruned. The file applies in one transaction; the ALTERs briefly
+hold the database write lock — **on lock timeout, re-run `make migrate`**.
+`Repositories` never probes it, and every other statement names its columns
+explicitly, so an older binary keeps working on a migrated table. `OAuth2Store`
+implements `oauth2.CodeAuthenticationRepository`; the pocket calls its
+`ProbeSchema` only when the flag is set, and a database without the columns then
+refuses the boot with `ErrDelegatedAssuranceSchemaMissing`, naming the file.
+`CreateCodeWithAuthentication` is `CreateCode`'s `BEGIN IMMEDIATE` transaction
+and copies the approving session row it reads under that write lock into the
+code row it inserts: no second lock, so a concurrent refresh rotation of the
+approving session never deadlocks against it. A part the session did not record
+is written NULL. `GetCodeWithAuthentication` reads the code and the copy in one
+`SELECT` over a wired-only column list (NULL reads back as zero). Plain
+`CreateCode` and `GetCode` never name the columns. `RedeemCode` is unchanged:
+the core carries the copy onto the delegated session it persists.
+`storetest.RunOAuth2CodeAuthentication` is its conformance suite; Turso is
+proven against local libSQL only (no CI secrets).
+
+**Rollout (in this order).** (1) Every process that verifies delegated tokens
+— the issuing binary and any separate resource server or sidecar — runs
+`pockets/authentication` ≥ v0.37.0, which admits `aal`/`methods` on delegated
+tokens; (2) apply `0030`; (3) set `OAuth2Config.DelegatedAssurance`. Grants
+approved before the flag keep NULL columns and stay `AssuranceUnknown` until the
+user re-consents. **Rollback:** turn the flag off, wait one `AccessTTL`, then
+downgrade. A `--posture` host that bumps to this store version copies `0030`
+into its ledger (byte-identical, guard P9) even with the flag off.
 
 ### Rehash on login
 
