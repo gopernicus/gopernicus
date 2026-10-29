@@ -31,8 +31,11 @@ them like any string field and an untyped literal (`URL: "file:app.db"`) still
 assigns, while a `string` variable converts with `sdk.Secret(v)`. Read a value
 with `Reveal()`; display the target with `cfg.Redacted()`. A URL composed from a
 printed Secret (`"libsql://db.example?authToken=" + cfg.AuthToken.String()`)
-carries `[redacted]` instead of the token: `Open` refuses a `URL` or `AuthToken`
-containing `sdk.Redacted`, in every mode and before any I/O, with an error wrapping
+carries `[redacted]` instead of the token, and one built with
+`url.Values{"authToken": {cfg.AuthToken.String()}}.Encode()` carries it
+percent-encoded (`%5Bredacted%5D`): `Open` refuses a `URL` or `AuthToken`
+containing `sdk.Redacted` in either form (`sdk.ContainsRedacted`, any hex case),
+in every mode and before any I/O, with an error wrapping
 `sdk.ErrRedactedSecret` that names the field and says to read it with `Reveal()`.
 
 Migration streams are flat: `RunMigrations` reads direct `.sql` files in lexical

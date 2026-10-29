@@ -54,10 +54,6 @@ const (
 	runtimeParamTimeZone = "timezone"
 	runtimeParamOptions  = "options"
 
-	// timeZoneOptionMarker matches "-c timezone=…" / "-c TimeZone=…" inside an
-	// options value; the comparison is case-folded.
-	timeZoneOptionMarker = "timezone="
-
 	// defaultTimeZone is the session zone applied when the host named none.
 	defaultTimeZone = "UTC"
 )
@@ -93,8 +89,9 @@ const (
 // DSN and Password are sdk.Secret: they render as sdk.Redacted through fmt,
 // slog and encoding/json, so read them with Reveal() and display the target
 // with Redacted(). A DSN composed from a rendered Secret carries sdk.Redacted
-// instead of the password; Open refuses such a DSN or Password with
-// sdk.ErrRedactedSecret before any connection attempt.
+// instead of the password, literally or percent-encoded (url.UserPassword emits
+// %5Bredacted%5D); Open refuses such a DSN or Password (sdk.ContainsRedacted)
+// with sdk.ErrRedactedSecret before any connection attempt.
 type Config struct {
 	DSN      sdk.Secret `env:"DB_URL"`
 	Host     string     `env:"DB_HOST"`
@@ -244,7 +241,8 @@ func (cfg Config) hasSplitConnectionFields() bool {
 }
 
 // refuseRedactedSecrets names each secret field whose value carries
-// sdk.Redacted: it was composed from a rendered Secret, not its Reveal.
+// sdk.Redacted, literally or percent-encoded: it was composed from a rendered
+// Secret, not its Reveal.
 func (cfg Config) refuseRedactedSecrets() error {
 	var refusals []error
 	for _, field := range []struct {
@@ -254,7 +252,7 @@ func (cfg Config) refuseRedactedSecrets() error {
 		{"DSN", cfg.DSN},
 		{"Password", cfg.Password},
 	} {
-		if strings.Contains(field.value.Reveal(), sdk.Redacted) {
+		if sdk.ContainsRedacted(field.value.Reveal()) {
 			refusals = append(refusals, fmt.Errorf("postgres: Config.%s: %w", field.name, sdk.ErrRedactedSecret))
 		}
 	}
@@ -318,28 +316,20 @@ func registerUTCTimestamptz(m *pgtype.Map) {
 }
 
 // hasSessionTimeZone reports whether the host already named a session time zone
-// — a "timezone" runtime parameter (from the DSN or PGTZ) or a "timezone=" entry
+// — a "timezone" runtime parameter (from the DSN or PGTZ) or a timezone setting
 // inside an options value (from the DSN or PGOPTIONS). Parameter names are
 // case-insensitive to the server, so the key comparison is case-folded too:
 // writing a second, differently-cased key would put two competing time-zone
-// parameters in the startup packet.
+// parameters in the startup packet. Options entries are parsed and compared by
+// exact name, so "-c log_timezone=…" does not count as a session zone.
 func hasSessionTimeZone(params map[string]string) bool {
-	for k, v := range params {
-		if strings.EqualFold(k, runtimeParamTimeZone) {
-			return true
-		}
-		if strings.EqualFold(k, runtimeParamOptions) && strings.Contains(strings.ToLower(v), timeZoneOptionMarker) {
-			return true
-		}
-	}
-	return false
+	return namesRuntimeParam(params, runtimeParamTimeZone)
 }
 
 // namesRuntimeParam reports whether params already set the server parameter
 // name: as its own key (case-folded, as the server matches parameter names) or
-// inside an options value. Unlike hasSessionTimeZone's substring test, options
-// entries are parsed and their names compared exactly, because "lock_timeout="
-// is a substring of "-c deadlock_timeout=…".
+// inside an options value. Options entries are parsed and their names compared
+// exactly, because "lock_timeout=" is a substring of "-c deadlock_timeout=…".
 func namesRuntimeParam(params map[string]string, name string) bool {
 	for k, v := range params {
 		if strings.EqualFold(k, name) {
@@ -485,10 +475,11 @@ func (cfg Config) poolConfig(dsn string) (*pgxpool.Config, error) {
 // The context bounds startup only; the caller owns the returned DB's lifetime.
 // A non-zero RuntimeMode is validated and enforced before the pool exists, so a
 // refused configuration never attempts a connection. A DSN or Password that
-// contains sdk.Redacted is refused first, in every mode, with
-// sdk.ErrRedactedSecret. After the connectivity check Open probes the server
-// version and, below MinServerVersionNum, logs one WARN through Logger; the
-// probe never fails Open (RunMigrations is where the floor refuses).
+// contains sdk.Redacted, literally or percent-encoded, is refused first, in
+// every mode, with sdk.ErrRedactedSecret. After the connectivity check Open
+// probes the server version and, below MinServerVersionNum, logs one WARN
+// through Logger; the probe never fails Open (RunMigrations is where the floor
+// refuses).
 func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

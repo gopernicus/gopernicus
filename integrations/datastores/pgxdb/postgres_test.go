@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -140,6 +141,7 @@ func TestOpen_EmptyDSN(t *testing.T) {
 func TestOpen_RefusesRedactedSecret(t *testing.T) {
 	password := sdk.Secret("hunter2")
 	composed := Config{DSN: sdk.Secret(fmt.Sprintf("postgres://u:%s@127.0.0.1:1/db?sslmode=disable", password)), ConnectTimeout: 2 * time.Second}
+	escaped := (&url.URL{Scheme: "postgres", User: url.UserPassword("u", fmt.Sprint(password)), Host: "127.0.0.1:1", Path: "/db", RawQuery: "sslmode=disable"}).String()
 	for _, tc := range []struct {
 		name   string
 		cfg    Config
@@ -149,6 +151,9 @@ func TestOpen_RefusesRedactedSecret(t *testing.T) {
 		{"password", Config{Host: "127.0.0.1", Port: "1", User: "u", Password: sdk.Secret(fmt.Sprint(password))}, []string{"Config.Password"}},
 		{"both", Config{DSN: composed.DSN, Password: sdk.Secret("x" + password.String())}, []string{"Config.DSN", "Config.Password"}},
 		{"production", Config{DSN: composed.DSN, RuntimeMode: environment.ModeProduction}, []string{"Config.DSN"}},
+		{"dsn_escaped", Config{DSN: sdk.Secret(escaped)}, []string{"Config.DSN"}},
+		{"dsn_escaped_lower", Config{DSN: sdk.Secret(strings.ToLower(escaped))}, []string{"Config.DSN"}},
+		{"password_escaped", Config{Host: "127.0.0.1", Port: "1", User: "u", Password: sdk.Secret("x" + url.QueryEscape(password.String()))}, []string{"Config.Password"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, err := Open(context.Background(), tc.cfg)
@@ -165,6 +170,11 @@ func TestOpen_RefusesRedactedSecret(t *testing.T) {
 				t.Errorf("refusal dialed or echoed the target: %s", msg)
 			}
 		})
+	}
+
+	genuine := Config{DSN: sdk.Secret((&url.URL{Scheme: "postgres", User: url.UserPassword("u", "p%5B100%"), Host: "127.0.0.1:1", Path: "/db"}).String()), Password: "p%5B100%"}
+	if err := genuine.refuseRedactedSecrets(); err != nil {
+		t.Fatalf("refuseRedactedSecrets refused a real %%-bearing password: %v", err)
 	}
 }
 
@@ -412,7 +422,7 @@ func TestPoolConfig_HostTimeZoneWins(t *testing.T) {
 }
 
 // TestHasSessionTimeZone pins the detection rules directly, including the
-// case-folded key and the case-folded "timezone=" marker inside options.
+// case-folded key and the exact-name timezone setting inside options.
 func TestHasSessionTimeZone(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -427,6 +437,10 @@ func TestHasSessionTimeZone(t *testing.T) {
 		{"options_lower", map[string]string{"options": "-c timezone=Europe/Oslo"}, true},
 		{"options_mixed", map[string]string{"options": "-c TimeZone=Europe/Oslo"}, true},
 		{"options_other", map[string]string{"options": "-c statement_timeout=1000"}, false},
+		{"options_log_timezone", map[string]string{"options": "-c log_timezone=Europe/Oslo"}, false},
+		{"options_custom_timezone", map[string]string{"options": "-c app.timezone=Europe/Oslo"}, false},
+		{"options_log_timezone_and_timezone", map[string]string{"options": "-c log_timezone=UTC -c TimeZone=Europe/Oslo"}, true},
+		{"options_long_form", map[string]string{"options": "--timezone=Europe/Oslo"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -41,10 +41,13 @@ field, and an untyped literal still assigns; a `string` variable converts with
 `cfg.Redacted()`.
 
 A DSN composed from a printed Secret — `fmt.Sprintf("postgres://u:%s@h/db",
-cfg.Password)` — carries `[redacted]` instead of the password. `Open` refuses a
-`DSN` or `Password` containing `sdk.Redacted`, in every mode and before any
-connection attempt, with an error wrapping `sdk.ErrRedactedSecret` that names the
-field and says to read it with `Reveal()`:
+cfg.Password)` — carries `[redacted]` instead of the password; one built with
+`url.UserPassword("u", fmt.Sprint(cfg.Password))` carries it percent-encoded
+(`%5Bredacted%5D`). `Open` refuses a `DSN` or `Password` containing
+`sdk.Redacted` in either form (`sdk.ContainsRedacted`, any hex case), in every
+mode and before any connection attempt, with an error wrapping
+`sdk.ErrRedactedSecret` that names the field and says to read it with
+`Reveal()`:
 
 ```go
 dsn := fmt.Sprintf("postgres://u:%s@h/db", cfg.Password.Reveal()) // not cfg.Password
@@ -365,7 +368,7 @@ the raw driver error sees the sentinel now.
 | `ErrServerVersion` / `MinServerVersionNum` | the PostgreSQL 18 floor: `RunMigrations` refuses an older server with an error wrapping `ErrServerVersion`; `Open` logs one WARN (see "PostgreSQL 18 floor") |
 | `ErrTLSRequired` / `ErrQueryLoggingRefused` | production posture refusals from `Open`, matched with `errors.Is` |
 | `ErrAppendOnlyTableWritable` / `ErrAppendOnlyTableUnwritable` / `ErrDefinerFunctionUnsafe` | production append-only refusals from `ProbeAppendOnly`, matched with `errors.Is` |
-| `Open(ctx, cfg) (*DB, error)` | refuses a `DSN`/`Password` containing `sdk.Redacted` (`sdk.ErrRedactedSecret`), then opens a `pgxpool` and pings, then logs the version advisory below the floor; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
+| `Open(ctx, cfg) (*DB, error)` | refuses a `DSN`/`Password` containing `sdk.Redacted`, literally or percent-encoded (`sdk.ErrRedactedSecret`), then opens a `pgxpool` and pings, then logs the version advisory below the floor; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
 | `DB` | `Exec` / `Query` / `QueryRow` / `InTx` / `Begin` / `Close` / `Ping` / `Underlying() *pgxpool.Pool` / `RuntimeMode()` / `ProbeAppendOnly(ctx, tables…)` |
 | `Setting` / `(*DB).TransactWithSettings(ctx, settings, fn)` / `(*Tx).Setting(name)` | `Transact` whose first statement applies transaction-local settings (`set_config(name, value, true)`, all bound); validation before `Begin` refuses with `ErrInvalidInput`; `Tx.Setting` reports, from memory, what was applied to that transaction (see "Transaction-local settings for row-level security") |
 | `Querier` | interface intersection of `*DB` and `*Tx` (`Exec`/`Query`/`QueryRow`) — lets a store accept pool-or-tx |
@@ -925,8 +928,10 @@ into `RuntimeParams` (`pgconn/config.go:351-356`, `:466-469`):
 - a `timezone=` key in the DSN (`…?sslmode=disable&timezone=Europe/Oslo`, or
   `timezone=Europe/Oslo` in `key=value` form),
 - the `PGTZ` environment variable (pgconn maps it onto `timezone`),
-- a `timezone=` entry inside an `options` value — DSN `options=-c timezone=…` or
-  `PGOPTIONS='-c TimeZone=…'` (matched case-insensitively).
+- a `timezone` setting inside an `options` value — DSN `options=-c timezone=…` or
+  `PGOPTIONS='-c TimeZone=…'` (the `-c name=value`, `-cname=value` and
+  `--name=value` forms; the name is matched case-insensitively and exactly, so
+  `-c log_timezone=…` is not a session zone).
 
 `Open` still never reads the process environment itself; `PGTZ`/`PGOPTIONS` are
 pgconn's own handling, honoured here as "the host named a zone".

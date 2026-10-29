@@ -58,8 +58,9 @@ const (
 // URL and AuthToken are sdk.Secret (a URL can carry the token): they render as
 // sdk.Redacted through fmt, slog and encoding/json, so read them with Reveal()
 // and display the target with Redacted(). A URL composed from a rendered
-// Secret carries sdk.Redacted instead of the token; Open refuses such a URL or
-// AuthToken with sdk.ErrRedactedSecret before any I/O.
+// Secret carries sdk.Redacted instead of the token, literally or percent-encoded
+// (url.Values.Encode emits %5Bredacted%5D); Open refuses such a URL or AuthToken
+// (sdk.ContainsRedacted) with sdk.ErrRedactedSecret before any I/O.
 type Config struct {
 	// URL is required: "libsql://", "https://", "wss://" for a hosted database,
 	// or "file:<path>" for a local SQLite database (see Open). A plaintext
@@ -148,7 +149,8 @@ func (cfg Config) dsn() (string, error) {
 }
 
 // refuseRedactedSecrets names each secret field whose value carries
-// sdk.Redacted: it was composed from a rendered Secret, not its Reveal.
+// sdk.Redacted, literally or percent-encoded: it was composed from a rendered
+// Secret, not its Reveal.
 func (cfg Config) refuseRedactedSecrets() error {
 	var refusals []error
 	for _, field := range []struct {
@@ -158,7 +160,7 @@ func (cfg Config) refuseRedactedSecrets() error {
 		{"URL", cfg.URL},
 		{"AuthToken", cfg.AuthToken},
 	} {
-		if strings.Contains(field.value.Reveal(), sdk.Redacted) {
+		if sdk.ContainsRedacted(field.value.Reveal()) {
 			refusals = append(refusals, fmt.Errorf("turso: Config.%s: %w", field.name, sdk.ErrRedactedSecret))
 		}
 	}
@@ -189,8 +191,8 @@ func (cfg Config) Redacted() string {
 // every connection of the pool. Hosted URLs are untouched. A non-zero
 // RuntimeMode is validated and enforced before the local file profile or the
 // driver runs, so a refused configuration performs no I/O. A URL or AuthToken
-// that contains sdk.Redacted is refused first, in every mode, with
-// sdk.ErrRedactedSecret.
+// that contains sdk.Redacted, literally or percent-encoded, is refused first, in
+// every mode, with sdk.ErrRedactedSecret.
 func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
