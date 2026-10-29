@@ -6144,3 +6144,67 @@ against the live Auth emulator.
   after a second owner, audit attributed to the admin) and auth-cms (erase 200, session 401);
   auth-cms and production-baseline built at `GOWORK=off` against the tags boot with no
   integrity WARN.
+
+## AUDIT-061: Delegated `aal`/`methods` behind `DelegatedAssurance`, `Identity.AuthTimeAsserted`, `RequireAuthenticationTime`
+
+- **Status:** released 2026-10-28: `sdk` v0.24.0 (`21f21f4f`, #277);
+  `integrations/authentication/firebase` v0.3.0 (`eefcc693`, #278); `pockets/authentication`
+  v0.37.0 (`2fe347f5`, #279); `pockets/authentication/stores/pgx` v0.19.0 and
+  `…/stores/turso` v0.18.0 (`118340a7`, #280). Examples and runbook: #281. Record:
+  `RELEASING.md`, "Delegated assurance and asserted authentication time (SOC 2 slice S4d part
+  4)"; executed plan `plans/s4d4-delegated-assurance-auth-time.md`.
+- **Modules:** the above. Untouched: go-oidc, auth0, views/goth, pgxdb, `pockets`, workshop,
+  ui/goth, every existing port's method set.
+- **Old behavior:**
+  - Delegated (OAuth2) access tokens carrying `aal` or `methods` were refused, and the issuer
+    never signed them, so a delegated credential was `AssuranceUnknown` and every `RequireMFA`
+    gate denied it.
+  - `Identity.AuthenticatedAt` was `auth_time`, else `iat`, with no way for the core to tell
+    which; a `MaxAuthenticationAge` bound on an `iat`-only provider was a token-age bound only.
+- **New behavior:**
+  - **`Identity.AuthTimeAsserted`** (sdk): true only when `AuthenticatedAt` came from a valid
+    `auth_time` or the provider's own sign-in instant. Set by the sdk `OIDC` provider and by
+    firebase; host-written providers read false. `RunProvider` asserts it.
+  - **Verifiers** admit and validate `aal`/`methods` on delegated tokens (unconditional). The
+    bundled admin and machine groups still refuse the delegated profile.
+  - **`OAuth2Config.DelegatedAssurance`** (opt-in): boot refuses without
+    `oauth2.CodeAuthenticationRepository` (`ErrDelegatedAssuranceRequires`) or migration 0030
+    (`ErrDelegatedAssuranceSchemaMissing`; any other probe error is `sdk.ErrUnavailable`).
+    With it, approval copies the approving session's authentication into the code, redeem
+    carries it to the delegated session, every mint signs `aal`/`methods`, and
+    `Introspection` reports them. Stamping and introspection are gated on the flag. Boot line
+    `auth: oauth2 delegated_assurance=on|off`.
+  - **`ExternalProvider.RequireAuthenticationTime`** (opt-in): under a positive
+    `MaxAuthenticationAge`, an unasserted identity is denied
+    (`external_subject_denied reason=authenticated_at_unasserted`, once per token); without a
+    bound it refuses at config (`sdk.ErrInvalidInput`). Boot line
+    `authentication_time=asserted_required|any`.
+  - **Stores:** migration `0030_oauth_code_authentication.sql` (three nullable columns on
+    `oauth_authorization_codes`) and `CodeAuthenticationRepository` on pgx and turso, copying
+    inside the existing approval transaction under the existing row lock;
+    `storetest.RunOAuth2CodeAuthentication`.
+
+**Migration:**
+- Unkeyed `authentication.Identity{…}` literals stop compiling: key them. A host-written
+  `Provider` sets `AuthTimeAsserted` when it has a sign-in instant.
+- To turn on delegated assurance: every process that verifies delegated tokens on
+  authentication ≥ v0.37.0, then apply 0030, then set the flag, then users re-consent (grants
+  approved earlier carry no level). Rollback: flag off, wait one OAuth2 `AccessTTL`, then
+  downgrade. A host with its own OAuth2 store implements `CodeAuthenticationRepository` and
+  adopts the runner.
+- A `--posture` host that moves the store pin to pgx v0.19.0 / turso v0.18.0 copies 0030 into
+  its ledger (guard P9), even with the flag off.
+- `RequireAuthenticationTime` only on an issuer that sends `auth_time` (Firebase always does; a
+  Google ID-token issuer does not unless requested).
+- Schema: 0030 is additive, NULL on existing rows, required only with the flag.
+
+**Verification:**
+- sdk `RunProvider` cases (asserted, `iat` fallback, garbage) on the sdk `OIDC` provider,
+  go-oidc, auth0 and firebase; core verifier, issuer, boot, external and HTTP fence tests;
+  `RunOAuth2CodeAuthentication` on pgx live (PostgreSQL 18, bare and under a schema), turso on
+  a local file and authmem; mutation proofs on every code PR.
+- `live-stores` green on `main` before each tag; cold verification of every tag, set A (the new
+  core beside the released stores), the full set and set C; auth-cms built at `GOWORK=off`
+  against the tags shows aal1/aal2 delegated tokens, `RequireMFA` 401/200 on the MCP audience
+  and 401 on admin; production-baseline shows the `authenticated_at_unasserted` denial and the
+  zero-bound boot refusal.
