@@ -2359,8 +2359,8 @@ Moving users onto native passwords depends on whether the vendor exports hashes:
 ## Passkeys (SOC 2 S4b)
 
 A passkey is a WebAuthn credential bound to this deployment's RP ID. A
-**user-verified** passkey (the authenticator checked a PIN or biometric) is the
-only native AAL2 factor: its sign-in or step-up session is AAL2 end to end — the
+**user-verified** passkey (the authenticator checked a PIN or biometric) is a
+native AAL2 factor (beside a TOTP or recovery-code step-up): its sign-in or step-up session is AAL2 end to end — the
 session row, the signed `aal` claim, `RequireMFA()` and the `admins` gates. A
 presence-only passkey signs in at AAL1. Sign-in is **usernameless only**:
 `residentKey: required`, discoverable assertions, no credential id ever sent

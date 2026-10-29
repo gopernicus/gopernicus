@@ -21,6 +21,14 @@ keeps it and token exchange never raises it; revoking the grant ends it. An MCP 
 reaches admin: the bundled admin and machine route groups refuse the delegated profile before
 any MFA check.
 
+A host that sets `MFAConfig.Required: all` beside a native second factor
+(`pockets/authentication` v0.38.0) refuses every first-party session below AAL2 on every
+route but the enrollment surface once its holder's enrollment grace closes (at most 30 days).
+The floor covers `RequirePrincipal` routes only: host middleware that verifies tokens itself
+is outside it. The grace never mints durable credentials: the bundled admin, machine
+lifecycle (service accounts and API keys) and OAuth2 authorize gates require AAL2 with no
+grace, so a session below AAL2 cannot mint an API key or approve an OAuth2 grant through them.
+
 ## Reporting a vulnerability
 
 Report privately through GitHub's security advisories for this repository
@@ -36,7 +44,7 @@ each module receives fixes. Latest tags at the time of writing:
 | Module | Latest |
 |---|---|
 | `sdk` | v0.24.0 |
-| `pockets/authentication` | v0.37.0 |
+| `pockets/authentication` | v0.38.0 |
 | `pockets/authentication/stores/pgx` | v0.19.0 |
 | `pockets/authentication/stores/turso` | v0.18.0 |
 | `pockets/authentication/views/goth` | v0.9.0 |
