@@ -91,10 +91,10 @@ func breadcrumbPageClass(p BreadcrumbPageProps) string {
 
 func breadcrumbPageAttrs(p BreadcrumbPageProps) templ.Attributes {
 	return ownedAttrs(p.Base, templ.Attributes{
-		"data-slot":    "breadcrumb-page",
-		"role":         "link",
+		"data-slot":     "breadcrumb-page",
+		"role":          "link",
 		"aria-disabled": "true",
-		"aria-current": "page",
+		"aria-current":  "page",
 	})
 }
 

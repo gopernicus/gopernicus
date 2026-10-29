@@ -125,8 +125,8 @@ func TestSelectionBaseMergeAndClass(t *testing.T) {
 			ID:    "cb-1",
 			Class: "mt-2",
 			Attributes: templ.Attributes{
-				"class":       "sneaky",  // dropped
-				"type":        "text",    // owned wins
+				"class":       "sneaky", // dropped
+				"type":        "text",   // owned wins
 				"data-testid": "keep",
 			},
 		},

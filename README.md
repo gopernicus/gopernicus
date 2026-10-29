@@ -12,6 +12,8 @@ for the full layering rules and [NOTES.md](NOTES.md) for the decision log.
 
 ```
 sdk/                                stdlib-only, layered: root = kernel; pkg/ + capabilities/ (empty go.mod = structural enforcement)
+integrations/authentication/auth0/  Auth0 preset for sdk/capabilities/authentication (issuer format + claim names; zero external libs), its own module
+integrations/authentication/firebase/ Firebase Authentication preset (firebase.google.com/go/v4 Admin SDK), its own module
 integrations/cryptids/bcrypt/       password-hashing connector (x/crypto), its own module
 integrations/cryptids/go-oidc/      external-issuer bearer-JWT verification connector (coreos/go-oidc v3), its own module
 integrations/cryptids/go-webauthn/  WebAuthn relying-party connector (go-webauthn/webauthn), its own module
@@ -56,6 +58,7 @@ examples/minimal/                   a host app: pockets/cms on an in-memory stor
 examples/auth-cms/                  a host app: auth + cms + events + the authorization flagship composed in-memory (rule 6, live)
 examples/jobs-minimal/              a host app: pockets/jobs on its memstore — zero drivers, the §8 protocol host
 examples/goth-showcase/             a zero-datastore browser and accessibility proof for ui/goth
+examples/external-identity/         the zero-infrastructure external identity provider proof host: a development issuer, in-memory repositories
 examples/production-baseline/       the auditable reference host: external OIDC identity + authorization on pgx, production posture, one acknowledgement (retention)
 workshop/gopernicus/                the scaffolding CLI (init / new pocket / db verbs) — stdlib-only, its own module
 ```
