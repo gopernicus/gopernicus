@@ -4,10 +4,15 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 )
 
 // Redacted is the text a Secret renders as everywhere except Reveal.
 const Redacted = "[redacted]"
+
+// redactedEscaped is Redacted percent-encoded, lower-cased so the match is
+// hex-case-insensitive (net/url emits %5B/%5D; other producers may emit %5b).
+const redactedEscaped = "%5bredacted%5d"
 
 // Secret is a credential-bearing string: a password, API key, token, private
 // key or a DSN/URL that embeds one. It renders as Redacted through fmt (every
@@ -25,9 +30,10 @@ const Redacted = "[redacted]"
 // TextHandler formats structs with %+v; encoding/json writes a string-kind map
 // key verbatim, so never key a map by Secret. A type that keeps a secret in an
 // unexported field implements fmt.Formatter and slog.LogValuer itself. A
-// string composed from a Secret through fmt or + carries Redacted instead of
-// the value; consumers that receive such a string refuse it with
-// ErrRedactedSecret. See environment.Secret for decoding hex key material.
+// string composed from a Secret through fmt, + or net/url carries Redacted, in
+// literal or percent-encoded form, instead of the value; consumers that receive
+// such a string refuse it with ErrRedactedSecret (see ContainsRedacted). See
+// environment.Secret for decoding hex key material.
 type Secret string
 
 // Reveal returns the secret's value. Call it only where the value is used.
@@ -50,3 +56,13 @@ func (s Secret) MarshalJSON() ([]byte, error) { return []byte(`"` + Redacted + `
 
 // MarshalText returns Redacted.
 func (s Secret) MarshalText() ([]byte, error) { return []byte(Redacted), nil }
+
+// ContainsRedacted reports whether s carries Redacted, literally or
+// percent-encoded (%5Bredacted%5D in any hex case): the value was composed from
+// a Secret's rendered form through fmt, +, a template, url.UserPassword or
+// url.Values instead of its Reveal. Consumers refuse such a value with
+// ErrRedactedSecret before any I/O. A value transformed further (double
+// encoding, base64, JSON escapes) is not detectable and is out of scope.
+func ContainsRedacted(s string) bool {
+	return strings.Contains(s, Redacted) || strings.Contains(strings.ToLower(s), redactedEscaped)
+}

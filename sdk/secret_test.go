@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -144,5 +145,40 @@ func TestErrRedactedSecretMarksComposedValues(t *testing.T) {
 	}
 	if IsExpected(wrapped) {
 		t.Fatal("ErrRedactedSecret is configuration, not a domain sentinel")
+	}
+}
+
+func TestContainsRedacted(t *testing.T) {
+	secret := Secret(testSecretValue)
+	for name, value := range map[string]string{
+		"literal":           "postgres://u:" + fmt.Sprint(secret) + "@h/db",
+		"escaped upper":     "x%5Bredacted%5D",
+		"escaped lower":     "x%5bredacted%5d",
+		"escaped mixed":     "x%5Bredacted%5d",
+		"url.UserPassword":  (&url.URL{Scheme: "postgres", Host: "h", User: url.UserPassword("u", fmt.Sprint(secret))}).String(),
+		"url.Values.Encode": "libsql://h?" + url.Values{"authToken": {secret.String()}}.Encode(),
+		"url.PathEscape":    url.PathEscape(Redacted),
+	} {
+		if !ContainsRedacted(value) {
+			t.Errorf("%s: ContainsRedacted(%q) = false", name, value)
+		}
+	}
+	for _, value := range []string{"", "redacted", "%5B", "[redact]", "p%40ss%5Bword", testSecretValue} {
+		if ContainsRedacted(value) {
+			t.Errorf("ContainsRedacted(%q) = true", value)
+		}
+	}
+}
+
+// Pins the escaped form to what net/url emits, so a net/url change fails here
+// rather than silently disabling the check.
+func TestRedactedEscapedMatchesNetURL(t *testing.T) {
+	for name, got := range map[string]string{
+		"QueryEscape": url.QueryEscape(Redacted),
+		"PathEscape":  url.PathEscape(Redacted),
+	} {
+		if !strings.EqualFold(got, redactedEscaped) {
+			t.Errorf("%s(Redacted) = %q, want %q in any case", name, got, redactedEscaped)
+		}
 	}
 }

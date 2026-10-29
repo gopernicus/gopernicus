@@ -59,10 +59,11 @@ var (
 	// request. Transports map this to 503 Service Unavailable.
 	ErrUnavailable = errors.New("unavailable")
 
-	// ErrRedactedSecret indicates a revealed Secret contains Redacted: the value
-	// was composed from a Secret's rendered form (fmt, +, a template) instead of
-	// its Reveal. Consumers wrap it naming the field and fail before any I/O. It
-	// is a configuration failure, not a domain sentinel, so IsExpected is false.
+	// ErrRedactedSecret indicates a revealed Secret contains Redacted, literally
+	// or percent-encoded (ContainsRedacted): the value was composed from a
+	// Secret's rendered form (fmt, +, a template, net/url) instead of its
+	// Reveal. Consumers wrap it naming the field and fail before any I/O. It is
+	// a configuration failure, not a domain sentinel, so IsExpected is false.
 	ErrRedactedSecret = errors.New("secret contains " + Redacted + ", not a value; read the Secret with Reveal()")
 
 	// expectedErrors lists the domain sentinels recognized by IsExpected.

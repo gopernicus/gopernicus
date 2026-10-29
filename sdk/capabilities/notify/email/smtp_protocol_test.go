@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/textproto"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -259,8 +260,16 @@ func TestSMTPRefusesARedactedPasswordBeforeDial(t *testing.T) {
 			t.Errorf("%s error = %v, want sdk.ErrRedactedSecret naming the field", name, err)
 		}
 	}
-	if err := NewSMTP(SMTPConfig{Host: "127.0.0.1", Port: "1", Password: password}).Probe(context.Background()); errors.Is(err, sdk.ErrRedactedSecret) {
-		t.Fatalf("a plain password was refused: %v", err)
+	for _, escaped := range []string{"x" + url.PathEscape(sdk.Redacted), "x%5bredacted%5d"} {
+		err := NewSMTP(SMTPConfig{Host: "127.0.0.1", Port: "1", Username: "user", Password: sdk.Secret(escaped)}).Probe(context.Background())
+		if !errors.Is(err, sdk.ErrRedactedSecret) || !strings.Contains(err.Error(), "SMTPConfig.Password") {
+			t.Errorf("escaped %q: Probe error = %v, want sdk.ErrRedactedSecret naming the field", escaped, err)
+		}
+	}
+	for _, plain := range []sdk.Secret{password, "p%40ss%5Bword"} {
+		if err := NewSMTP(SMTPConfig{Host: "127.0.0.1", Port: "1", Password: plain}).Probe(context.Background()); errors.Is(err, sdk.ErrRedactedSecret) {
+			t.Fatalf("a plain password was refused: %v", err)
+		}
 	}
 }
 
