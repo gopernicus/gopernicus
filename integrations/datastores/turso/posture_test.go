@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -273,6 +274,9 @@ func TestOpen_RefusesRedactedSecret(t *testing.T) {
 		{"url", Config{URL: sdk.Secret(fmt.Sprintf("libsql://example.test?authToken=%s", token))}, []string{"Config.URL"}},
 		{"auth_token", Config{URL: "libsql://example.test", AuthToken: sdk.Secret(fmt.Sprint(token))}, []string{"Config.AuthToken"}},
 		{"both_production", Config{URL: sdk.Secret("http://example.test?jwt=" + token.String()), AuthToken: sdk.Secret(token.String()), RuntimeMode: environment.ModeProduction}, []string{"Config.URL", "Config.AuthToken"}},
+		{"url_escaped", Config{URL: sdk.Secret("libsql://example.test?" + url.Values{"authToken": {token.String()}}.Encode())}, []string{"Config.URL"}},
+		{"url_escaped_lower", Config{URL: sdk.Secret("libsql://example.test?authToken=%5bredacted%5d")}, []string{"Config.URL"}},
+		{"auth_token_escaped", Config{URL: "libsql://example.test", AuthToken: sdk.Secret(url.PathEscape(fmt.Sprint(token)))}, []string{"Config.AuthToken"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, err := Open(context.Background(), tc.cfg)
@@ -285,6 +289,11 @@ func TestOpen_RefusesRedactedSecret(t *testing.T) {
 				}
 			}
 		})
+	}
+
+	genuine := Config{URL: sdk.Secret("libsql://example.test?" + url.Values{"authToken": {"t%5B100%"}}.Encode()), AuthToken: "t%5B100%"}
+	if err := genuine.refuseRedactedSecrets(); err != nil {
+		t.Fatalf("refuseRedactedSecrets refused a real %%-bearing token: %v", err)
 	}
 }
 
