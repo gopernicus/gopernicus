@@ -366,6 +366,38 @@ is that v0.37.0 verifiers admit `aal`/`methods` on delegated tokens.
   into its ledger even with the flag off (production-baseline: `0036`). `guard --posture`
   gains no rule.
 
+**Added by S4c-2** (authentication v0.38.0, sdk v0.24.0; SOC 2 slice S4c-2; no store tag, no
+migration). Native `all`: `MFAConfig.Required` `all` beside `WithPasskeys` or `WithTOTP`, which
+the S4b and S4c rows above refused, now boots, and every first-party session below AAL2 is
+refused outside the enrollment surface once its holder's enrollment grace closes (the
+authentication page's *Added by S4c-2*). External-only `all` is unchanged.
+
+| Module | Refuses | Sentinel | Acknowledgement |
+|---|---|---|---|
+| authentication (all modes) | native `all` with a zero `MFAConfig.EnrollmentStart` | `ErrMFAEnrollmentStartRequired` | none — set it as a code literal |
+| authentication (all modes) | `MFAConfig.EnrollmentGrace` negative or above `MaxMFAEnrollmentGrace` (30 days; zero selects 7 days) | `ErrMFAEnrollmentGraceInvalid` | none |
+| authentication (all modes) | native `all` with a `MFAConfig.Methods` that admits neither `passkey` nor `totp` | `ErrMFAUnsatisfiable` | none — admit a native source or drop `Methods` |
+
+- **The single-factor refusal.** Under native `all` the three native causes
+  (`native_password`, `passwordless`, `native_oauth`) leave the production refusal: the grace
+  bounds them. Boot logs one WARN instead, `auth: mfa_required=all admits single-factor sign-in
+  for at most <grace> per user until enrollment` with `causes=[…]`. `SingleFactorAcknowledged`
+  beside native `all` is inert and logs its own WARN rather than refusing; remove it.
+  `guard --posture` gains no rule (P5 still prints `ack` for that inert literal; follow-up).
+- **The window-closed WARN.** When `now` is past `EnrollmentStart + EnrollmentGrace`, boot
+  WARNs `auth: enrollment window closed for every user created before <start>: unenrolled
+  first-party sessions are refused outside the enrollment surface`. Seeing it on a first
+  deploy means the `EnrollmentStart` literal is wrong.
+- **The boot line** reads `auth: mfa posture mfa_required=all
+  gates=first_party_routes[,/auth/admin/users*],machine_lifecycle[,oauth2_authorize][,external_tokens]
+  … enrollment_start=<RFC 3339> enrollment_grace=<duration>`. The admin, machine and OAuth2
+  authorize gates require AAL2 with no grace.
+- **Rollback order.** Set `Required: admins` first, then repin below v0.38.0: a v0.37.0 binary
+  refuses `all` beside a native factor at boot. The `mfa_enroll_by`/`mfa_enrolled` claims are
+  harmless to it. Never roll back to `MFARequiredNone` in production: it needs
+  `SingleFactorAcknowledged` and is refused without it. *Operations runbooks*, "Turn on MFA for
+  everyone", has the rollout and break-glass.
+
 ## Retention (S3)
 
 Every row class the pockets write has an owner-set lifetime, each disposal is bounded, and the

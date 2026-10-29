@@ -184,6 +184,51 @@ carries one has expired, then downgrade below v0.37.0. Downgrading with the flag
 before the wait, 401s delegated routes for up to `AccessTTL`, because an older verifier refuses
 the `aal` claim. Migration 0030 stays: its columns are never read with the flag off.
 
+## Turn on MFA for everyone
+
+Authentication v0.38.0 (SOC 2 S4c-2). Native `all` (`MFAConfig.Required: all` beside
+`WithPasskeys` or `WithTOTP`) requires AAL2 of every first-party session; a user without a
+second factor may use the app at AAL1 until their enrollment grace closes at
+`max(EnrollmentStart, user created at) + EnrollmentGrace`, then only the enrollment surface
+answers them. No migration.
+
+1. **Wire a native factor.** `WithPasskeys` and/or `WithTOTP`, with their migrations (0025,
+   0026) applied pre-boot. Leave `MFAConfig.Methods` empty, or let it admit `passkey` or
+   `totp`.
+2. **Ship the client handling.** An SPA routes 403 `mfa_enrollment_required` (body
+   `enroll_by`) to its enrollment UI, 401 with the RFC 9470 challenge to step-up, and a plain
+   401 to `/auth/refresh`. Its shell route carries `AllowMFAEnrollment()` or is served
+   unauthenticated. Bundled browser pages need nothing.
+3. **Set the policy** as literals in `cmd` and roll the fleet: `Required: MFARequiredAll`,
+   `EnrollmentStart` = the rollout date, `EnrollmentGrace` (zero is 7 days; at most 30). Every
+   instance carries the same `EnrollmentStart`.
+4. **Watch.** The boot line reads `mfa_required=all gates=first_party_routes,…
+   enrollment_start=<date> enrollment_grace=<duration>`, beside the single-factor WARN. A
+   window-closed WARN (`auth: enrollment window closed for every user created before
+   <start>…`) on this deploy means the date is wrong: fix it before users are walled. Then
+   watch `mfa_required_denied` rows with `gate=enrollment` (*Read the authentication audit
+   rail*): `reason=enrollment` is a user past the window, `reason=assurance` an enrolled user
+   who must step up. Each is recorded once per session per process.
+
+- **Tokens minted before the flip** carry no claim: under the floor they get a plain 401 (JSON)
+  or the login page's session recovery (`recover=1`, browser) until their first refresh, at
+  most `AccessTokenTTL`.
+- **A lost factor.** An administrator resets the user's TOTP or passkeys
+  (`/auth/admin/users/<id>/totp/reset`, `…/passkeys/reset`), which revokes their sessions. Their
+  next sign-in is walled to the enrollment surface at once if the window has closed, and they
+  enrol a new factor there at AAL1. There is no per-user re-open of the window.
+
+**Break-glass.** The surface stays reachable: a walled sole administrator signs in and enrols
+(the enrollment pages are allowlisted), then steps up for the admin routes. To reopen the
+window for the whole fleet, bump `EnrollmentStart` and redeploy — a deliberate change, never an
+environment value. To leave native `all`, redeploy with `Required: admins`. Never redeploy
+production with `MFARequiredNone`: beside native single-factor login it needs
+`SingleFactorAcknowledged` and is refused without it.
+
+**Rollback.** Set `Required: admins` FIRST and roll the fleet, then repin below v0.38.0. A
+v0.37.0 binary with `all` beside a native factor refuses to boot; it ignores the
+`mfa_enroll_by`/`mfa_enrolled` claims on tokens already issued.
+
 ## Move a PostgreSQL server from 17 to 18
 
 pgxdb v0.17.0 and the pgx store tags that pin it require PostgreSQL 18: `RunMigrations`

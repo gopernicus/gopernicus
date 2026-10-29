@@ -10,7 +10,7 @@ require (
 	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.17.0
 	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.10.0
 	github.com/gopernicus/gopernicus/integrations/encoding/rsc-qr v0.1.0
-	github.com/gopernicus/gopernicus/pockets/authentication v0.37.0
+	github.com/gopernicus/gopernicus/pockets/authentication v0.38.0
 	github.com/gopernicus/gopernicus/pockets/authentication/views/goth v0.9.0
 	github.com/gopernicus/gopernicus/pockets/authorization v0.34.0
 	github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx v0.24.0
