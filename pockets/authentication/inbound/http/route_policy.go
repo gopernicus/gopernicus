@@ -79,7 +79,8 @@ type BundledRouteAuthentication struct {
 	Invitations RoutePrincipalStrategy
 	// BrowserAccount gates the bundled HTML account pages and the form-only
 	// identifier edit POST. Default: RequirePrincipal(Accept(CredentialAccessToken),
-	// FirstParty(), Transports(TransportCookie), Live(), Browser()).
+	// FirstParty(), Transports(TransportCookie), Live(), Browser()) — the set the
+	// OAuth2 authorize and sessions pages also use.
 	BrowserAccount RoutePrincipalStrategy
 }
 

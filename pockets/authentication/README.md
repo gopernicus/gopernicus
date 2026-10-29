@@ -85,6 +85,10 @@ consent views before enabling the feature. No DCR or scope vocabulary is exposed
 | `POST /auth/sessions/{id}/revoke` | Same owner, origin and CSRF checks; revoke one session |
 | `POST /auth/sessions/revoke-all` | Same owner, origin and CSRF checks; revoke every session |
 
+The authorize and sessions pages admit only first-party access tokens, never a
+provider token, so `WithOAuth2` beside `WithExternal` needs no explicit
+`BrowserLoginPath`; a provider-cookie-only browser goes to login with `recover=1`.
+
 Mount this optional browser/authorization-server surface at the issuer origin's
 root. Its form actions and endpoint URLs are absolute paths; a prefix registrar
 alone does not relocate them. An issuer with a path uses RFC 8414 discovery at

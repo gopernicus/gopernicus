@@ -1145,10 +1145,7 @@ func buildAuthConfig(log *slog.Logger, mode environment.Mode, granter invitation
 			// and can never remove the pocket-owned fixed protections (ui-goth GOTH-7.2).
 
 			HTMLPolicy: authViews.HTMLPolicy(),
-			// This host mounts the native /auth/login, so it names it explicitly: a
-			// Browser() set that also admits external tokens (the OAuth2 authorize
-			// page under AUTH_OAUTH2_DEMO + AUTH_EXTERNAL_DEMO) refuses the implicit
-			// default, which an external-only host would not serve.
+			// This host mounts the native /auth/login, so it names it explicitly.
 
 			BrowserLoginPath: "/auth/login",
 		},
