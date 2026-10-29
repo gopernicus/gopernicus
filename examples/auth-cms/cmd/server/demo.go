@@ -50,12 +50,21 @@ func registerDemoRoutes(router *web.WebHandler, authentication *authenticationht
 // chooser when the TOTP views are wired, else the passkey step-up page, else the
 // same 401). Each answers the credential's assurance. A user-verified passkey
 // sign-in or step-up, or an authenticator-app or recovery-code step-up, reaches
-// them.
+// them. It also mounts the two enrollment floor probes below.
 func registerMFADemoRoutes(router *web.WebHandler, authentication *authenticationhttp.Adapter, credentials *authlogic.Service) {
 	router.Handle("GET", "/demo/mfa", demoAssurance(credentials), authentication.RequirePrincipal(authenticationhttp.RequireMFA()))
 	router.Handle("GET", "/demo/mfa/page", demoAssurance(credentials), authentication.RequirePrincipal(
 		authenticationhttp.Accept(authenticationhttp.CredentialAccessToken), authenticationhttp.Transports(authenticationhttp.TransportCookie),
 		authenticationhttp.Live(), authenticationhttp.Browser(), authenticationhttp.RequireMFA()))
+	// The enrollment floor probes (AUTH_DEMO_MFA_REQUIRED=all): plain
+	// RequirePrincipal routes with no RequireMFA(), so an AAL1 session passes
+	// inside its grace and is refused once it closes — GET /demo/floor with the
+	// 403 mfa_enrollment_required, GET /demo/floor/page with the redirect to the
+	// enrollment page. With the floor off both answer any live session.
+	router.Handle("GET", "/demo/floor", demoAssurance(credentials), authentication.RequirePrincipal())
+	router.Handle("GET", "/demo/floor/page", demoAssurance(credentials), authentication.RequirePrincipal(
+		authenticationhttp.Accept(authenticationhttp.CredentialAccessToken), authenticationhttp.Transports(authenticationhttp.TransportCookie),
+		authenticationhttp.Live(), authenticationhttp.Browser()))
 }
 
 // registerOAuth2MFADemoRoute mounts GET /demo/oauth2/mfa, the delegated

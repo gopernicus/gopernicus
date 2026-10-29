@@ -2220,9 +2220,10 @@ unrecognised level ranks as unknown).
   set and AAL1 otherwise — unknown is never higher, and nothing produces AAL3.
 - **Native sessions** record their assurance on the session row, and every
   access token signs it as the `aal` claim (`aal1` or `aal2`): a user-verified
-  passkey sign-in or step-up is AAL2 — the only native AAL2 source — and every
-  other native method (password, codes, links, OAuth, a presence-only passkey)
-  is AAL1. A token minted before `v0.26.0`, or from a row with an empty
+  passkey sign-in or step-up and a TOTP or recovery-code step-up are AAL2 — the
+  native AAL2 sources — and every other native method (password, codes, links,
+  OAuth, a presence-only passkey) is AAL1. A token minted before `v0.26.0`, or
+  from a row with an empty
   `assurance_level`, carries no claim and reads `AssuranceUnknown` until its next
   refresh. An unknown `aal` value is refused. A delegated token carries its
   approving session's level only under `OAuth2Config.DelegatedAssurance`

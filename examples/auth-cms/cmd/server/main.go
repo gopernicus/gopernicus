@@ -439,11 +439,47 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	if err := environment.ParseEnvTags("", &exemptDemo); err != nil {
 		return err
 	}
+	var demoMFA auth.MFAConfig
 	if exemptDemo.Enabled {
 		if authCfg.RuntimeMode != environment.ModeDevelopment {
 			return fmt.Errorf("AUTH_DEMO_API_KEYS_EXEMPT requires development mode")
 		}
-		authOptions = append(authOptions, auth.WithMFA(auth.MFAConfig{APIKeysExempt: true}))
+		demoMFA.APIKeysExempt = true
+	}
+	// AUTH_DEMO_MFA_REQUIRED=all (development only) turns on native all beside
+	// the passkeys and TOTP wired here, so the S4c-2 drill can walk the
+	// enrollment grace: AUTH_DEMO_MFA_ENROLLMENT_GRACE is its length (empty
+	// selects the pocket default) and AUTH_DEMO_MFA_ENROLLMENT_START its start
+	// (RFC 3339; empty selects boot time). A real host sets all three as code
+	// literals, never from the environment.
+	enrollmentDemo := struct {
+		Required string        `env:"AUTH_DEMO_MFA_REQUIRED"`
+		Grace    time.Duration `env:"AUTH_DEMO_MFA_ENROLLMENT_GRACE"`
+		Start    string        `env:"AUTH_DEMO_MFA_ENROLLMENT_START"`
+	}{}
+	if err := environment.ParseEnvTags("", &enrollmentDemo); err != nil {
+		return err
+	}
+	if enrollmentDemo.Required != "" || enrollmentDemo.Grace != 0 || enrollmentDemo.Start != "" {
+		if authCfg.RuntimeMode != environment.ModeDevelopment {
+			return fmt.Errorf("AUTH_DEMO_MFA_REQUIRED, AUTH_DEMO_MFA_ENROLLMENT_GRACE and AUTH_DEMO_MFA_ENROLLMENT_START require development mode")
+		}
+		if auth.MFARequirement(enrollmentDemo.Required) != auth.MFARequiredAll {
+			return fmt.Errorf("AUTH_DEMO_MFA_REQUIRED must be all when any AUTH_DEMO_MFA_ENROLLMENT_* is set")
+		}
+		demoMFA.Required = auth.MFARequiredAll
+		demoMFA.EnrollmentGrace = enrollmentDemo.Grace
+		demoMFA.EnrollmentStart = time.Now()
+		if enrollmentDemo.Start != "" {
+			start, err := time.Parse(time.RFC3339, enrollmentDemo.Start)
+			if err != nil {
+				return fmt.Errorf("AUTH_DEMO_MFA_ENROLLMENT_START must be RFC 3339: %w", err)
+			}
+			demoMFA.EnrollmentStart = start
+		}
+	}
+	if demoMFA.APIKeysExempt || demoMFA.Required != auth.MFARequiredDefault {
+		authOptions = append(authOptions, auth.WithMFA(demoMFA))
 	}
 	// AUTH_DEMO_ADMIN_EMAIL (development only) grants platform admin to the
 	// account that verifies that address (demoadmin.go).

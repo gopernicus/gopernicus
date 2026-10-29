@@ -491,8 +491,9 @@ sources the gates admit.
   satisfy the requirement, and every mode refuses it with `ErrMFAUnsatisfiable`:
   any requirement without `WithExternal`, `WithPasskeys` or `WithTOTP`, `admins`
   without `AdministrationConfig.UserAdminCheck`, `all` beside native password,
-  passwordless, OAuth, passkey or TOTP wiring (native `all` is the follow-on
-  `s4c2-native-all`; use `admins` meanwhile), or a `Methods` entry naming a
+  passwordless or OAuth login without `WithPasskeys` or `WithTOTP` (with either it
+  is native `all`, since v0.38.0:
+  [Added by S4c-2](#added-by-s4c-2-native-all-and-the-enrollment-grace)), or a `Methods` entry naming a
   source that is not wired (`passkey` without `WithPasskeys`, `totp` without
   `WithTOTP`, `idp` without `WithExternal`). An unknown value is
   `sdk.ErrInvalidInput`. `New` logs one boot line, `auth: mfa posture
@@ -1013,6 +1014,81 @@ unconditional change is on the verifier side, and it only admits: v0.37.0 accept
 The pocket README's "OAuth2 delegated assurance (v0.37.0)" and "External authentication age"
 sections are the reference.
 
+## Added by S4c-2 (native all and the enrollment grace)
+
+Authentication v0.38.0 with sdk v0.24.0 (SOC 2 slice S4c-2; no store, views/goth or sdk tag,
+no migration). `MFAConfig{Required: MFARequiredAll}` beside `WithPasskeys` or `WithTOTP` is
+**native `all`**: every first-party session must reach AAL2, and a user without a second factor
+gets a bounded window to enrol. It is opt-in; no host wired today changes on the wire except
+the #282 fix below.
+
+```go
+auth.WithMFA(auth.MFAConfig{
+	Required:        auth.MFARequiredAll,
+	EnrollmentStart: time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC), // a literal, never env
+	EnrollmentGrace: 14 * 24 * time.Hour,                           // zero = 7 days; at most 30
+})
+```
+
+- **#282.** The OAuth2 authorize page and the HTML sessions page no longer admit external
+  tokens, so a host with `WithOAuth2` and `WithExternal` boots without
+  `WithBrowserLoginPath`. A browser holding only a provider cookie gets the login redirect with
+  `recover=1` (a 303 either way; a provider outage there was a 503, is a 303) and the cookie is
+  no longer read there.
+- **The window.** A user's grace closes at `max(EnrollmentStart, user created at) +
+  EnrollmentGrace`. Every mode refuses a zero `EnrollmentStart`
+  (`ErrMFAEnrollmentStartRequired`), a negative grace or one above `MaxMFAEnrollmentGrace`
+  (`ErrMFAEnrollmentGraceInvalid`), and a `Methods` that admits neither `passkey` nor `totp`
+  (`ErrMFAUnsatisfiable`). Keep `EnrollmentStart` a literal: moving it later reopens the window
+  for every unenrolled user, moving it earlier closes it.
+- **The claims.** A first-party access token minted below AAL2 carries `mfa_enroll_by` (unix
+  seconds) when its holder holds no AAL2 factor, or `mfa_enrolled: true` when they do
+  (`Credential.MFAEnrollBy`, `Credential.MFAEnrolled`). Every login, refresh and step-up
+  re-evaluates them; an AAL2 token carries neither, and a delegated token never does. A factor
+  read that fails refuses the mint with `sdk.ErrUnavailable` (503), never a silent pass; on a
+  magic-link sign-in that happens after the session row is written, so the person requests a
+  new link. A v0.37.0 verifier ignores both claims.
+- **The floor** runs in every `RequirePrincipal` without `AllowMFAEnrollment()`, on
+  first-party access tokens below AAL2 only (API keys, delegated and external tokens are
+  untouched):
+
+  | Token | JSON | `Browser()` with the cookie |
+  |---|---|---|
+  | `mfa_enroll_by` ahead | passes | passes |
+  | `mfa_enroll_by` passed | 403 `{"code":"mfa_enrollment_required","enroll_by":…}` | 303 to the TOTP enrollment page (else the passkeys page) with `return_to` |
+  | `mfa_enrolled` | 401 + the RFC 9470 challenge | 303 to the step-up page |
+  | neither (minted before the flip) | plain 401: refresh and retry | 303 to the login page with `recover=1` |
+
+  An enrolled user's password sign-in therefore gets the step-up answer, not a refresh loop.
+  Known limitations (follow-ups): the TOTP enrollment page does not yet honour `return_to`, so
+  after enrolling the person steps up and navigates back themselves; reached with no setup in
+  progress, as the floor's redirect does, it answers 410 with "That setup expired" above its
+  set-up button; and until the session refreshes or steps up, a just-enrolled person is still
+  sent back to it.
+- **The enrollment surface** carries `AllowMFAEnrollment()`: `/auth/me`, `/auth/csrf`,
+  `/auth/methods`, credential management (step-up, TOTP and passkey enrolment), the browser
+  account pages, the OAuth link start and `/auth/sessions`. `/auth/me` and `/auth/methods` add
+  `"mfa_enrollment": {"required": true, "enroll_by": "<RFC 3339>"}` inside the window.
+  `/auth/refresh` and `/auth/logout` are not gated.
+- **An SPA** whose shell sits under `RequirePrincipal()` adds `AllowMFAEnrollment()` to it or
+  serves it unauthenticated, and routes 403 `mfa_enrollment_required` to its enrollment UI,
+  401 with the RFC 9470 challenge to step-up, and a plain 401 to `/auth/refresh`.
+- **No grace for durable credentials.** The admin gate (`/auth/admin/users*`, with
+  `UserAdminCheck`), the machine lifecycle routes and the OAuth2 authorize page require AAL2
+  from every session, so nothing minted during the grace (an API key, a grant) outlives it.
+  `RequireMFA()` never accepts the grace.
+- **Posture and events.** Native password, passwordless and OAuth login leave the production
+  single-factor refusal (*Production posture*, "Added by S4c-2"). The boot line reads
+  `mfa_required=all gates=first_party_routes[,/auth/admin/users*],machine_lifecycle[,oauth2_authorize][,external_tokens]
+  … enrollment_start=<RFC 3339> enrollment_grace=<duration>`. A denial records
+  `mfa_required_denied gate=enrollment` with `reason=enrollment` (window closed) or
+  `reason=assurance` (holder must step up), once per session per process.
+- **Scope.** The floor covers `RequirePrincipal` routes only; host middleware that verifies
+  tokens itself is outside it. External-only `all` (an IdP-only host) is unchanged.
+
+*Operations runbooks*, "Turn on MFA for everyone", has the rollout, rollback and break-glass.
+The pocket README's "MFAConfig.Required all (native)" section is the reference.
+
 ## Production posture
 
 Production has no implicit mode and fails closed on incomplete security wiring. Among other requirements:
@@ -1125,7 +1201,7 @@ honor the same field. Its zero value keeps the existing password form.
 
 ## Not shipped
 
-There is no native `MFAConfig.Required` `all` and no enrollment grace yet (the follow-on `s4c2-native-all`); no age bound on a delegated grant's `aal` (it is fixed at approval; S4d part 4), no API keys under MFA gates and no re-sealing of TOTP secrets on ring rotation (S4d); no SHA-256 or 8-digit TOTP, no push or SMS second factor, and TOTP is never a sign-in method; no username-first passkey sign-in; and no attestation or AAGUID allow-list. MFA that an external identity provider asserted is enforced (see [Assurance and MFA](#assurance-and-mfa)).
+There is no per-user re-open of an enrollment grace and no account-page banner with its deadline (native `all`, S4c-2); no age bound on a delegated grant's `aal` (it is fixed at approval; S4d part 4), no API keys under MFA gates and no re-sealing of TOTP secrets on ring rotation (S4d); no SHA-256 or 8-digit TOTP, no push or SMS second factor, and TOTP is never a sign-in method; no username-first passkey sign-in; and no attestation or AAGUID allow-list. MFA that an external identity provider asserted is enforced (see [Assurance and MFA](#assurance-and-mfa)).
 
 ## OAuth client transports and trust
 
