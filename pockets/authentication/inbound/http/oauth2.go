@@ -26,7 +26,11 @@ func mountOAuth2(r pockets.RouteRegistrar, h *handlers) {
 	issuer, _ := url.Parse(metadata.Issuer)
 	discovery := "/.well-known/oauth-authorization-server" + strings.TrimRight(issuer.Path, "/")
 	r.Handle("GET", discovery, h.oauth2Metadata, oauth2Headers)
-	browser := htmlSecured(h.htmlPolicy, h.svc.RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Transports(TransportCookie), Live(), Browser()))
+	opts := []PrincipalOption{Accept(CredentialAccessToken), FirstParty(), Transports(TransportCookie), Live(), Browser()}
+	if h.oauth2MFA {
+		opts = append(opts, RequireMFA())
+	}
+	browser := htmlSecured(h.htmlPolicy, h.svc.RequirePrincipal(opts...))
 	r.Handle("GET", "/auth/oauth2/authorize", h.oauth2AuthorizePage, oauth2Headers, browser)
 	r.Handle("POST", "/auth/oauth2/authorize", h.oauth2Authorize, oauth2Headers, browser, requireBrowserSafeFormMutation(h.mutation.csrf()))
 	r.Handle("POST", "/auth/oauth2/token", h.oauth2Token, oauth2Headers)

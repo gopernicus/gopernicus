@@ -112,9 +112,10 @@ var (
 	// MFAConfig.Methods cannot be met by the wiring: a Methods source that is not
 	// wired, admins without WithPasskeys, WithTOTP or WithExternal (the AAL2
 	// sources) or without AdministrationConfig.UserAdminCheck (it would gate
-	// nothing); all without WithExternal, or beside native password,
-	// passwordless, OAuth or passkey login, or beside WithPasskeys or WithTOTP
-	// (native all is the follow-on s4c2-native-all). The error names the field
+	// nothing); all without WithExternal, WithPasskeys or WithTOTP, or —
+	// without WithPasskeys or WithTOTP — beside native password, passwordless
+	// or OAuth login; native all (beside WithPasskeys or WithTOTP) under a
+	// Methods that admits neither passkey nor totp. The error names the field
 	// to change.
 	ErrMFAUnsatisfiable = errors.New("auth: MFAConfig.Required cannot be satisfied by this wiring")
 	// ErrPasskeyReposRequired is returned when WithPasskeys wires a relying party
@@ -665,6 +666,7 @@ func checkPosture(repos Repositories, cfg constructorConfig, startTLS []string, 
 		return ErrAuditAcknowledgedWithSecurityEvents
 	}
 	causes := singleFactorCauses(cfg)
+	logNativeAllPosture(cfg, log)
 	conditions := []postureCondition{
 		{
 			present: !auditWired, acknowledged: cfg.AuditDisabledAcknowledged,
@@ -713,12 +715,42 @@ func logLivenessFloor(cfg constructorConfig, log *slog.Logger) {
 	}
 }
 
+// logNativeAllPosture logs native all's WARNs in every mode: one naming the
+// native single-factor sign-in the enrollment grace bounds, and one when
+// IdentityConfig.SingleFactorAcknowledged is set beside it, where it waives
+// nothing.
+func logNativeAllPosture(cfg constructorConfig, log *slog.Logger) {
+	if !nativeAll(cfg) {
+		return
+	}
+	if native := nativeSingleFactorCauses(cfg); len(native) > 0 {
+		log.Warn("auth: mfa_required=all admits single-factor sign-in for at most "+cfg.MFAEnrollmentGrace.String()+" per user until enrollment", "causes", native, "enrollment_grace", cfg.MFAEnrollmentGrace.String())
+	}
+	if cfg.SingleFactorAcknowledged {
+		log.Warn("auth: IdentityConfig.SingleFactorAcknowledged is inert beside MFAConfig.Required all with WithPasskeys or WithTOTP: the enrollment grace bounds single-factor sign-in, so there is nothing to acknowledge; remove it")
+	}
+}
+
 // singleFactorCauses lists the login sources that admit single-factor (AAL1)
 // sign-in: native sources cannot produce AAL2, so they count under any
-// MFAConfig.Required; an external provider counts only while it is not asked
-// to (no RequireMFA and Required none). Admins clears external_no_mfa because
-// its UserAdminCheck always gates something.
+// MFAConfig.Required but native all, whose enrollment grace bounds them; an
+// external provider counts only while it is not asked to (no RequireMFA and
+// Required none). Admins clears external_no_mfa because its UserAdminCheck
+// always gates something.
 func singleFactorCauses(cfg constructorConfig) []string {
+	var causes []string
+	if !nativeAll(cfg) {
+		causes = nativeSingleFactorCauses(cfg)
+	}
+	if cfg.External != nil && cfg.MFARequired == MFARequiredNone && slices.ContainsFunc(cfg.External.Providers, func(p authlogic.ExternalProvider) bool { return !p.RequireMFA }) {
+		causes = append(causes, causeExternalNoMFA)
+	}
+	return causes
+}
+
+// nativeSingleFactorCauses lists the native login sources on: password,
+// passwordless and OAuth sign-in, each AAL1.
+func nativeSingleFactorCauses(cfg constructorConfig) []string {
 	var causes []string
 	if !cfg.PasswordFlowsDisabled {
 		causes = append(causes, causeNativePassword)
@@ -728,9 +760,6 @@ func singleFactorCauses(cfg constructorConfig) []string {
 	}
 	if len(cfg.Providers) > 0 {
 		causes = append(causes, causeNativeOAuth)
-	}
-	if cfg.External != nil && cfg.MFARequired == MFARequiredNone && slices.ContainsFunc(cfg.External.Providers, func(p authlogic.ExternalProvider) bool { return !p.RequireMFA }) {
-		causes = append(causes, causeExternalNoMFA)
 	}
 	return causes
 }

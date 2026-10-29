@@ -126,6 +126,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if err := validateMFA(cfg); err != nil {
 		return nil, err
 	}
+	cfg.MFAEnrollmentGrace = resolveMFAEnrollmentGrace(cfg)
 	if err := validatePasskeyConfig(repos, cfg); err != nil {
 		return nil, err
 	}
@@ -622,6 +623,9 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if len(cfg.MFAMethods) > 0 {
 		logicOptions = append(logicOptions, authlogic.WithMFAMethods(cfg.MFAMethods...))
 	}
+	if nativeAll(cfg) {
+		logicOptions = append(logicOptions, authlogic.WithMFAEnrollment(authlogic.MFAEnrollmentConfig{Start: cfg.MFAEnrollmentStart, Grace: cfg.MFAEnrollmentGrace}))
+	}
 	if cfg.TOTP.Encrypter != nil {
 		logicOptions = append(logicOptions, authlogic.WithTOTP(authlogic.TOTPConfig{Encrypter: cfg.TOTP.Encrypter, Issuer: cfg.TOTP.Issuer}))
 	}
@@ -717,8 +721,11 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		inbound.WithGlobalSessionRevocationRoute(cfg.GlobalSessionRevocationRoute),
 		inbound.WithMFAAPIKeysExempt(cfg.MFAAPIKeysExempt),
 	}
-	if cfg.MFARequired == MFARequiredAdmins {
+	if cfg.MFARequired == MFARequiredAdmins || (nativeAll(cfg) && cfg.UserAdminCheck != nil) {
 		httpOptions = append(httpOptions, inbound.WithAdministrationMFA())
+	}
+	if nativeAll(cfg) {
+		httpOptions = append(httpOptions, inbound.WithMFAEnrollmentFloor(inbound.EnrollmentFloor{Enabled: true}))
 	}
 	if cfg.Passkey.Views != nil {
 		httpOptions = append(httpOptions, inbound.WithPasskeyViews(cfg.Passkey.Views))
@@ -798,17 +805,36 @@ func requireExternalMFA(external authlogic.ExternalConfig, required MFARequireme
 // logMFAPosture logs the one boot line naming the resolved MFAConfig.Required,
 // where it came from (config, or default for the resolved zero value), what it
 // gates — /auth/admin/users* under admins, and the machine lifecycle routes
-// beside passkeys or TOTP; every external token under all — the wired AAL2
-// sources and the MFAConfig.Methods restriction (any when empty).
+// beside passkeys or TOTP; every external token under all, and under native
+// all also every first-party route, the admin, machine and OAuth2 authorize
+// routes, with the enrollment window — the wired AAL2 sources and the
+// MFAConfig.Methods restriction (any when empty). Under native all it also
+// WARNs once the window has closed for every user created before
+// EnrollmentStart.
 func logMFAPosture(cfg constructorConfig, log *slog.Logger) {
 	required, gates := string(MFARequiredNone), "none"
-	switch cfg.MFARequired {
-	case MFARequiredAdmins:
+	var enrollment []any
+	switch {
+	case cfg.MFARequired == MFARequiredAdmins:
 		required, gates = string(MFARequiredAdmins), "/auth/admin/users*"
 		if nativeMFA(cfg) {
 			gates += ",machine_lifecycle"
 		}
-	case MFARequiredAll:
+	case nativeAll(cfg):
+		parts := []string{"first_party_routes"}
+		if cfg.UserAdminCheck != nil {
+			parts = append(parts, "/auth/admin/users*")
+		}
+		parts = append(parts, "machine_lifecycle")
+		if cfg.OAuth2 != nil {
+			parts = append(parts, "oauth2_authorize")
+		}
+		if cfg.External != nil {
+			parts = append(parts, "external_tokens")
+		}
+		required, gates = string(MFARequiredAll), strings.Join(parts, ",")
+		enrollment = []any{"enrollment_start", cfg.MFAEnrollmentStart.UTC().Format(time.RFC3339), "enrollment_grace", cfg.MFAEnrollmentGrace.String()}
+	case cfg.MFARequired == MFARequiredAll:
 		required, gates = string(MFARequiredAll), "external_tokens"
 	}
 	sources, methods := joinMFAMethods(mfaSources(cfg), "none"), joinMFAMethods(cfg.MFAMethods, "any")
@@ -816,7 +842,10 @@ func logMFAPosture(cfg constructorConfig, log *slog.Logger) {
 	if cfg.MFAAPIKeysExempt {
 		apiKeys = "exempt"
 	}
-	log.Info("auth: mfa posture", "mfa_required", required, "source", cfg.mfaRequiredSource, "gates", gates, "sources", sources, "methods", methods, "api_keys", apiKeys)
+	log.Info("auth: mfa posture", append([]any{"mfa_required", required, "source", cfg.mfaRequiredSource, "gates", gates, "sources", sources, "methods", methods, "api_keys", apiKeys}, enrollment...)...)
+	if nativeAll(cfg) && time.Now().After(cfg.MFAEnrollmentStart.Add(cfg.MFAEnrollmentGrace)) {
+		log.Warn("auth: enrollment window closed for every user created before "+cfg.MFAEnrollmentStart.UTC().Format(time.RFC3339)+": unenrolled first-party sessions are refused outside the enrollment surface", "enrollment_start", cfg.MFAEnrollmentStart.UTC().Format(time.RFC3339), "enrollment_grace", cfg.MFAEnrollmentGrace.String())
+	}
 	switch {
 	case !cfg.MFAAPIKeysExempt:
 	case cfg.RuntimeMode.IsProduction():

@@ -121,8 +121,15 @@ func (s *Service) redeemPasswordlessAtomic(ctx context.Context, token string) (T
 		return TokenPair{}, passwordless.RedeemResult{}, err
 	}
 
-	// Only now, after the commit, is the plaintext pair assembled.
-	access, expiresAt, err := s.signAccessToken(res.User.ID, res.Session.ID, res.Session.Authentication)
+	// Only now, after the commit, is the plaintext pair assembled. The
+	// enrollment snapshot reads after it too: the user may only now exist. A
+	// failed read fails the redemption closed; the committed session row is
+	// never handed out and expires unused.
+	enrollment, err := s.enrollmentDeadline(ctx, res.User.ID, res.Session.Authentication)
+	if err != nil {
+		return TokenPair{}, passwordless.RedeemResult{}, err
+	}
+	access, expiresAt, err := s.signAccessToken(res.User.ID, res.Session.ID, res.Session.Authentication, enrollment)
 	if err != nil {
 		return TokenPair{}, passwordless.RedeemResult{}, err
 	}

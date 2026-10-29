@@ -461,7 +461,11 @@ that is the hatch.
 - `GET /auth/me` — live-session-gated **session hydration** → the same
   `userResponse` body login and register return: `{id, email, display_name,
   email_verified}` with the **unmasked** active email (`/auth/methods` is the
-  masked inventory; this is the signed-in identity). `Cache-Control: no-store`.
+  masked inventory; this is the signed-in identity). Under native `all` a
+  session inside its enrollment grace also carries `"mfa_enrollment":
+  {"required": true, "enroll_by": "<RFC 3339>"}`, as `/auth/methods` does
+  ([MFAConfig.Required all (native)](#mfaconfigrequired-all-native)).
+  `Cache-Control: no-store`.
   Hydration deliberately pays one revocation lookup
   (`SessionHydration`'s default `RequirePrincipal(Live())` — every wired kind —
   not a stateless gate): a revoked access JWT is denied within one round-trip. Bearer-safe (no body → no double-submit gate); both the session
@@ -1745,6 +1749,12 @@ never per-route, because the posture is a property of what the surface does:
 | `Invitations` | authenticated create/list/mine/accept/cancel/resend routes | `RequirePrincipal(Live())` — every wired kind |
 | `BrowserAccount` | HTML account, identifier/password/step-up, OAuth-unlink GETs; HTML-only identifier edit POST | `RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Transports(TransportCookie), Live(), Browser())` |
 
+Under native `all` ([MFAConfig.Required all (native)](#mfaconfigrequired-all-native))
+`OAuthLinkStart`, `SessionSecurityReads`, `CSRFBootstrap`, `SessionHydration`,
+`CredentialManagement` and `BrowserAccount` are the enrollment surface: their
+defaults, their floors and a host override all carry `AllowMFAEnrollment()`.
+`MachineLifecycle`, `UserAdministration` and `Invitations` do not.
+
 The established-session and human-credential surfaces refuse API keys AND
 external tokens — an API key or a provider user never reaches
 `/auth/delivery/status`, `/auth/methods`, step-up or any credential mutation
@@ -2235,6 +2245,7 @@ Four gates require AAL2. Each answers a JSON request with the RFC 9470
 | `ExternalProvider.RequireMFA` (gate `provider`) | `Verify`, before the subject resolves | every route; a denied token provisions nothing, so its row has no `UserID` |
 | `WithMFA(MFAConfig{Required: MFARequiredAdmins})` (gate `admin`) | `/auth/admin/users*`, after `UserAdminCheck` | callers the check admits; a non-admin keeps the check's 403, so the challenge never reveals who is an administrator; an admitted API key gets the 403 `mfa_credential_not_eligible` |
 | the same `admins`, beside passkeys (gate `machine`) | the machine lifecycle routes, after `MachineRoutesGate` | every caller the gate admits: an AAL1 session cannot mint a key that would then pass the admin gates |
+| native `all` (gate `enrollment`) | every `RequirePrincipal` without `AllowMFAEnrollment()` | first-party access tokens below AAL2 once their enrollment grace closes (403 `mfa_enrollment_required`), or at once when the holder has a second factor (the step-up answer); recorded once per session ([MFAConfig.Required all (native)](#mfaconfigrequired-all-native)) |
 
 **The zero value resolves once.** `New` resolves `MFAConfig.Required` before
 any check reads it: an explicit value stands; the zero value
@@ -2245,15 +2256,17 @@ break-glass ([Passkeys](#passkeys-soc-2-s4b)). An IdP host at the zero value
 therefore resolves to `none` and still trips `external_no_mfa`.
 
 `MFARequiredAll` sets `RequireMFA` on a copy of every `WithExternal` provider
-(the host's slice is never written) and refuses native password, passwordless,
-OAuth and passkey login — native `all` waits for recovery codes (S4c); use
-`admins` meanwhile. A standalone `NewExternalAuthenticator` host sets
-`RequireMFA` on each provider itself. `admins` needs `WithPasskeys` or
-`WithExternal` and `AdministrationConfig.UserAdminCheck`; `all` needs
-`WithExternal` (`ErrMFAUnsatisfiable` in every mode, naming the field); an
+(the host's slice is never written). Without `WithPasskeys` or `WithTOTP` it
+refuses native password, passwordless and OAuth login; beside one of them it is
+native `all`, which admits native login under an enrollment grace
+([MFAConfig.Required all (native)](#mfaconfigrequired-all-native)). A standalone
+`NewExternalAuthenticator` host sets `RequireMFA` on each provider itself.
+`admins` needs `WithPasskeys`, `WithTOTP` or `WithExternal` and
+`AdministrationConfig.UserAdminCheck`; `all` needs `WithExternal`, `WithPasskeys`
+or `WithTOTP` (`ErrMFAUnsatisfiable` in every mode, naming the field); an
 unknown value is `sdk.ErrInvalidInput`. `New` logs one boot line, `auth: mfa
 posture mfa_required=<none|admins|all> source=<config|default>
-gates=<none|/auth/admin/users*[,machine_lifecycle]|external_tokens>`.
+gates=<none|/auth/admin/users*[,machine_lifecycle]|external_tokens|first_party_routes,…>`.
 
 **`admins` does NOT gate** role routes, cms admin routes or host admin pages: a
 host adds `RequireMFA()` to those itself. Without passkeys it does not gate the
@@ -2688,6 +2701,72 @@ kinds under `OAuth2Config.DelegatedAssurance`, read the same way. `Methods` also
 binds the second-factor gate: under a restriction its AAL2 tier accepts only a
 proof from an allowed source, and only factors of allowed sources count as
 held (a TOTP-only user under `[passkey]` adds a passkey at the bootstrap tier).
+
+### MFAConfig.Required all (native)
+
+`MFAConfig{Required: MFARequiredAll}` beside `WithPasskeys` or `WithTOTP` is
+native `all` (v0.38.0): every first-party session must reach AAL2, and a user
+without a second factor gets a bounded window to enrol.
+
+```go
+auth.WithMFA(auth.MFAConfig{
+	Required:        auth.MFARequiredAll,
+	EnrollmentStart: time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC), // a literal, never env
+	EnrollmentGrace: 14 * 24 * time.Hour,                           // zero = 7 days; at most 30
+})
+```
+
+- **The window.** A user's grace closes at `max(EnrollmentStart, user created
+  at) + EnrollmentGrace`. `EnrollmentStart` is required
+  (`ErrMFAEnrollmentStartRequired`); a negative grace or one above
+  `MaxMFAEnrollmentGrace` is `ErrMFAEnrollmentGraceInvalid`; a `Methods` that
+  admits neither `passkey` nor `totp` is `ErrMFAUnsatisfiable`. Keep
+  `EnrollmentStart` a literal: moving it later reopens the window for everyone,
+  earlier closes it. Boot WARNs when it has already closed for every user created
+  before `EnrollmentStart`.
+- **The claims.** Every first-party access token minted below AAL2 carries
+  `mfa_enroll_by` (unix seconds) when its holder holds no AAL2 factor, or
+  `mfa_enrolled: true` when they do (`Credential.MFAEnrollBy`,
+  `Credential.MFAEnrolled`). Each login, refresh and step-up re-evaluates them;
+  an AAL2 token carries neither. A factor read that fails refuses the mint
+  (503), never a silent pass.
+- **The floor** runs in every `RequirePrincipal` without `AllowMFAEnrollment()`,
+  on first-party access tokens below AAL2 only (API keys, delegated and external
+  tokens are untouched):
+
+  | token | JSON | `Browser()` with the cookie |
+  |---|---|---|
+  | `mfa_enroll_by` ahead | passes | passes |
+  | `mfa_enroll_by` passed | 403 `{"code":"mfa_enrollment_required","enroll_by":…}` | 303 to the TOTP enrollment page (else the passkeys page) with `return_to`; JSON when neither page is wired |
+  | `mfa_enrolled` | 401 + RFC 9470 challenge | 303 to the step-up page |
+  | neither (minted before the flip) | plain 401 — refresh and retry | 303 to the login page with `recover=1` |
+
+- **The enrollment surface** carries `AllowMFAEnrollment()`: `/auth/me`,
+  `/auth/csrf`, `/auth/methods`, credential management (step-up, TOTP and passkey
+  enrolment), the browser account pages, the OAuth link start and
+  `/auth/sessions`. A host adds it to its own enrolment page or SPA shell, or
+  serves the shell unauthenticated. `/auth/refresh` and `/auth/logout` are not
+  gated.
+- **No grace for durable credentials.** The admin gate (`/auth/admin/users*`,
+  with `UserAdminCheck`), the machine lifecycle routes and the OAuth2 authorize
+  page require AAL2 from every session, so nothing minted during the grace —
+  an API key, a grant — outlives it. `RequireMFA()` never accepts the grace.
+- **Posture.** Native password, passwordless and OAuth login leave the
+  production single-factor refusal; boot WARNs once that they sign in for at
+  most the grace per user. `SingleFactorAcknowledged` beside native `all` is
+  inert and WARNs. The boot line reads `mfa_required=all
+  gates=first_party_routes[,/auth/admin/users*],machine_lifecycle[,oauth2_authorize][,external_tokens]
+  … enrollment_start=<RFC 3339> enrollment_grace=<duration>`.
+- **Events.** `mfa_required_denied` with `gate=enrollment`, `reason=enrollment`
+  (window closed) or `reason=assurance` (holder must step up), recorded once per
+  session per process.
+- **Scope.** The floor covers `RequirePrincipal` routes only; host middleware
+  that verifies tokens itself is outside it.
+- **A lost factor.** An admin TOTP or passkey reset revokes the user's sessions;
+  their next login is walled to the enrollment surface at once if their window
+  has closed, and they re-enrol there at AAL1.
+- **Rollback.** Set `Required: admins` first, then repin below v0.38.0 — an
+  older pocket refuses native `all` at boot. The claims are harmless to it.
 
 ### Operators
 

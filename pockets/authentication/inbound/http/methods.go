@@ -36,6 +36,9 @@ type methodsResponse struct {
 	// authenticator app is confirmed, and how many recovery codes remain.
 	TOTP          *totpMethodResponse          `json:"totp,omitempty"`
 	RecoveryCodes *recoveryCodesMethodResponse `json:"recovery_codes,omitempty"`
+	// MFAEnrollment is the calling session's enrollment window under
+	// MFAConfig.Required all beside passkeys or TOTP, as in /auth/me.
+	MFAEnrollment *mfaEnrollmentResponse `json:"mfa_enrollment,omitempty"`
 }
 
 // totpMethodResponse is the authenticator app in the inventory.
@@ -93,6 +96,7 @@ func (h *handlers) methods(w http.ResponseWriter, r *http.Request) {
 	out := newMethodsResponse(view)
 	if cred, ok := h.svc.CurrentCredential(r.Context()); ok {
 		out.Assurance = string(cred.Assurance)
+		out.MFAEnrollment = newMFAEnrollmentResponse(cred)
 	}
 	web.RespondJSONOK(w, out)
 }

@@ -113,8 +113,8 @@ func validateMFA(cfg constructorConfig) error {
 		return fmt.Errorf("authentication: MFAConfig.Required %q is not none, admins or all: %w", cfg.MFARequired, sdk.ErrInvalidInput)
 	}
 	native := nativeMFA(cfg)
-	if cfg.MFARequired == MFARequiredAll && native {
-		return fmt.Errorf("%w: MFAConfig.Required all is not available beside WithPasskeys or WithTOTP: native all is the follow-on s4c2-native-all; use admins meanwhile", ErrMFAUnsatisfiable)
+	if nativeAll(cfg) {
+		return validateMFAEnrollment(cfg)
 	}
 	if cfg.External == nil && (cfg.MFARequired == MFARequiredAll || !native) {
 		return fmt.Errorf("%w: MFAConfig.Required %q needs WithExternal, WithPasskeys or WithTOTP, the AAL2 sources (all needs WithExternal)", ErrMFAUnsatisfiable, cfg.MFARequired)
@@ -138,6 +138,31 @@ func validateMFA(cfg constructorConfig) error {
 		}
 	}
 	return nil
+}
+
+// validateMFAEnrollment checks native all: a first-party AAL2 source
+// MFAConfig.Methods admits, an EnrollmentStart, and an EnrollmentGrace within
+// bounds. Native single-factor login stays on: the grace is its bound.
+func validateMFAEnrollment(cfg constructorConfig) error {
+	if len(cfg.MFAMethods) > 0 && !slices.Contains(cfg.MFAMethods, MFAMethodPasskey) && !slices.Contains(cfg.MFAMethods, MFAMethodTOTP) {
+		return fmt.Errorf("%w: MFAConfig.Required all beside WithPasskeys or WithTOTP needs MFAConfig.Methods to admit passkey or totp, or no first-party session can reach AAL2", ErrMFAUnsatisfiable)
+	}
+	if cfg.MFAEnrollmentStart.IsZero() {
+		return ErrMFAEnrollmentStartRequired
+	}
+	if cfg.MFAEnrollmentGrace < 0 || cfg.MFAEnrollmentGrace > MaxMFAEnrollmentGrace {
+		return fmt.Errorf("%w (got %s)", ErrMFAEnrollmentGraceInvalid, cfg.MFAEnrollmentGrace)
+	}
+	return nil
+}
+
+// resolveMFAEnrollmentGrace resolves a zero MFAConfig.EnrollmentGrace to
+// DefaultMFAEnrollmentGrace under native all; anywhere else it is unread.
+func resolveMFAEnrollmentGrace(cfg constructorConfig) time.Duration {
+	if nativeAll(cfg) && cfg.MFAEnrollmentGrace == 0 {
+		return DefaultMFAEnrollmentGrace
+	}
+	return cfg.MFAEnrollmentGrace
 }
 
 // resolveRegistrationSource names where IdentityConfig.Registration came
@@ -294,6 +319,12 @@ func logKeys(cfg constructorConfig, roles []keyRole, log *slog.Logger) {
 // party or a TOTP encrypter.
 func nativeMFA(cfg constructorConfig) bool {
 	return !nilDependency(cfg.Passkey.RelyingParty) || !nilDependency(cfg.TOTP.Encrypter)
+}
+
+// nativeAll reports native all: MFAConfig.Required all beside a native AAL2
+// source, where first-party sessions are gated too.
+func nativeAll(cfg constructorConfig) bool {
+	return cfg.MFARequired == MFARequiredAll && nativeMFA(cfg)
 }
 
 // mfaSources lists the wired AAL2 sources in the boot line's order.

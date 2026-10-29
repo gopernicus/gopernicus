@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/redirect"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
@@ -31,6 +32,19 @@ var (
 // codeMFACredentialNotEligible names the 403 an MFA gate answers an API key:
 // no key can step up, so it gets no challenge.
 const codeMFACredentialNotEligible = "mfa_credential_not_eligible"
+
+// codeMFAEnrollmentRequired names the 403 the enrollment floor answers a
+// first-party session past its enrollment grace.
+const codeMFAEnrollmentRequired = "mfa_enrollment_required"
+
+// The enrollment floor's once-per-session denial memory: its size, and the
+// bounds of an entry's life (the session lifetime, at most a day, at least a
+// minute).
+const (
+	enrollmentDenialEntries = 10_000
+	enrollmentDenialMaxTTL  = 24 * time.Hour
+	enrollmentDenialMinTTL  = time.Minute
+)
 
 // RequirePrincipal is THE authenticator. Its options are OR-sets over credential
 // kinds (Accept) and transports (Transports), a liveness tier (Live,
@@ -84,6 +98,9 @@ func (s *Adapter) RequirePrincipal(opts ...PrincipalOption) web.Middleware {
 			}
 			if !set.admits(cred) {
 				s.denyPrincipal(w, r, set, errCredentialRefused, false)
+				return
+			}
+			if s.enrollmentFloor && s.enrollmentFloorDenied(w, r.WithContext(ctx), set, cred) {
 				return
 			}
 			if err := set.assure(ctx, cred, s.mfaRefusal); err != nil {
@@ -258,6 +275,90 @@ func (s *Adapter) denyBrowserMFA(w http.ResponseWriter, r *http.Request, cred Cr
 		}
 	}
 	http.Redirect(w, r, loc, http.StatusSeeOther)
+}
+
+// mfaEnrollmentRequired is the enrollment floor's JSON 403 body: the error
+// shape with the deadline that passed.
+type mfaEnrollmentRequired struct {
+	Message  string `json:"message"`
+	Code     string `json:"code"`
+	EnrollBy string `json:"enroll_by"`
+}
+
+// enrollmentFloorDenied runs native all's first-party enrollment floor and
+// reports whether it answered the request. It judges only a first-party
+// access token below AAL2 on a set without AllowMFAEnrollment(): a holder of a
+// second factor (MFAEnrolled) gets the RequireMFA step-up answer; a token with
+// no enrollment claim the plain JSON 401, or under Browser() with a cookie the
+// login redirect with recover=1, so a refresh mints the claim; a token inside
+// its grace passes; one past it is recorded once per session and gets the
+// enrollment page redirect (Browser(), a cookie, the page wired) or the JSON
+// 403 mfa_enrollment_required with enroll_by.
+func (s *Adapter) enrollmentFloorDenied(w http.ResponseWriter, r *http.Request, set principalSet, cred Credential) bool {
+	if !s.enrollmentFloor || set.allowUnenrolled || cred.Kind != CredentialAccessToken || cred.Profile != session.ProfileFirstParty || cred.Assurance.AtLeast(session.AssuranceAAL2) {
+		return false
+	}
+	browserCookie := set.browser && cred.Transport == TransportCookie
+	switch {
+	case cred.MFAEnrolled:
+		s.recordEnrollmentDenial(r.Context(), cred, authlogic.MFADenialAssurance)
+		if set.browser {
+			s.denyBrowserMFA(w, r, cred)
+		} else {
+			writeMFARequired(w, "")
+		}
+		return true
+	case cred.MFAEnrollBy.IsZero():
+		if browserCookie {
+			s.redirectToBrowserLogin(w, r, true)
+		} else {
+			writeUnauthorized(w)
+		}
+		return true
+	case time.Now().Before(cred.MFAEnrollBy):
+		return false
+	}
+	s.recordEnrollmentDenial(r.Context(), cred, authlogic.MFADenialEnrollment)
+	if browserCookie && s.mfaEnrollmentPath != "" {
+		loc := s.mfaEnrollmentPath
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			target := r.URL.Path
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			if safe := redirect.SafeRelativePath(target); safe != "" {
+				loc += "?return_to=" + url.QueryEscape(safe)
+			}
+		}
+		http.Redirect(w, r, loc, http.StatusSeeOther)
+		return true
+	}
+	_ = web.RespondJSON(w, http.StatusForbidden, mfaEnrollmentRequired{
+		Message:  "multi-factor enrollment is required",
+		Code:     codeMFAEnrollmentRequired,
+		EnrollBy: cred.MFAEnrollBy.UTC().Format(time.RFC3339),
+	})
+	return true
+}
+
+// recordEnrollmentDenial records the enrollment floor's mfa_required_denied
+// row (gate enrollment) once per session and reason in this process: a cache
+// hit skips it, a miss or an evicted entry records it again.
+func (s *Adapter) recordEnrollmentDenial(ctx context.Context, cred Credential, reason string) {
+	if s.mfaDenials == nil {
+		return
+	}
+	key := reason + ":" + cred.SessionID
+	if cred.SessionID != "" {
+		if _, found, err := s.enrollmentDenials.Get(ctx, key); err == nil && found {
+			return
+		}
+	}
+	s.recordMFADenial(ctx, authlogic.MFAGateEnrollment, cred, reason)
+	if cred.SessionID != "" {
+		ttl := max(min(s.service.SessionLifetime(), enrollmentDenialMaxTTL), enrollmentDenialMinTTL)
+		_ = s.enrollmentDenials.Set(ctx, key, []byte{1}, ttl)
+	}
 }
 
 // writeMFARequired writes an MFA gate's denial for reason: an API key gets

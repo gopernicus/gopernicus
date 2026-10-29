@@ -311,6 +311,9 @@ func mustAuthenticationService(d authenticationFixture) *authlogic.Components {
 	if len(d.MFAMethods) > 0 {
 		opts = append(opts, authlogic.WithMFAMethods(d.MFAMethods...))
 	}
+	if !d.MFAEnrollment.Start.IsZero() {
+		opts = append(opts, authlogic.WithMFAEnrollment(d.MFAEnrollment))
+	}
 	service, err := authlogic.New(authlogic.Repositories{Users: d.Users, Identifiers: d.Identifiers, Passwords: d.Passwords, Sessions: d.Sessions, UserAdmin: d.UserAdmin, PasswordlessRedeem: d.PasswordlessRedeem, ActiveSessions: d.ActiveSessions, Challenges: d.Challenges, PasswordResets: d.PasswordResets, ContactChanges: d.ContactChanges, CredentialMutations: d.CredentialMutations, AuthenticationGrants: d.AuthenticationGrants, SecurityEvents: d.SecurityEvents, OAuthAccounts: d.OAuthAccounts, OAuthStates: d.OAuthStates, ServiceAccounts: d.ServiceAccounts, APIKeys: d.APIKeys, ExternalSubjects: d.ExternalSubjects, Passkeys: d.Passkeys, TOTP: d.TOTP, GlobalSessions: d.GlobalSessions, ServiceAccountStatus: d.ServiceAccountStatuses},
 		d.TokenSigner,
 		d.RuntimeMode,

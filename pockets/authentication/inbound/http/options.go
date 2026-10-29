@@ -150,6 +150,28 @@ func WithAdministrationMFA() Option {
 	return func(c *adapterConfig) { c.AdministrationMFA = true }
 }
 
+// EnrollmentFloor is the first-party enrollment floor of MFAConfig.Required
+// all beside passkeys or TOTP (WithMFAEnrollmentFloor).
+type EnrollmentFloor struct {
+	// Enabled runs the floor in every RequirePrincipal without
+	// AllowMFAEnrollment(): a first-party access token below AAL2 passes only
+	// while its mfa_enroll_by lies ahead. Past it the JSON answer is a 403
+	// mfa_enrollment_required carrying enroll_by and a Browser() cookie is
+	// redirected to the enrollment page (the TOTP enrollment page, else the
+	// passkeys page, when their views are wired); a token whose holder holds a
+	// second factor (mfa_enrolled) gets the RequireMFA step-up answer; a token
+	// carrying neither claim gets the plain JSON 401 (a Browser() cookie the
+	// login redirect with recover=1), so a refresh mints the claim. It also
+	// gates the OAuth2 authorize page and the machine lifecycle routes at
+	// AAL2. It needs a service with passkeys or TOTP wired.
+	Enabled bool
+}
+
+// WithMFAEnrollmentFloor replaces the EnrollmentFloor.
+func WithMFAEnrollmentFloor(value EnrollmentFloor) Option {
+	return func(c *adapterConfig) { c.EnrollmentFloor = value }
+}
+
 // WithGlobalSessionRevocationRoute opts in to POST
 // /auth/admin/sessions/revoke-all: the service's RevokeAllSessions behind its
 // own Live authenticator (a first-party access token or an external token; no

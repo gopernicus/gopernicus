@@ -35,6 +35,12 @@ const (
 	// admins enables beside passkeys, run after AdministrationConfig's
 	// MachineRoutesGate admits the caller.
 	MFAGateMachine MFAGate = "machine"
+	// MFAGateEnrollment is the first-party enrollment floor MFAConfig.Required
+	// all enables beside passkeys or TOTP, run by every RequirePrincipal outside
+	// the enrollment surface. It refuses a session past its enrollment grace
+	// (reason enrollment) or one whose holder holds a second factor (reason
+	// assurance), once per session.
+	MFAGateEnrollment MFAGate = "enrollment"
 )
 
 // The MFAConfig.Methods values: the AAL2 sources a host admits.
@@ -58,6 +64,9 @@ const (
 	// MFADenialAPIKey is an API key at an MFA gate: no key can step up, so the
 	// gate refuses it outright unless MFAConfig.APIKeysExempt.
 	MFADenialAPIKey = "api_key"
+	// MFADenialEnrollment is a first-party session below AAL2 whose holder's
+	// enrollment grace has closed without a second factor.
+	MFADenialEnrollment = "enrollment"
 )
 
 var (
@@ -83,7 +92,7 @@ type MFAMethod string
 
 // MFADenial is one refused multi-factor requirement: the gate that refused it,
 // the principal and the credential it refused, and why (Reason: assurance,
-// method or api_key; empty reads as assurance). RecordMFADenied records it as an
+// method, api_key or enrollment; empty reads as assurance). RecordMFADenied records it as an
 // mfa_required_denied row carrying bounded values only — the gate, the
 // credential kind, the provider name, the presented and required assurance, the
 // reason and the credential's AAL2 source — never a claim, an amr value or the
@@ -132,8 +141,8 @@ func MFASourceAllowed(cred Credential, allowed []MFAMethod) bool {
 }
 
 // RecordMFADenied records d as an mfa_required_denied row through the
-// service's recorder. The HTTP adapter calls it for the RequireMFA option and
-// the admin and machine gates.
+// service's recorder. The HTTP adapter calls it for the RequireMFA option, the
+// admin and machine gates and the enrollment floor.
 func (s *Service) RecordMFADenied(ctx context.Context, d MFADenial) {
 	provider := ""
 	if s.external != nil {
@@ -162,11 +171,11 @@ func (e *ExternalAuthenticator) providerName(cred Credential) string {
 // holder can drive it, so the failure-row budget keys it per client IP.
 func mfaDenialEvent(d MFADenial, provider string) securityEventInput {
 	details := map[string]any{
-		"gate":       boundedEnum(string(d.Gate), string(MFAGateRoute), string(MFAGateAdmin), string(MFAGateMachine), string(MFAGateProvider)),
+		"gate":       boundedEnum(string(d.Gate), string(MFAGateRoute), string(MFAGateAdmin), string(MFAGateMachine), string(MFAGateProvider), string(MFAGateEnrollment)),
 		"credential": boundedEnum(string(d.Credential.Kind), string(CredentialAccessToken), string(CredentialAPIKey), string(CredentialExternalToken)),
 		"assurance":  boundedEnum(string(d.Credential.Assurance), string(session.AssuranceAAL1), string(session.AssuranceAAL2), string(session.AssuranceAAL3)),
 		"required":   string(session.AssuranceAAL2),
-		"reason":     boundedEnum(cmp.Or(d.Reason, MFADenialAssurance), MFADenialAssurance, MFADenialMethod, MFADenialAPIKey),
+		"reason":     boundedEnum(cmp.Or(d.Reason, MFADenialAssurance), MFADenialAssurance, MFADenialMethod, MFADenialAPIKey, MFADenialEnrollment),
 		"method":     "none",
 	}
 	if sources := MFASources(d.Credential); len(sources) > 0 {

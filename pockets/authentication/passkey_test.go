@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/webauthnstub"
@@ -178,8 +179,11 @@ func TestMFARequiredResolvesOnce(t *testing.T) {
 	}
 
 	_, _, err = mfaWiring{ack: true, passkeys: rp, protector: protector, required: MFARequiredAll}.build(environment.ModeDevelopment)
-	if !errors.Is(err, ErrMFAUnsatisfiable) || !strings.Contains(err.Error(), "s4c2-native-all") {
-		t.Fatalf("native all = %v, want ErrMFAUnsatisfiable naming s4c2-native-all", err)
+	if !errors.Is(err, ErrMFAEnrollmentStartRequired) {
+		t.Fatalf("native all without EnrollmentStart = %v, want ErrMFAEnrollmentStartRequired", err)
+	}
+	if _, _, err = (mfaWiring{ack: true, passkeys: rp, protector: protector, required: MFARequiredAll, enrollmentStart: time.Now()}).build(environment.ModeDevelopment); err != nil {
+		t.Fatalf("native all beside passkeys = %v, want it to boot", err)
 	}
 }
 

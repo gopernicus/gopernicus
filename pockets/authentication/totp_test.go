@@ -119,7 +119,7 @@ func TestMFAWithTOTP(t *testing.T) {
 		"totp without WithTOTP":      {mfaWiring{ack: true, passkeys: rp, protector: protector, methods: []MFAMethod{MFAMethodTOTP}}, ErrMFAUnsatisfiable},
 		"passkey without passkeys":   {mfaWiring{ack: true, totp: true, protector: protector, methods: []MFAMethod{MFAMethodPasskey}}, ErrMFAUnsatisfiable},
 		"idp without WithExternal":   {mfaWiring{ack: true, totp: true, protector: protector, methods: []MFAMethod{MFAMethodIdP}}, ErrMFAUnsatisfiable},
-		"native all beside TOTP":     {mfaWiring{ack: true, totp: true, protector: protector, required: MFARequiredAll}, ErrMFAUnsatisfiable},
+		"native all beside TOTP":     {mfaWiring{ack: true, totp: true, protector: protector, required: MFARequiredAll}, ErrMFAEnrollmentStartRequired},
 		"admins satisfiable by TOTP": {mfaWiring{ack: true, totp: true, protector: protector, adminCheck: true, required: MFARequiredAdmins}, nil},
 	} {
 		_, _, err := tc.w.build(environment.ModeDevelopment)

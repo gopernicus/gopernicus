@@ -14,6 +14,7 @@ import (
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -52,6 +53,8 @@ type adapterConfig struct {
 	GlobalSessionRevocationRoute bool
 	// MFAAPIKeysExempt lets API keys pass every MFA gate.
 	MFAAPIKeysExempt bool
+	// EnrollmentFloor is native all's first-party enrollment floor.
+	EnrollmentFloor EnrollmentFloor
 }
 
 type routedService struct {
@@ -108,6 +111,9 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 			return nil, fmt.Errorf("authentication HTTP: TOTPViews requires a service with TOTP wired and Views: %w", sdk.ErrInvalidInput)
 		}
 		totpViews = cfg.TOTPViews
+	}
+	if cfg.EnrollmentFloor.Enabled && passkeys == nil && totps == nil {
+		return nil, fmt.Errorf("authentication HTTP: the MFA enrollment floor requires a service with passkeys or TOTP wired: %w", sdk.ErrInvalidInput)
 	}
 	if runtimeMode == environment.ModeProduction && cfg.OriginPolicy.HasHTTPNamespace() {
 		return nil, fmt.Errorf("authentication HTTP: production OriginPolicy must not admit an http namespace: %w", sdk.ErrInvalidInput)
@@ -198,6 +204,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		TOTP: totps, TOTPViews: totpViews,
 		GlobalRevoker: globalRevoker, AccountStatus: accountStatus, KeyFilter: keyFilter, Registration: registration,
 		LivenessFloorRelaxed: cfg.LivenessFloorRelaxed,
+		EnrollmentFloor:      cfg.EnrollmentFloor.Enabled,
 	}
 	switch {
 	case totpViews != nil:
@@ -206,6 +213,16 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		auth.mfaStepUpPath = passkeyStepUpPathFor(auth.browserLoginPath)
 	}
 	auth.mfaMethods = slices.Clone(cfg.MFAMethods)
+	if cfg.EnrollmentFloor.Enabled {
+		auth.enrollmentFloor = true
+		auth.enrollmentDenials = cacher.NewMemory(cacher.WithMaxEntries(enrollmentDenialEntries))
+		switch {
+		case totpViews != nil && auth.mfaAllows(authlogic.MFAMethodTOTP):
+			auth.mfaEnrollmentPath = auth.pagePath(totpEnrollPagePath)
+		case passkeyViews != nil && auth.mfaAllows(authlogic.MFAMethodPasskey):
+			auth.mfaEnrollmentPath = auth.pagePath(passkeysPagePath)
+		}
+	}
 	auth.apiKeysExempt = cfg.MFAAPIKeysExempt
 	if !auth.csrfCookie.secure {
 		auth.logger.Warn("authentication: development CSRF cookie wired; the session cookie is not Secure, so the double-submit cookie drops the __Host- prefix and Secure — production refuses it", "csrf_cookie", auth.csrfCookie.name, "secure", false)

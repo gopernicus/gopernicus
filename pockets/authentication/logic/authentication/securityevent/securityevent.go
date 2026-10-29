@@ -273,12 +273,14 @@ const (
 	// client IP because an AAL1 holder can drive it. UserID is the principal for
 	// the route, admin and machine gates and empty for the provider gate, which
 	// refuses before the subject resolves. Details carry bounded values only:
-	// gate (route, admin, machine or provider), credential (access_token,
-	// api_key or external_token), provider (external tokens), assurance (the
-	// presented level: aal1, aal2 or unknown), required (aal2), reason
-	// (assurance: below AAL2; method: AAL2 from a source MFAConfig.Methods does
-	// not admit) and method (the credential's AAL2 source: passkey, totp, idp or
-	// none) — never an amr value, a claim or the token.
+	// gate (route, admin, machine, provider or enrollment), credential
+	// (access_token, api_key or external_token), provider (external tokens),
+	// assurance (the presented level: aal1, aal2 or unknown), required (aal2),
+	// reason (assurance: below AAL2; method: AAL2 from a source MFAConfig.Methods
+	// does not admit; api_key; enrollment: the enrollment grace closed without a
+	// second factor) and method (the credential's AAL2 source: passkey, totp,
+	// idp or none) — never an amr value, a claim or the token. The enrollment
+	// gate records once per session, not per request.
 	TypeMFARequiredDenied = "mfa_required_denied"
 
 	// Passkey vocabulary (SOC 2 S4b). Details carry bounded values and opaque

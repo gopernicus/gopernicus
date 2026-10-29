@@ -63,6 +63,10 @@ type mfaWiring struct {
 	registration  RegistrationMode
 	globalRoute   bool
 	global        bool
+	// enrollmentStart and enrollmentGrace are MFAConfig's native-all window;
+	// oauth2 wires the OAuth2 server.
+	enrollmentStart time.Time
+	enrollmentGrace time.Duration
 }
 
 func idp(name, issuer string, requireMFA bool) authlogic.ExternalProvider {
@@ -79,7 +83,7 @@ func (w mfaWiring) build(mode environment.Mode) (*Components, string, error) {
 		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
 		WithDelivery(DeliveryConfig{Mailer: prodMailer{}}),
 		WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}}),
-		WithMFA(MFAConfig{Required: w.required, Methods: w.methods, APIKeysExempt: w.apiKeysExempt}),
+		WithMFA(MFAConfig{Required: w.required, Methods: w.methods, APIKeysExempt: w.apiKeysExempt, EnrollmentStart: w.enrollmentStart, EnrollmentGrace: w.enrollmentGrace}),
 		WithLogger(log),
 	}
 	if w.providers != nil {
@@ -381,5 +385,60 @@ func TestMachineMFADeadEndWarns(t *testing.T) {
 	_, logs, _ = (mfaWiring{providers: one, required: MFARequiredAdmins, adminCheck: true}).build(environment.ModeDevelopment)
 	if strings.Contains(logs, "native sessions mint API keys") {
 		t.Fatalf("the WARN without machine routes:\n%s", logs)
+	}
+}
+
+// TestNativeAllBoot pins native all at New: the refusals (no EnrollmentStart,
+// a grace out of bounds, a Methods with no first-party source) in every mode;
+// the production boot without SingleFactorAcknowledged and its two WARNs; the
+// inert acknowledgement WARN; the window-closed WARN; and the boot line.
+func TestNativeAllBoot(t *testing.T) {
+	protector := passwordlessProtector(t)
+	start := time.Now().Add(-time.Hour)
+	native := func(w mfaWiring) mfaWiring {
+		w.totp, w.protector, w.required, w.password, w.adminCheck = true, protector, MFARequiredAll, true, true
+		return w
+	}
+	for _, mode := range []environment.Mode{environment.ModeDevelopment, environment.ModeProduction} {
+		for name, tc := range map[string]struct {
+			w    mfaWiring
+			want error
+		}{
+			"no EnrollmentStart":     {native(mfaWiring{}), ErrMFAEnrollmentStartRequired},
+			"a 31-day grace":         {native(mfaWiring{enrollmentStart: start, enrollmentGrace: 31 * 24 * time.Hour}), ErrMFAEnrollmentGraceInvalid},
+			"a negative grace":       {native(mfaWiring{enrollmentStart: start, enrollmentGrace: -time.Hour}), ErrMFAEnrollmentGraceInvalid},
+			"Methods admitting idp":  {native(mfaWiring{enrollmentStart: start, providers: []authlogic.ExternalProvider{idp("idp", "https://idp.example.test", false)}, methods: []MFAMethod{MFAMethodIdP}}), ErrMFAUnsatisfiable},
+			"Methods admitting totp": {native(mfaWiring{enrollmentStart: start, methods: []MFAMethod{MFAMethodTOTP}}), nil},
+		} {
+			_, _, err := tc.w.build(mode)
+			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
+				t.Errorf("%s %s: err = %v, want %v", mode, name, err, tc.want)
+			}
+		}
+	}
+
+	_, logs, err := native(mfaWiring{enrollmentStart: start}).build(environment.ModeProduction)
+	if err != nil {
+		t.Fatalf("production native all without SingleFactorAcknowledged = %v, want it to boot", err)
+	}
+	for _, want := range []string{
+		`msg="auth: mfa posture" mfa_required=all source=config gates=first_party_routes,/auth/admin/users*,machine_lifecycle sources=totp methods=any api_keys=denied enrollment_start=` + start.UTC().Format(time.RFC3339) + " enrollment_grace=168h0m0s",
+		"auth: mfa_required=all admits single-factor sign-in for at most 168h0m0s per user until enrollment",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("production native all logs lack %q:\n%s", want, logs)
+		}
+	}
+	for _, absent := range []string{"posture_waiver=SingleFactorAcknowledged", "enrollment window closed", "is inert"} {
+		if strings.Contains(logs, absent) {
+			t.Errorf("production native all logs carry %q:\n%s", absent, logs)
+		}
+	}
+
+	if _, logs, err = native(mfaWiring{enrollmentStart: start, ack: true}).build(environment.ModeProduction); err != nil || !strings.Contains(logs, "SingleFactorAcknowledged is inert beside MFAConfig.Required all") || strings.Contains(logs, "posture_waiver=SingleFactorAcknowledged") {
+		t.Errorf("native all beside SingleFactorAcknowledged: err = %v, logs:\n%s", err, logs)
+	}
+	if _, logs, err = native(mfaWiring{enrollmentStart: time.Now().AddDate(-1, 0, 0)}).build(environment.ModeDevelopment); err != nil || !strings.Contains(logs, "enrollment window closed for every user created before") {
+		t.Errorf("EnrollmentStart a year ago: err = %v, logs:\n%s", err, logs)
 	}
 }

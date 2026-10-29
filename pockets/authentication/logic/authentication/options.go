@@ -168,6 +168,25 @@ func WithMFAMethods(methods ...MFAMethod) Option {
 	}
 }
 
+// MFAEnrollmentConfig turns on the enrollment snapshot native all signs into
+// first-party access tokens below AAL2: mfa_enroll_by, the instant a user
+// without an AAL2 factor (holdsAAL2Factor) is refused outside the enrollment
+// surface — max(Start, the user's CreatedAt) + Grace — or mfa_enrolled for a
+// user who holds one. A zero Start leaves it off.
+type MFAEnrollmentConfig struct {
+	Start time.Time
+	// Grace is required (positive) with Start.
+	Grace time.Duration
+}
+
+// WithMFAEnrollment replaces the MFAEnrollmentConfig. It needs WithPasskeys or
+// WithTOTP: without a native AAL2 source no user could ever enrol.
+func WithMFAEnrollment(value MFAEnrollmentConfig) Option {
+	return func(c *constructorConfig) {
+		c.MFAEnrollment = value
+	}
+}
+
 // WithTOTP replaces the complete TOTPConfig group, including zero values.
 func WithTOTP(value TOTPConfig) Option {
 	return func(c *constructorConfig) {
