@@ -1,5 +1,335 @@
 # Releasing gopernicus modules
 
+## Delegated assurance and asserted authentication time (SOC 2 slice S4d part 4 — published 2026-10-28)
+
+Five annotated tags (not signed) on five modules. Each tag was cut at its PR's squash-merge
+commit on `main` after a green `live-stores` dispatch on `main`, pushed one at a time,
+confirmed on origin, then cold-verified from a scratch consumer (`GOWORK=off`, an empty module
+cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build ./...`, `go 1.26.10`).
+Claude cuts and pushes the tags; the owner merges. One additive migration (0030, on
+`oauth_authorization_codes`); no views tag, no workshop tag. Design and rulings:
+`plans/s4d4-delegated-assurance-auth-time.md` (ratified 2026-10-28, "all recs", R-1..R-6 all
+(a); executed copy in `plans/`). The audit entry is **AUDIT-061**. This section is the whole
+record: there is no handoff file and no manifest. The operator surface is the docs site:
+*Operations runbooks* "Enable delegated assurance", *Production posture* (the refusals table
+and two revocation-SLA rows) and the authentication pocket page ("Added by S4d part 4"). Those
+shipped in #281 (PR-5, examples and docs, merged at `ddab754a`, no tags). The references are the
+authentication README's "OAuth2 delegated assurance (v0.37.0)" and "External authentication
+age", and the two store READMEs' 0030 rows.
+
+Closes the two residuals the control map carried to "S4d part 4": `aal` on delegated tokens
+(S4d part 2 R-4) and the `iat`-only provider (S4d part 2 R-5, `Identity.AuthTimeAsserted`).
+
+**What changed.**
+- **sdk v0.24.0: `Identity.AuthTimeAsserted`.** True only when `AuthenticatedAt` came from a
+  valid `auth_time` or from the provider's own sign-in instant; false on the `iat` fallback, and
+  false from any provider that cannot tell. The sdk `OIDC` provider sets it only when the mapped
+  `auth_time` is present and parses; a present-but-garbage value falls back to `iat` with the
+  flag false (BE-9). `authenticationtest.RunProvider` gains an `AuthTimeAsserted` case
+  (Asserted; IatFallback; Garbage, which accepts either an `iat` fallback with the flag false or
+  `ErrInvalidCredential` with a zero `Identity`, ruling (a)). The firebase line that sets the
+  flag landed here too (ruling (A)), so `make check` stayed green under `go.work`.
+- **firebase v0.3.0: the repin.** `integrations/authentication/firebase` sets
+  `AuthTimeAsserted` when `auth_time > 0` (code from #277) and moves its go.mod sdk v0.18.0 →
+  **v0.24.0** (#278). The Admin SDK refuses a non-integer `auth_time` outright, which the
+  Garbage case allows. go-oidc and auth0 change no code and do not tag; their suites run the new
+  case under `go.work`.
+- **authentication v0.37.0: delegated `aal`/`methods` behind `OAuth2Config.DelegatedAssurance`
+  (opt-in, default off).**
+  - **Boot.** `oauth2.New` refuses the flag unless `Repositories.OAuth2` implements the optional
+    `oauth2.CodeAuthenticationRepository` (`ErrDelegatedAssuranceRequires`), then runs a 5 s
+    `ProbeSchema`: not found is `ErrDelegatedAssuranceSchemaMissing` ("requires migration
+    0030_oauth_code_authentication.sql …", matches `sdk.ErrInvalidInput`); any other probe error
+    is `sdk.ErrUnavailable` naming only the error kind, never the store's text (SRE-9). Both
+    sentinels are re-exported from the pocket root. Boot line: `auth: oauth2
+    delegated_assurance=on|off`.
+  - **With the flag on:** approval copies the approving session's authentication into the code
+    row (`CreateCodeWithAuthentication`, inside the store's existing approval transaction);
+    redeem reads it back (`GetCodeWithAuthentication`) onto the delegated session (BE-4); every
+    mint (redeem, refresh, exchange) signs `aal` (`aal1`/`aal2`) and `methods` (deduplicated
+    kinds) from that session; `Introspection` gains `aal`/`methods` (`omitempty`, only when
+    recorded, R-3). Exchange copies the subject session's level and never raises it.
+  - **With the flag off:** today's paths. Stamping and introspection are gated on the flag too
+    (R-2 (a)), so turning it off is the rollback lever.
+  - **Verifiers (unconditional).** `parseAccessClaims` admits and validates `aal`/`methods` on
+    `ProfileDelegated` as on first-party tokens (unknown value → refused; absent →
+    `AssuranceUnknown`). A delegated AAL2 credential passes `RequireMFA` on a route that admits
+    its audience. The bundled admin and machine groups still refuse the delegated profile at
+    admission (BE-2, pinned by tests): an MCP grant never reaches admin.
+  - **`ExternalProvider.RequireAuthenticationTime` (opt-in, R-5).** Under a positive
+    `MaxAuthenticationAge`, an identity with `AuthTimeAsserted` false is denied before the
+    subject resolves: `external_subject_denied reason=authenticated_at_unasserted
+    provider=<name>`, recorded once per token. The flag without a bound refuses at config
+    (`sdk.ErrInvalidInput`, "RequireAuthenticationTime needs a positive MaxAuthenticationAge",
+    BE-7). The `auth: external provider lifetime` boot line gains
+    `authentication_time=asserted_required|any`.
+  - **`FreshAuth`'s doc comment** states that it accepts the `iat` fallback and names
+    `RequireAuthenticationTime` as the fix (R-6 (a); no behaviour change).
+  - **`storetest.RunOAuth2CodeAuthentication`**, a separate runner (skips a store without the
+    interface): the probe, the copy from the session (the caller's value ignored), plain
+    `GetCode`/`CreateCode` leaving the columns alone, redeem persisting the copy (BE-3),
+    approval racing a session rotation without deadlock (SRE-6), and the full `RunOAuth2` suite
+    re-run through the new methods. go.mod sdk v0.21.0 → v0.24.0; nothing else moved.
+- **authentication stores pgx v0.19.0 / turso v0.18.0: migration 0030 and the interface.**
+  `CreateCodeWithAuthentication` copies the session's authentication inside the transaction
+  `CreateCode` already runs, from the session row it already locks (pgx `FOR UPDATE`, turso
+  `BEGIN IMMEDIATE`): no new lock, no new lock order. A part the session did not record is
+  written NULL. `GetCodeWithAuthentication` reads it back; `ProbeSchema` checks all three columns
+  and returns `sdk.ErrNotFound` naming 0030. Plain `CreateCode`/`GetCode`/`RedeemCode` are
+  unchanged and work on an unmigrated schema; the store probes 0030 only when asked. Both run
+  `RunOAuth2CodeAuthentication` and repin core v0.35.0 → **v0.37.0**, sdk v0.21.0 → v0.24.0.
+
+| Step | Tag | Commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `sdk/v0.24.0` | `21f21f4f` | #277 (PR-1; the firebase flag line folded in, ruling (A)) | 40797996927 @ `21f21f4f` | OK; sdk + go-oidc v0.2.0 |
+| 2 | `integrations/authentication/firebase/v0.3.0` | `eefcc693` | #278 (PR-2, repin sdk v0.18.0 → v0.24.0) | 40806875519 @ `2fe347f5` (after both merges) | OK; set A |
+| 3 | `pockets/authentication/v0.37.0` | `2fe347f5` | #279 (PR-3) | 40806875519 @ `2fe347f5` | OK; set A |
+| 4 | `pockets/authentication/stores/pgx/v0.19.0` | `118340a7` | #280 (PR-4) | 40810755387 @ `118340a7` | OK; the full set |
+| 4 | `pockets/authentication/stores/turso/v0.18.0` | `118340a7` | #280 (PR-4) | 40810755387 @ `118340a7` | OK; the full set |
+| — | none | `ddab754a` | #281 (PR-5, examples + docs) | — | set C |
+
+#278 and #279 merged before one `live-stores` dispatch at `2fe347f5`, which cleared both tags
+2 and 3. Every module ships MINOR under the v0 convention. The tag table matches `git ls-remote
+--tags origin` (each tag's peeled commit as above). **Not tagged:** go-oidc (v0.2.0), auth0
+(v0.1.0), views/goth (v0.9.0), `pockets`, workshop (v0.10.2), ui/goth, pgxdb (v0.17.0), the
+examples, and every other module. Nothing retracts.
+
+**The MVS sets.**
+- **Step 1:** sdk v0.24.0 + go-oidc v0.2.0: verified, builds.
+- **Set A** (steps 2–3): authentication v0.37.0 + the RELEASED stores pgx v0.18.0 / turso
+  v0.17.0 + firebase v0.3.0 + go-oidc v0.2.0 + sdk v0.24.0: verified, builds. The new core works
+  with the old stores; they lack the interface, so `DelegatedAssurance` on them refuses boot
+  with `ErrDelegatedAssuranceRequires`.
+- **The full set** (step 4): authentication v0.37.0 + pgx v0.19.0 + turso v0.18.0 + firebase
+  v0.3.0 + go-oidc v0.2.0 + golang-jwt v0.4.0 + pgxdb v0.17.0 + sdk v0.24.0: verified, builds.
+- **Set C** (#281, from the tags): auth-cms, production-baseline and external-identity at
+  `GOWORK=off` from an EMPTY module cache over `proxy.golang.org` + `sum.golang.org`: each
+  reports `all modules verified`, builds, vets and tests.
+- **Host shapes (this PR, at the final versions, each from its own empty module cache):**
+  - **gps-three-sixty:** authentication v0.37.0 + authentication pgx v0.19.0 + authorization
+    v0.34.0 + authorization pgx v0.24.0 + goredis v0.6.0 + golang-jwt v0.4.0 + bcrypt v0.3.0 +
+    pgxdb v0.17.0 (MVS selects sdk v0.24.0);
+  - **battleboardhq:** authentication v0.37.0 + authentication pgx v0.19.0 + authorization
+    v0.34.0 + authorization pgx v0.24.0 + jobs v0.8.0 + jobs pgx v0.9.0 + golang-jwt v0.4.0 +
+    google-uuid v0.2.0 + sendgrid v0.5.0 + oauth/google v0.3.0 + pgxdb v0.17.0;
+  - **views:** authentication v0.37.0 + views/goth v0.9.0 + pgx v0.19.0 + turso v0.18.0;
+  - **firebase host:** firebase v0.3.0 + authentication v0.37.0 + go-oidc v0.2.0.
+
+  Each reports `all modules verified` and builds.
+
+**Upgrade notes.** Nothing changes on the wire for a host that sets neither flag. Row 3 is the
+only unconditional change and it admits, never refuses; rows 4 and 6 are opt-in; row 1 can stop
+a compile (unkeyed literals). The table is the plan's.
+
+> **Read first:** `grep -rnE 'WithOAuth2\(|MaxAuthenticationAge|authentication\.Identity\{|RequireMFA\(\)|/auth/oauth2/introspect' --include='*.go'`.
+> - **Pins:** sdk **v0.24.0**; authentication **v0.37.0**; a store host pins stores **pgx v0.19.0** or **turso
+>   v0.18.0** (both require core v0.37.0 and sdk v0.24.0); a firebase host pins **firebase v0.3.0**. views/goth stays
+>   **v0.9.0**, go-oidc **v0.2.0**, auth0 **v0.1.0**. Repin with explicit `GOWORK=off go get <module>@<tag>`, then
+>   `GOWORK=off go mod tidy`; never `go work sync`.
+
+| # | Flip | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | `Identity.AuthTimeAsserted` | additive; unkeyed `Identity{}` literals stop compiling; host-written providers read false | key the literal; set the field | sdk@v0.24.0 |
+| 2 | firebase sets the flag | nothing until a core bound uses it | — | firebase@v0.3.0 |
+| 3 | verifiers admit `aal`/`methods` on delegated tokens | nothing on the wire until a flag-on issuer exists; a v0.36.0 verifier beside a v0.37.0 flag-on issuer 401s delegated tokens | deploy every verifier first | authentication@v0.37.0 |
+| 4 | `OAuth2Config.DelegatedAssurance` | opt-in; boot refuses without the store interface or 0030; new grants carry the approving level; old grants stay unknown until re-consent; delegated AAL2 now passes `RequireMFA` on routes that admit the audience | leave off | authentication@v0.37.0 + stores |
+| 5 | `Introspection.aal`/`methods` | two additive JSON fields, only when recorded (and only while row 4 is on) | — | authentication@v0.37.0 |
+| 6 | `ExternalProvider.RequireAuthenticationTime` | opt-in; set without a bound refuses boot; `iat`-only tokens denied `authenticated_at_unasserted` | leave off | authentication@v0.37.0 |
+| 7 | migration 0030 | additive, NULL on existing rows; a `--posture` host that bumps the store pin copies it into its ledger (P9) even with the flag off | — | stores pgx@v0.19.0 / turso@v0.18.0 |
+| 8 | core and stores lift sdk to v0.24.0; stores pin core v0.37.0 | MVS; proven `GOWORK=off` per module before each tag | — | all |
+
+Row 5 gains "(and only while row 4 is on)": introspection is gated on the flag as built (see
+the deviations). A host-written provider that leaves `AuthTimeAsserted` false is denied under
+row 6 (fails closed); the denial log carries the reason and the provider name, never the token
+(SRE-11).
+
+**Migration 0030** (`0030_oauth_code_authentication.sql`, both stores; the production-baseline
+ledger copy is `0036_oauth_code_authentication.sql`, byte-identical to pgx 0030, guard P9/G34).
+Three nullable columns on `oauth_authorization_codes` in the `sessions` encodings:
+`authenticated_at` (pgx `TIMESTAMPTZ`; turso `TEXT` in `created_at`'s encoding),
+`authentication_methods` (`TEXT`, the JSON array) and `assurance_level` (`TEXT`). No default, no
+index; NULL on every existing row and on every row a plain `CreateCode` writes. pgx runs it under
+`SET LOCAL lock_timeout = '5s'` with `ADD COLUMN IF NOT EXISTS` (the `ADD COLUMN` takes `ACCESS
+EXCLUSIVE` briefly; on lock timeout re-run `make migrate`); turso applies the file in one
+transaction and holds the database write lock briefly. **Required only when
+`DelegatedAssurance` is set**; an unwired host boots without it and may apply it ahead of time.
+
+**Rollout** (a host that wants row 4; the runbook "Enable delegated assurance" is the operator
+copy):
+1. Every process that verifies delegated tokens runs authentication ≥ v0.37.0: the issuing
+   binary and any separate resource server or sidecar that parses tokens (SRE-2).
+2. Apply 0030 (and copy it into a `--posture` ledger).
+3. Set `DelegatedAssurance`; the boot line shows `delegated_assurance=on`.
+4. Users re-consent: grants approved before the flag have NULL columns, so their tokens carry no
+   level (`AssuranceUnknown`) until the grant is approved again.
+
+During a rolling flip, a code approved flag-on and redeemed flag-off (or the reverse) is
+`AssuranceUnknown`: it fails closed (SRE-10).
+
+**Rollback.** Flag off → wait one OAuth2 `AccessTTL` (with the flag off no new token is stamped,
+R-2 (a)) → downgrade. Rolling the binary back with the flag still on is a 401 window of at most
+`AccessTTL` on delegated routes, because a v0.36.0 verifier refuses the stamped tokens
+(BE-5/SRE-1). 0030 stays: its columns are NULL-tolerant and every other statement names its
+columns.
+
+**A delegated AAL2 is fixed at approval** (R-4 (a)): the level lives as long as the refresh
+grant, bounded by `OAuth2Config.SessionTTL` (30 days by default); refresh keeps it and exchange
+never raises it. Revoking the grant is the way to end it early.
+
+**Upgrade notes by host shape.**
+- **gps-360-go** (the only host with `WithOAuth2`; no `RequireMFA` on delegated routes today;
+  old pins): rows 3–5 and 7 when it repins. It is the one host for which the rollout order
+  matters. The owner expects no process other than the issuing binary to verify delegated
+  tokens, so step 1 is one deploy; **confirm that before setting the flag** (an MCP resource
+  server that parses tokens rather than introspecting is a verifier). Until it flips the flag,
+  nothing changes on its wire.
+- **gps-three-sixty / battleboardhq** (native Google OAuth sign-in → first-party sessions; no
+  external IdP, no OAuth2 server; pgx): rows 1, 3, 7 and 8 at repin. Nothing changes on the wire
+  and no flag applies. When the store pin moves to pgx v0.19.0, **copy 0030 into the ledger**
+  (guard P9 is red until it is there). The cold shapes above build.
+- **segovia/v2** (sdk v0.15.0, authentication v0.19.1): defer to its repin milestone (owner).
+- **Generic hosts.** Run the Read-first grep. A host with unkeyed `Identity{…}` literals keys
+  them (row 1). A host-written `Provider` sets `AuthTimeAsserted` when it has a sign-in instant,
+  or stays off row 6. An external-IdP host (the production-baseline shape) takes rows 1–2 and
+  may set row 6: Firebase hosts at once (it always asserts); a go-oidc or auth0 issuer only if
+  the IdP sends `auth_time` (request it with `max_age` or `prompt`) — a Google-ID-token issuer
+  under a bound must NOT set it. A host with its own `oauth2.Repository` implements
+  `CodeAuthenticationRepository` and adopts `RunOAuth2CodeAuthentication` before setting row 4.
+- **Examples (#281).** Every example builds, vets and tests at `GOWORK=off` on these tags. Pins
+  moved by explicit `GOWORK=off go get`, then tidy:
+  - `auth-cms`: sdk v0.24.0, authentication v0.37.0. authmem implements
+    `CodeAuthenticationRepository` under its single lock and runs the runner;
+    `AUTH_OAUTH2_DEMO=1` sets `DelegatedAssurance` and mounts `GET /demo/oauth2/mfa` (the MCP
+    audience under `RequireMFA`); the demo MCP resource shows the introspected `aal`/`methods`.
+  - `production-baseline`: sdk v0.24.0, authentication v0.37.0, authentication pgx v0.19.0.
+    `IDP_REQUIRE_AUTHENTICATION_TIME` (default false) wires row 6; `.env.example` documents
+    `DelegatedAssurance` for a host with `WithOAuth2`; ledger 0036 (landed in #280).
+  - `external-identity`: sdk v0.24.0, authentication v0.37.0 (its comment names
+    `RequireAuthenticationTime`).
+
+**Run and look.**
+- **#277 (sdk, real RS256 ID tokens from a loopback issuer, verified by go-oidc against its
+  JWKS, mapped by `NewOIDC`):** with `auth_time` 30 minutes before `iat` → `AuthenticatedAt` =
+  `auth_time`, `AuthTimeAsserted=true`; without it → `iat`, false; with `"garbage"` → `iat`,
+  false.
+- **#279 (auth-cms in a scratch `go.work`, memory stores; authmem wrapped for the interface,
+  not atomic):** flag on — an AAL1 connect gives `aal=aal1 methods=[password]`; after a TOTP
+  step-up a new connect gives `aal=aal2 methods=[password totp]` (introspection matches) and a
+  `RequireMFA` route on the MCP audience → **200**; the AAL1 token → **401** with the RFC 9470
+  challenge and one `mfa_required_denied` row; refresh and exchange stay aal2; the aal2
+  delegated token → **401** on `/auth/admin/users` and `/auth/service-accounts`. Flag off —
+  after an AAL2 step-up the token and introspection carry no `aal` and the `RequireMFA` route →
+  **401**. `RequireAuthenticationTime` on — an `iat`-only token → **401** three times with one
+  `authenticated_at_unasserted` row, an `auth_time` token → **200**; off — the same token →
+  **200**, no row. None of 22 secret values (codes, tokens, client secret, TOTP secrets)
+  appeared in the logs.
+- **#280 (`GOWORK=off`, published authentication v0.37.0 + sdk v0.24.0 + the pgx store,
+  PostgreSQL 18, at the service level in process; the AAL2 session seeded through the
+  repositories):** migrate (0030 applied), boot `delegated_assurance=on`; an approval from the
+  AAL2 session writes `assurance_level=aal2` on the code row; the redeemed token decodes to
+  `aal=aal2 methods=[password totp]`, `Authenticate` gives `Credential.Assurance=aal2`,
+  introspection reports aal2; **after a restart** the same token still verifies at aal2 and
+  `Refresh` mints a new aal2 token; a database through 0029 only with the flag on refuses boot
+  with `oauth2: Config.DelegatedAssurance requires migration
+  0030_oauth_code_authentication.sql … : invalid input`, and boots with the flag off.
+- **#281 §1 (auth-cms built at `GOWORK=off` against the tags, both demos on, no panic):**
+  register, verify and log in; an OAuth2 connect at AAL1 → token `aal=aal1
+  methods=[password]`, the probe route `/demo/oauth2/mfa` → **401**
+  `insufficient_user_authentication`; a real TOTP enrol and step-up, then a new connect → `aal=aal2
+  methods=[password totp]`, the probe → **200**, the MCP resource's introspection shows aal2;
+  refresh stays aal2; the aal2 delegated token → **401** on `/auth/admin/users` and
+  `/auth/service-accounts`; one `mfa_required_denied` row per AAL1 probe.
+- **#281 §2 (production-baseline built at `GOWORK=off`, PostgreSQL 18, ledger through 0036):**
+  with `IDP_REQUIRE_AUTHENTICATION_TIME=true` the boot line shows
+  `authentication_time=asserted_required`; an `iat`-only OIDC token from a scratch RS256 issuer
+  (through the real sdk `OIDC` path) → **401** three times with one
+  `authenticated_at_unasserted` row, an `auth_time` token → **200**; flag off → the same token
+  **200**; true with a zero bound refuses boot with `RequireAuthenticationTime needs a positive
+  MaxAuthenticationAge: invalid input`. No issued token in any log.
+
+**The review record.**
+- **The plan** passed a two-reviewer gate on the sketch (lead-backend-engineer BE-1..BE-12 and
+  platform-sre SRE-1..SRE-13, both ship with edits), folded under "Decided by gate". The design
+  moved on: BE-1 (claims, not row stamping, because `RequirePrincipal` asserts MFA before
+  `RequireLive`); BE-2 (the admin and machine fences pinned by tests); BE-4 (redeem must read
+  `GetCodeWithAuthentication`); BE-5/SRE-1 (stamping gated on the flag, R-2, and the rollback
+  order); SRE-2 (every verifier first); SRE-4 (the P9 ledger copy); SRE-6 (the copy reads the row
+  `CreateCode` already locks, plus the concurrent-rotate case); SRE-9 (the probe never echoes a
+  driver error); SRE-10/SRE-11 (the fail-closed lines above).
+- **#277, #278, #279, #280, #281:** gated by `make guard && make check`, `test -race` per module,
+  `GOWORK=off` build/vet/test per tagged module before its tag (BE-10), and mutation (bite)
+  proofs: #277 (the sdk flag and the Garbage case, plus firebase: never setting the flag gave 9
+  failures), 40 (#279: verifier, HTTP layer, BE-2, every mint, the copy, dedupe, introspection,
+  flag-off gating, boot, external ordering and config, and the runner via the reference store,
+  the deadlock case included), 7 (#280: copying zero on both stores; a second lock — pgx
+  `NOWAIT` `55P03`, a pgx blocking stall past 10 s, a turso nested `BEGIN IMMEDIATE`; plain
+  `GetCode` reading the new columns on both stores), 6 (#281: three authmem, the boot panic
+  regression, two baseline). #280 ran pgx live on PostgreSQL 18 bare and under
+  `POSTGRES_TEST_SCHEMA` (all 16 `OAuth2CodeAuthentication` subtests) and also at `GOWORK=off`
+  against the proxy's v0.37.0; turso `-tags=integration` on a local file (16 runner subtests in
+  each of its two suites). **turso live leg: local only** (SRE-7; CI has no turso secrets).
+
+**Owner rulings.** Ratified 2026-10-28 ("all recs"): **R-1 (a)** an explicit
+`DelegatedAssurance` flag, boot-probed; **R-2 (a)** stamping gated on the flag; **R-3 (a)**
+introspection reports `aal`/`methods`; **R-4 (a)** document the fixed-at-approval level, follow-up
+`DelegatedAssuranceMaxAge`; **R-5 (a)** `RequireAuthenticationTime` off by default; **R-6 (a)**
+document the `FreshAuth` gap. Open questions: gps-360-go probably has no other verifier process
+("i don't think so"); the auth-cms demo flag rides `AUTH_OAUTH2_DEMO` ("ride is fine"). During
+the build: **ruling (a)**, the `RunProvider` Garbage case accepts an `iat` fallback OR
+`ErrInvalidCredential` (the firebase Admin SDK refuses a non-integer `auth_time`); **ruling
+(A)**, the firebase flag line folded into PR-1 so `main` stayed green, and PR-2 became the repin
+and tag.
+
+**As-built deviations a host can see.**
+- **Firebase had a `GOWORK=off` gap between #277 and #278** (ruling (A)): on `main` at
+  `21f21f4f` its code set `AuthTimeAsserted` while its go.mod still pinned sdk v0.18.0, so the
+  module did not build outside `go.work` until #278. No tag was cut in the gap. #277's
+  description says the pin was v0.23.0; it was v0.18.0.
+- **Introspection is gated on the flag** (lead decision, following R-2): a flag-off issuer never
+  reports a level its own tokens do not carry. The plan read it from the live session regardless.
+- **The boot check and probe live in `oauth2.New`** (lead decision), not in the pocket's
+  `validateOAuth2`; the pocket root re-exports both sentinels.
+- **The R-6 `FreshAuth` doc comment was added in PR-3** (lead decision): no PR's file list had
+  it.
+- **production-baseline's ledger copy 0036 landed in #280**, not #281 (lead decision, the #223
+  precedent), so guard stayed green between the store PR and the examples PR.
+- **auth-cms set `BrowserLoginPath: "/auth/login"` explicitly** (#281): with `AUTH_OAUTH2_DEMO=1`
+  and `AUTH_EXTERNAL_DEMO=1` together it panicked at boot (`Browser() on a set admitting external
+  tokens requires WithBrowserLoginPath`), pre-existing on `main`. The value equals the default and
+  `AUTH_BROWSER_LOGIN_PATH` still overrides it; `TestRunBootsWithOAuth2AndExternalDemos` pins it.
+  The core fix is **#282**.
+- **#272 did not reproduce** on a fresh database during #280 (bare mode passed); the issue
+  stays open for a recheck.
+
+**Verification record.**
+- `make guard` and `make check` pass on every PR. `live-stores` is green on `main` before each
+  tag (runs 40797996927, 40806875519, 40810755387).
+- **From the tags (§3):** §1(1)–(2) on a `GOWORK=off` auth-cms binary (#281);
+  `RunOAuth2CodeAuthentication` green on local PostgreSQL 18 (pgx, `GOWORK=off` against the
+  published core) and a local libSQL file (turso, local only) (#280); `guard --posture` on
+  production-baseline shows `P9 ok (2 stores)` with 0036, and `make docs-build` builds (#281); the
+  tag table matches `git ls-remote --tags origin` (this PR).
+- **This PR:** docs only; `make guard` and `make check` pass.
+
+**Known and deferred.**
+- **Not shown:** §1(5) (a flag-off restart on the demo) — authmem does not persist and
+  production-baseline runs no OAuth2 server. #280's real check showed a token and its refresh
+  surviving a restart at aal2 on pgx. **Exchange** was proven only indirectly, by the MCP
+  resource's successful exchange call (#281) and the in-process run (#279).
+- **What the concurrent-rotate case cannot catch:** a lock-order inversion. `RotateAt` locks only
+  the session row, so the case detects a second lock and a stall, not an inversion.
+- **Follow-ups:** `OAuth2Config.DelegatedAssuranceMaxAge` (R-4); `FreshAuth` threading the
+  asserted flag (R-6); **#282** (WithOAuth2 + WithExternal without an explicit browser login
+  path panics at boot); a `guard --posture` line for `DelegatedAssurance`; re-consent tooling
+  (revoke pre-flag grants in bulk); go-oidc/auth0 README sentences on `max_age` the next time
+  either module tags.
+- **Out of scope by plan:** flipping `RequireAuthenticationTime` on by default; exchange raising
+  a level; any views, workshop-module or scaffold change; host wiring.
+- **Pre-existing, still open:** #271 (auth-cms passkey-test race), #272 (above), #273 (an auth-cms
+  naming-rule rename), #274 (erase-hook observability), #275 (turso CI legs skip).
+- gps-360-go's, gps-three-sixty's, battleboardhq's and segovia's repins happen in their own
+  repositories.
+
 ## Host asks #224/#225/#256: tuple-cache identity error, model-scoped integrity default, a server-side erase hook (published 2026-10-28)
 
 Five annotated tags (not signed) on four modules, for three issues filed by gps-three-sixty.

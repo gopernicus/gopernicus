@@ -14,6 +14,13 @@ ACL user limited to the mirror keys). Since `pockets/authorization/stores/goredi
 Redis-only compromise cost availability rather than access; the store README's "Trust
 boundary and hardening" section is the recipe.
 
+A host that turns on `OAuth2Config.DelegatedAssurance` (`pockets/authentication` v0.37.0)
+gets delegated tokens carrying the approving session's `aal`/`methods`. That level is fixed at
+approval: it lives as long as the refresh grant (bounded by `OAuth2Config.SessionTTL`), refresh
+keeps it and token exchange never raises it; revoking the grant ends it. An MCP grant never
+reaches admin: the bundled admin and machine route groups refuse the delegated profile before
+any MFA check.
+
 ## Reporting a vulnerability
 
 Report privately through GitHub's security advisories for this repository
@@ -28,10 +35,10 @@ each module receives fixes. Latest tags at the time of writing:
 
 | Module | Latest |
 |---|---|
-| `sdk` | v0.23.0 |
-| `pockets/authentication` | v0.36.0 |
-| `pockets/authentication/stores/pgx` | v0.18.0 |
-| `pockets/authentication/stores/turso` | v0.17.0 |
+| `sdk` | v0.24.0 |
+| `pockets/authentication` | v0.37.0 |
+| `pockets/authentication/stores/pgx` | v0.19.0 |
+| `pockets/authentication/stores/turso` | v0.18.0 |
 | `pockets/authentication/views/goth` | v0.9.0 |
 | `pockets/authorization` | v0.34.0 |
 | `pockets/authorization/stores/pgx` | v0.24.0 |
@@ -45,7 +52,7 @@ each module receives fixes. Latest tags at the time of writing:
 | `pockets/jobs/stores/pgx` | v0.9.0 |
 | `pockets/jobs/stores/turso` | v0.8.0 |
 | `pockets/secrets` | v0.2.0 |
-| `integrations/authentication/firebase` | v0.2.0 |
+| `integrations/authentication/firebase` | v0.3.0 |
 | `integrations/cryptids/bcrypt` | v0.3.0 |
 | `integrations/cryptids/go-oidc` | v0.2.0 |
 | `integrations/cryptids/go-webauthn` | v0.1.0 |
