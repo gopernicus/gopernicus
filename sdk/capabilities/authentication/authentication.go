@@ -122,6 +122,12 @@ type Identity struct {
 	ExpiresAt       time.Time
 	Methods         []string // amr verbatim
 
+	// AuthTimeAsserted reports that AuthenticatedAt came from auth_time (or the
+	// provider's own sign-in instant), not the iat fallback. False means
+	// AuthenticatedAt is only when the token was issued, so a bound on it bounds
+	// token age, not sign-in age. A provider that cannot tell leaves it false.
+	AuthTimeAsserted bool
+
 	// MFA is the provider's assertion that this sign-in used multiple factors:
 	// authentication with at least two factor categories (knowledge,
 	// possession, inherence), or an explicit MFA claim or flag. A one-factor

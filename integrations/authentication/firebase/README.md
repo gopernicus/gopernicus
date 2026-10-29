@@ -69,6 +69,10 @@ module still prefers the struct fields where they exist. An email/password
 emulator token's `Claims` keys were
 `[auth_time email email_verified firebase name user_id]`.
 
+`Identity.AuthTimeAsserted` is true when `AuthenticatedAt` comes from the token's
+`auth_time`, and false when it falls back to `iat`. The Admin SDK refuses a
+non-integer `auth_time` outright, so that token is an `ErrInvalidCredential`.
+
 ## Revocation
 
 `CheckRevocation` returns facts, not a verdict. The consumer compares

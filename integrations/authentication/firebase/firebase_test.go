@@ -241,7 +241,7 @@ func TestProfileParity(t *testing.T) {
 	want := sdkauth.Identity{
 		Issuer: IDTokenIssuer(testProject), Subject: "uid-alice",
 		Email: "a@x.test", EmailVerified: true, DisplayName: "Alice",
-		AuthenticatedAt: time.Unix(now-20, 0).UTC(), ExpiresAt: time.Unix(now+600, 0).UTC(),
+		AuthenticatedAt: time.Unix(now-20, 0).UTC(), AuthTimeAsserted: true, ExpiresAt: time.Unix(now+600, 0).UTC(),
 		Attributes: map[string]string{AttributeSignInProvider: "password"},
 	}
 	if !reflect.DeepEqual(viaAdmin, want) {
@@ -290,7 +290,7 @@ func TestIdentityFromToken(t *testing.T) {
 	}
 	want := sdkauth.Identity{
 		Issuer: iss, Subject: "u1", Email: "u1@x.test", Phone: "+15555550100", PhoneVerified: true,
-		Tenant: "tenant-a", AuthenticatedAt: time.Unix(1000, 0).UTC(), ExpiresAt: time.Unix(5000, 0).UTC(),
+		Tenant: "tenant-a", AuthenticatedAt: time.Unix(1000, 0).UTC(), AuthTimeAsserted: true, ExpiresAt: time.Unix(5000, 0).UTC(),
 		MFA: true, Attributes: map[string]string{AttributeSignInProvider: "phone"},
 	}
 	if !reflect.DeepEqual(id, want) {
@@ -302,8 +302,8 @@ func TestIdentityFromToken(t *testing.T) {
 
 	tok := base()
 	tok.AuthTime = 0
-	if id, _ := identityFromToken(tok, iss, nil); !id.AuthenticatedAt.Equal(time.Unix(2000, 0)) {
-		t.Errorf("AuthenticatedAt without auth_time = %v, want iat", id.AuthenticatedAt)
+	if id, _ := identityFromToken(tok, iss, nil); !id.AuthenticatedAt.Equal(time.Unix(2000, 0)) || id.AuthTimeAsserted {
+		t.Errorf("without auth_time: AuthenticatedAt = %v, AuthTimeAsserted = %v, want iat and false", id.AuthenticatedAt, id.AuthTimeAsserted)
 	}
 
 	// The struct is authoritative: a claims map disagreeing on the subject or
