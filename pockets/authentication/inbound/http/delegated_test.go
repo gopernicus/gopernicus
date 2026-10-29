@@ -11,7 +11,12 @@ import (
 	"time"
 
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/apikey"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
@@ -46,6 +51,111 @@ func (h *credentialHarness) delegatedToken(t *testing.T, id string) (string, str
 		t.Fatal(err)
 	}
 	return token, refresh
+}
+
+// delegatedAssuranceToken seeds a connection as delegatedToken does and signs
+// its access token with the given aal and methods — what a DelegatedAssurance
+// issuer mints from an approval at that level (S4d part 4).
+func (h *credentialHarness) delegatedAssuranceToken(t *testing.T, id, aal string, methods ...string) string {
+	t.Helper()
+	h.delegatedToken(t, id)
+	claims := map[string]any{
+		"user_id": h.userID, "session_id": id, "session_profile": "delegated",
+		"iss": delegatedIssuer, "aud": []string{mcpResource}, "client_id": "https://client.example.com/metadata.json",
+		"aal": aal, "methods": methods,
+	}
+	token, err := h.signer.Sign(claims, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+// TestDelegatedAssuranceUnderRequireMFA pins S4d part 4 at the route: a
+// delegated token signed aal2 passes RequireMFA on a route admitting its
+// audience; aal1 gets the RFC 9470 challenge and one mfa_required_denied row
+// reason=assurance; under an MFAConfig.Methods restriction its approval's
+// factor decides (passkey refused by [totp], reason=method).
+func TestDelegatedAssuranceUnderRequireMFA(t *testing.T) {
+	h := newCredentialHarness(t, authlogic.DelegatedTokensConfig{Issuer: delegatedIssuer})
+	route := h.svc.RequirePrincipal(Audience(mcpResource), RequireMFA())
+	aal2 := h.delegatedAssuranceToken(t, "connection-aal2", "aal2", "password", "passkey")
+	aal1 := h.delegatedAssuranceToken(t, "connection-aal1", "aal1", "password")
+	unknown, _ := h.delegatedToken(t, "connection-unknown")
+
+	rec, got := serveGuarded(h, route, h.credentialRequest(aal2, ""))
+	if rec.Code != http.StatusOK || got.cred.Profile != session.ProfileDelegated || got.cred.Assurance != session.AssuranceAAL2 {
+		t.Fatalf("delegated aal2 = %d %+v, want 200 with an AAL2 delegated credential", rec.Code, got.cred)
+	}
+	for name, token := range map[string]string{"aal1": aal1, "unknown": unknown} {
+		before := len(mfaRows(h.events))
+		rec, got = serveGuarded(h, route, h.credentialRequest(token, ""))
+		rows := mfaRows(h.events)
+		if rec.Code != http.StatusUnauthorized || got.reached || rec.Header().Get("WWW-Authenticate") != mfaChallenge {
+			t.Fatalf("delegated %s = %d %q, want the MFA challenge", name, rec.Code, rec.Header().Get("WWW-Authenticate"))
+		}
+		if len(rows) != before+1 || rows[before].Details["reason"] != "assurance" || rows[before].Details["gate"] != "route" {
+			t.Fatalf("delegated %s rows = %+v, want one route/assurance row", name, rows[before:])
+		}
+	}
+
+	h.svc.Adapter.mfaMethods = []authlogic.MFAMethod{authlogic.MFAMethodTOTP}
+	before := len(mfaRows(h.events))
+	if rec, _ := serveGuarded(h, route, h.credentialRequest(aal2, "")); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("passkey approval under Methods [totp] = %d, want 401", rec.Code)
+	}
+	if rows := mfaRows(h.events); len(rows) != before+1 || rows[before].Details["reason"] != "method" || rows[before].Details["method"] != "passkey" {
+		t.Fatalf("Methods restriction rows = %+v, want one reason=method method=passkey", rows[before:])
+	}
+	h.svc.Adapter.mfaMethods = []authlogic.MFAMethod{authlogic.MFAMethodPasskey}
+	if rec, _ := serveGuarded(h, route, h.credentialRequest(aal2, "")); rec.Code != http.StatusOK {
+		t.Fatalf("passkey approval under Methods [passkey] = %d, want 200", rec.Code)
+	}
+}
+
+// TestDelegatedAssuranceNeverReachesAdminOrMachine pins BE-2: the bundled
+// admin and machine groups name no audience, so admission refuses a delegated
+// token before any MFA check — an AAL2 grant that passes RequireMFA on its own
+// audience still gets 401 on /auth/admin/users and every machine lifecycle
+// route, with the admin MFA gate on and the host checks allowing everyone.
+func TestDelegatedAssuranceNeverReachesAdminOrMachine(t *testing.T) {
+	users := newMemUsers()
+	sess := &memSessions{m: map[string]session.Session{}}
+	signer := newFakeSigner()
+	events := newSpySecurityEvents()
+	svc := newServiceWithFakes(authenticationFixture{
+		Users: users, Identifiers: newMemIdentifiers(users), Passwords: &memPasswords{m: map[string]string{}}, Sessions: sess,
+		Challenges: &memChallenges{byID: map[string]challenge.Challenge{}}, Protector: memProtector{}, Hasher: &fakeHasher{},
+		Limiter: ratelimiter.NewMemory(), SecurityEvents: events, TokenSigner: signer, UserAdmin: memUserAdmin{},
+		ServiceAccounts: &memServiceAccounts{m: map[string]serviceaccount.ServiceAccount{}}, APIKeys: &memAPIKeys{m: map[string]apikey.APIKey{}},
+		DelegatedTokens: authlogic.DelegatedTokensConfig{Issuer: delegatedIssuer},
+	})
+	u, err := svc.Register(context.Background(), "delegated-admin@example.com", credentialPassword, "Admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &credentialHarness{svc: svc, users: users, sess: sess, signer: signer, events: events, userID: u.ID}
+	token := h.delegatedAssuranceToken(t, "connection-admin", "aal2", "password", "passkey")
+	if rec, _ := serveGuarded(h, svc.RequirePrincipal(Audience(mcpResource), RequireMFA()), h.credentialRequest(token, "")); rec.Code != http.StatusOK {
+		t.Fatalf("the AAL2 grant on its own audience = %d, want 200", rec.Code)
+	}
+
+	router := web.NewWebHandler()
+	mount(router, mountDeps{Auth: svc, ListStrategy: list.StrategyCursor, AdministrationMFA: true, MachineGate: allowMachineGate,
+		UserAdminCheck: func(context.Context, UserAdminCheckRequest) error { return nil }})
+	for _, route := range append([]routeSpec{{"GET", "/auth/admin/users"}}, machineLifecycleRoutes...) {
+		req := httptest.NewRequest(route.method, route.path, strings.NewReader("{}"))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized || rec.Header().Get("WWW-Authenticate") == mfaChallenge {
+			t.Errorf("%s %s with a delegated AAL2 token = %d %q, want the admission 401", route.method, route.path, rec.Code, rec.Header().Get("WWW-Authenticate"))
+		}
+	}
+	if rows := mfaRows(events); len(rows) != 0 {
+		t.Fatalf("admission refused after an MFA check: rows %+v", rows)
+	}
 }
 
 func TestDelegatedPrincipalAdmission(t *testing.T) {

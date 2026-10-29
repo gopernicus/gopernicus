@@ -235,6 +235,20 @@ func keyRoles(cfg constructorConfig) []keyRole {
 	}
 }
 
+// logOAuth2 logs the one auth: oauth2 boot line when WithOAuth2 is wired:
+// whether delegated access tokens carry the approving session's aal and
+// methods (OAuth2Config.DelegatedAssurance).
+func logOAuth2(cfg constructorConfig, log *slog.Logger) {
+	if cfg.OAuth2 == nil {
+		return
+	}
+	delegated := "off"
+	if cfg.OAuth2.Server.DelegatedAssurance {
+		delegated = "on"
+	}
+	log.Info("auth: oauth2", "delegated_assurance", delegated)
+}
+
 // logKeys logs the one auth: keys boot line: per role its kind and, for a
 // ring, the active id, the reported ids and whether a legacy id reads
 // pre-ring values; the identifier keyer's kind; and the first-party token

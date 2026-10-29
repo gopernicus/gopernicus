@@ -237,6 +237,11 @@ func RequireMFA() PrincipalOption {
 // FreshAuth requires an external token whose subject authenticated at the
 // provider no longer than within ago. A JSON denial carries the RFC 9470
 // challenge with max_age. A non-positive within panics.
+//
+// It reads Identity.AuthenticatedAt as the provider reported it, including the
+// iat fallback (Identity.AuthTimeAsserted false), so a provider that omits
+// auth_time can pass with a recently issued token. To refuse such tokens, set
+// ExternalProvider.RequireAuthenticationTime on that provider.
 func FreshAuth(within time.Duration) PrincipalOption {
 	if within <= 0 {
 		panic("authsvc: FreshAuth requires a positive duration")

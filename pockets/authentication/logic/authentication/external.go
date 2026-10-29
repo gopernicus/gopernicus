@@ -28,15 +28,16 @@ import (
 
 // Denial reasons recorded on TypeExternalSubjectDenied.
 const (
-	externalReasonTenant            = "tenant"
-	externalReasonSignInMethod      = "sign_in_method"
-	externalReasonUnverifiedEmail   = "unverified_email"
-	externalReasonNoIdentifier      = "no_identifier"
-	externalReasonInvalidIdentifier = "invalid_identifier"
-	externalReasonInactive          = "inactive"
-	externalReasonRevoked           = "revoked"
-	externalReasonAgeExceeded       = "authentication_age_exceeded"
-	externalReasonAuthTimeMissing   = "authenticated_at_missing"
+	externalReasonTenant             = "tenant"
+	externalReasonSignInMethod       = "sign_in_method"
+	externalReasonUnverifiedEmail    = "unverified_email"
+	externalReasonNoIdentifier       = "no_identifier"
+	externalReasonInvalidIdentifier  = "invalid_identifier"
+	externalReasonInactive           = "inactive"
+	externalReasonRevoked            = "revoked"
+	externalReasonAgeExceeded        = "authentication_age_exceeded"
+	externalReasonAuthTimeMissing    = "authenticated_at_missing"
+	externalReasonAuthTimeUnasserted = "authenticated_at_unasserted"
 )
 
 // authenticationAgeLeeway absorbs clock skew between the provider and this
@@ -320,15 +321,18 @@ func (e *ExternalAuthenticator) Verify(ctx context.Context, raw string, transpor
 
 // authenticationAgeRefusal applies p.MaxAuthenticationAge to identity on
 // every request, before the subject resolves, so a denied token never
-// provisions: an identity with no authentication time, or one older than the
-// bound plus authenticationAgeLeeway, is refused with its reason. A zero bound
-// refuses nothing.
+// provisions: an identity with no authentication time, one whose time is only
+// the iat fallback under RequireAuthenticationTime, or one older than the
+// bound plus authenticationAgeLeeway, is refused with its reason, in that
+// order. A zero bound refuses nothing.
 func (e *ExternalAuthenticator) authenticationAgeRefusal(p externalProvider, identity sdkauth.Identity) string {
 	switch {
 	case p.MaxAuthenticationAge <= 0:
 		return ""
 	case identity.AuthenticatedAt.IsZero():
 		return externalReasonAuthTimeMissing
+	case p.RequireAuthenticationTime && !identity.AuthTimeAsserted:
+		return externalReasonAuthTimeUnasserted
 	case e.now().Sub(identity.AuthenticatedAt) > p.MaxAuthenticationAge+authenticationAgeLeeway:
 		return externalReasonAgeExceeded
 	}

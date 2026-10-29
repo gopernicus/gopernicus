@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
 )
 
 // ErrHasherRequired and ErrMailerRequired are returned by New
@@ -266,4 +267,18 @@ var (
 	// equals OAuth2Config's issuer, or Audience equals its MCP or API
 	// resource: the same signer mints delegated tokens with those values.
 	ErrTokenAudienceCollides = authlogic.ErrTokenAudienceCollides
+)
+
+// The S4d part 4 delegated-assurance sentinels, re-exported from the oauth2
+// package so one errors.Is target serves New and oauth2.New.
+var (
+	// ErrDelegatedAssuranceRequires is returned by New when
+	// OAuth2Config.DelegatedAssurance is set and Repositories.OAuth2 does not
+	// implement oauth2.CodeAuthenticationRepository.
+	ErrDelegatedAssuranceRequires = oauth2.ErrDelegatedAssuranceRequires
+	// ErrDelegatedAssuranceSchemaMissing is returned by New when
+	// OAuth2Config.DelegatedAssurance is set and the store reports migration
+	// 0030_oauth_code_authentication.sql absent. A host that does not set it
+	// is never probed.
+	ErrDelegatedAssuranceSchemaMissing = oauth2.ErrDelegatedAssuranceSchemaMissing
 )

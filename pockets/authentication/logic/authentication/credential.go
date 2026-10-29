@@ -93,17 +93,20 @@ type Credential struct {
 	// first-party access token carries its session's assurance from the signed
 	// aal claim — AAL2 after a user-verified passkey, AAL1 otherwise — and a
 	// token minted before the claim existed reads AssuranceUnknown until its
-	// next refresh. An external token is AAL2 when its provider asserted
-	// multi-factor authentication (Identity.MFA) and AAL1 otherwise. API keys
-	// and delegated tokens leave it AssuranceUnknown. RequireMFA and the MFA
-	// gates read it, so a host-implemented CredentialService must stamp it.
+	// next refresh. A delegated token carries its grant's approving-session
+	// assurance when the issuer set OAuth2 DelegatedAssurance, and
+	// AssuranceUnknown otherwise. An external token is AAL2 when its provider
+	// asserted multi-factor authentication (Identity.MFA) and AAL1 otherwise.
+	// API keys leave it AssuranceUnknown. RequireMFA and the MFA gates read it,
+	// so a host-implemented CredentialService must stamp it.
 	Assurance session.AssuranceLevel
 	// Methods are the method kinds behind Assurance, which an MFAConfig.Methods
 	// gate reads to tell which source produced AAL2. A first-party access token
 	// carries its session's kinds from the signed methods claim (a token minted
-	// before the claim existed carries none until its next refresh); an external
-	// token carries session.MethodExternal. API keys and delegated tokens leave
-	// it empty.
+	// before the claim existed carries none until its next refresh); a delegated
+	// token carries its approving session's kinds under the same condition as
+	// Assurance; an external token carries session.MethodExternal. API keys
+	// leave it empty.
 	Methods []session.MethodKind
 }
 

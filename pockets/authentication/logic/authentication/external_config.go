@@ -75,11 +75,21 @@ type ExternalProvider struct {
 	// (OIDC max_age semantics), checked on every request before the subject
 	// resolves with a 60-second skew leeway: an older token, or one carrying no
 	// authentication time, is denied (external_subject_denied
-	// authentication_age_exceeded or authenticated_at_missing). The instant is
-	// sdkauth.Identity.AuthenticatedAt — the auth_time claim when the provider
-	// asserts it (an absolute cap on the provider session), else iat (then it
-	// bounds token age only). Zero is unbounded; negative is sdk.ErrInvalidInput.
+	// authentication_age_exceeded or authenticated_at_missing; under
+	// RequireAuthenticationTime also authenticated_at_unasserted). The instant
+	// is sdkauth.Identity.AuthenticatedAt — the auth_time claim when the
+	// provider asserts it (an absolute cap on the provider session), else iat
+	// (then it bounds token age only, unless RequireAuthenticationTime). Zero is
+	// unbounded; negative is sdk.ErrInvalidInput.
 	MaxAuthenticationAge time.Duration
+	// RequireAuthenticationTime (opt-in) makes MaxAuthenticationAge a sign-in
+	// bound only: an identity whose AuthenticatedAt is the iat fallback
+	// (sdkauth.Identity.AuthTimeAsserted false) is denied with
+	// external_subject_denied authenticated_at_unasserted, recorded once per
+	// token. A host-written provider that never sets AuthTimeAsserted is
+	// denied every token. It requires a positive MaxAuthenticationAge
+	// (sdk.ErrInvalidInput otherwise).
+	RequireAuthenticationTime bool
 }
 
 // ExternalConfig wires external identity providers. Zero durations and counts
@@ -105,7 +115,8 @@ type ExternalConfig struct {
 	// store shared across instances dedupes fleet-wide. It is separate from
 	// RevocationCache so login records never evict revocation facts. The same
 	// store, under "authext_age_denied", records external_subject_denied once
-	// per token for the MaxAuthenticationAge reasons.
+	// per token for the MaxAuthenticationAge and RequireAuthenticationTime
+	// reasons.
 	LoginRecordCache cacher.Storer
 	// LoginRecordCacheEntries bounds the default in-process login-record cache
 	// (10,000).
@@ -270,6 +281,9 @@ func validateExternal(cfg ExternalConfig, repos ExternalRepositories, mode envir
 		if p.MaxAuthenticationAge < 0 {
 			return cfg, fmt.Errorf("authentication: external provider %q MaxAuthenticationAge is negative: %w", p.Name, sdk.ErrInvalidInput)
 		}
+		if p.RequireAuthenticationTime && p.MaxAuthenticationAge == 0 {
+			return cfg, fmt.Errorf("authentication: external provider %q RequireAuthenticationTime needs a positive MaxAuthenticationAge: %w", p.Name, sdk.ErrInvalidInput)
+		}
 		provisions = provisions || p.ProvisionOnFirstVerification
 	}
 	if mode == environment.ModeProduction && provisions && nilDependency(keyer) {
@@ -306,14 +320,17 @@ func validateExternal(cfg ExternalConfig, repos ExternalRepositories, mode envir
 // production, the WARN for a provider whose tokens nothing bounds after
 // sign-in: no revocation checker and no MaxAuthenticationAge.
 func logExternalLifetime(p ExternalProvider, mode environment.Mode, log *slog.Logger) {
-	age, checker := "off", "none"
+	age, checker, authTime := "off", "none", "any"
 	if p.MaxAuthenticationAge > 0 {
 		age = p.MaxAuthenticationAge.String()
 	}
 	if p.Revocation != nil {
 		checker = "wired"
 	}
-	log.Info("auth: external provider lifetime", "provider", p.Name, "max_authentication_age", age, "revocation_checker", checker, "fail_open", p.RevocationFailOpen)
+	if p.RequireAuthenticationTime {
+		authTime = "asserted_required"
+	}
+	log.Info("auth: external provider lifetime", "provider", p.Name, "max_authentication_age", age, "revocation_checker", checker, "fail_open", p.RevocationFailOpen, "authentication_time", authTime)
 	if mode == environment.ModeProduction && p.Revocation == nil && p.MaxAuthenticationAge == 0 {
 		log.Warn("auth: an external provider's sign-in is bounded by token expiry alone; wire a RevocationChecker or set MaxAuthenticationAge", "external_authentication_age", "unbounded", "provider", p.Name, "revocation_checker", "none")
 	}

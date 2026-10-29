@@ -739,6 +739,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	logSessionLifetime(cfg, authService.SessionPolicy(), transportLog)
 	roles := keyRoles(cfg)
 	logKeys(cfg, roles, transportLog)
+	logOAuth2(cfg, transportLog)
 	logKeyPosture(cfg, roles, transportLog)
 	logPasswordPosture(cfg, transportLog)
 	logLivenessFloor(cfg, transportLog)

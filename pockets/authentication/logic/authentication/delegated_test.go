@@ -102,6 +102,44 @@ func TestDelegatedAuthenticationChecksGrantAndReturnsIsolatedMetadata(t *testing
 	}
 }
 
+// TestDelegatedAssuranceReachesTheCredential pins the verifier half of S4d
+// part 4: a live delegated token's signed aal and methods land on the
+// credential the MFA gates read — AAL2 from a passkey approval is an AAL2
+// credential whose source is passkey, so a Methods restriction to totp refuses
+// it; aal1 stays below the floor; a token without the claims is unknown.
+func TestDelegatedAssuranceReachesTheCredential(t *testing.T) {
+	h, _, sess, _ := delegatedFixture(t)
+	for _, tc := range []struct {
+		name    string
+		aal     any
+		methods any
+		want    session.AssuranceLevel
+		sources []MFAMethod
+	}{
+		{"aal2 passkey", "aal2", []any{"password", "passkey"}, session.AssuranceAAL2, []MFAMethod{MFAMethodPasskey}},
+		{"aal1 password", "aal1", []any{"password"}, session.AssuranceAAL1, nil},
+		{"none", nil, nil, session.AssuranceUnknown, nil},
+	} {
+		for _, exchanged := range []bool{false, true} {
+			claims := delegatedClaims(sess, exchanged)
+			if tc.aal != nil {
+				claims["aal"], claims["methods"] = tc.aal, tc.methods
+			}
+			ctx, ok := authOK(h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, signDelegatedClaims(t, h, claims)))
+			if !ok {
+				t.Fatalf("%s exchanged=%v: delegated token denied", tc.name, exchanged)
+			}
+			cred, _ := h.svc.CurrentCredential(ctx)
+			if cred.Profile != session.ProfileDelegated || cred.Assurance != tc.want || !reflect.DeepEqual(MFASources(cred), tc.sources) {
+				t.Fatalf("%s exchanged=%v: credential %q %q sources %v", tc.name, exchanged, cred.Profile, cred.Assurance, MFASources(cred))
+			}
+			if tc.want == session.AssuranceAAL2 && (!MFASourceAllowed(cred, []MFAMethod{MFAMethodPasskey}) || MFASourceAllowed(cred, []MFAMethod{MFAMethodTOTP})) {
+				t.Fatalf("%s: a Methods restriction misread the delegated source", tc.name)
+			}
+		}
+	}
+}
+
 func TestDelegatedClaimsNeverDowngradeToFirstParty(t *testing.T) {
 	h, _, sess, _ := delegatedFixture(t)
 	cases := map[string]func(map[string]any){

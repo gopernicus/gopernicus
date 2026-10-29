@@ -3,12 +3,14 @@ package oauth2
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 const (
@@ -24,6 +26,16 @@ var (
 	ErrInvalidScope   = errors.New("oauth2: scopes are not supported")
 	ErrInvalidTarget  = errors.New("oauth2: invalid resource")
 	ErrAccessDenied   = errors.New("oauth2: access denied")
+
+	// ErrDelegatedAssuranceRequires is returned by New when
+	// Config.DelegatedAssurance is set and Repositories.OAuth2 does not
+	// implement CodeAuthenticationRepository.
+	ErrDelegatedAssuranceRequires = fmt.Errorf("oauth2: Config.DelegatedAssurance requires Repositories.OAuth2 to implement oauth2.CodeAuthenticationRepository: %w", sdk.ErrInvalidInput)
+	// ErrDelegatedAssuranceSchemaMissing is returned by New when
+	// Config.DelegatedAssurance is set and the store reports migration
+	// 0030_oauth_code_authentication.sql absent. A host that does not set the
+	// flag is never probed.
+	ErrDelegatedAssuranceSchemaMissing = fmt.Errorf("oauth2: Config.DelegatedAssurance requires migration 0030_oauth_code_authentication.sql (oauth_authorization_codes authentication columns): %w", sdk.ErrInvalidInput)
 )
 
 type UserReader interface {
@@ -62,6 +74,15 @@ type Config struct {
 	ConfidentialSecretHashes                               [][32]byte
 	AccessTTL, SessionTTL, CodeTTL, ConsentTTL             time.Duration
 	AllowLocalHTTP                                         bool
+	// DelegatedAssurance (opt-in) copies the approving session's
+	// authentication into the code (CodeAuthenticationRepository, migration
+	// 0030), persists it on the redeemed delegated session, and signs aal and
+	// methods on every access token minted from that session — redeem, refresh
+	// and exchange — while it stays set. Off, nothing is copied or signed, so
+	// turning it off and waiting one AccessTTL is the rollback. The level is
+	// fixed at approval: refresh never re-reads it and exchange copies it,
+	// never raises it. Grants approved without it carry no level.
+	DelegatedAssurance bool
 }
 
 // Metadata exposes immutable public protocol coordinates, never client secrets.
@@ -124,6 +145,11 @@ type Introspection struct {
 	Audience  string `json:"aud,omitempty"`
 	ClientID  string `json:"client_id,omitempty"`
 	ExpiresAt int64  `json:"exp,omitempty"`
+	// Assurance and Methods are the grant's recorded authentication (aal1 or
+	// aal2, and its method kinds), reported only under Config.DelegatedAssurance
+	// and only when recorded — never "unknown".
+	Assurance string   `json:"aal,omitempty"`
+	Methods   []string `json:"methods,omitempty"`
 }
 
 type Option func(*serviceOptions)

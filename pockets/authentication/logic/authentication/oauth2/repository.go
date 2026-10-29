@@ -35,6 +35,10 @@ type Code struct {
 	CodeChallenge string
 	CreatedAt     time.Time
 	ExpiresAt     time.Time
+	// Authentication is a copy of the approving session's, recorded only through
+	// CodeAuthenticationRepository; zero when the store did not record it. It is
+	// carried, not a binding: RedeemCode never compares it.
+	Authentication session.AuthenticationMetadata
 }
 
 // Refresh binds a presented hash to its public client and original resource.
@@ -87,4 +91,23 @@ type Repository interface {
 	// Prune removes expired codes, metadata and refresh history only after its
 	// connection horizon. It never removes history of a usable connection.
 	Prune(ctx context.Context, now time.Time) error
+}
+
+// CodeAuthenticationRepository is the OPTIONAL delegated-assurance capability
+// (Config.DelegatedAssurance), backed by three nullable columns on
+// oauth_authorization_codes (migration 0030). The service asserts it on
+// Repositories.OAuth2 only when the flag is set, so an unwired store never reads
+// a column it has not migrated. Codes are single-use and immutable: RedeemCode
+// is unchanged, and the core is trusted to carry the Authentication read here
+// onto the proposed delegated session it persists.
+type CodeAuthenticationRepository interface {
+	// CreateCodeWithAuthentication is CreateCode's contract plus: inside the
+	// same transaction, the LOCKED approving session's Authentication is copied
+	// into the code row. code.Authentication is ignored.
+	CreateCodeWithAuthentication(ctx context.Context, code Code, approvingSessionID string) error
+	// GetCodeWithAuthentication is GetCode's contract plus the recorded
+	// Authentication (zero when the columns are NULL).
+	GetCodeWithAuthentication(ctx context.Context, hash string) (Code, error)
+	// ProbeSchema reports sdk.ErrNotFound when migration 0030 is absent.
+	ProbeSchema(ctx context.Context) error
 }
