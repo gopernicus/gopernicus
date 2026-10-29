@@ -33,3 +33,6 @@ go.work.sum
 # transient local tooling artifact
 .claude/scheduled_tasks.lock
 .claude
+
+# plans are maintainer-local (under .claude/plans/); never commit a plans/ tree
+/plans/
