@@ -9,8 +9,7 @@ Keep this file current as SDK, pocket, and integration changes land. Record the
 affected module, release status, old/new behavior, required migration, and
 verification for every change to an API, accepted input, response, configuration,
 or persisted data that consumers must account for. Keep entries after release
-and add the actual module version when known. Proposed changes stay in the
-[audit plan](plans/framework-audit.md) until implemented.
+and add the actual module version when known. Proposed changes stay out of this file until implemented.
 
 ## Coordinated release versions (published 2026-09-11)
 
@@ -18,8 +17,7 @@ These versions collect the implemented audit changes below. Entries retain their
 original implementation-time release status; this table records the coordinated
 published versions at commit `c3f8b4ad453021ba1e40c91572d8e4618c2d8382`.
 All 34 published archives match the verified source hashes and build with
-`GOWORK=off` through the public Go proxy/checksum service. Details are tracked in
-[plans/startup-release-segovia.md](plans/startup-release-segovia.md).
+`GOWORK=off` through the public Go proxy/checksum service.
 
 | Module directory | Version |
 |---|---|
@@ -61,7 +59,7 @@ All 34 published archives match the verified source hashes and build with
 The three Firestore modules are excluded from that coordinated release. They
 are published separately as emulator-verified `v0.1.0` from
 `10e5f97b32c043f8fdd71cbd733fbb09592c42f7`, with public checksums and independent
-build/test/vet verified in [firestore-release.md](plans/firestore-release.md).
+build/test/vet verified.
 The owner accepted this release with the real GCP suite still untested. Earlier
 `v0.1.0-beta.1` tags remain unchanged; the Firestore manifest records both versions.
 CMS versions provide framework
@@ -99,11 +97,11 @@ and `sdk/foundation/web`, including import aliases. In particular, inspect:
   endpoints accepting a top-level JSON `null`.
 - Response tests or frontend code that inspect field lists and error codes.
 
-Known affected call site: gps-360-go's
+Known affected call site: a host's
 `internal/inbound/domains/echo/notes.go` uses `web.FieldErrors` in
 `NoteRequestBody.Validate`. Its domain validation already uses the root types.
 No production imports of the validation helper package were found in sampled
-Segovia v2, coordination-hub, or gps-360-go code during the audit. Check current
+host code during the audit. Check current
 consumer code; this sample is not a complete inventory of downstream callers.
 
 ### Migrate the Go API
@@ -190,8 +188,7 @@ Framework verification passed: SDK build/test/vet, the full 41-module
 `make check`, all 23 architecture guards, documentation build, and an in-process
 JSON request/response check covering both decoder target forms and multiple
 field errors. Consumer applications were not migrated or run; live datastore
-tests were not configured. Implementation record:
-[plans/validation-consolidation.md](plans/validation-consolidation.md).
+tests were not configured.
 
 ## AUDIT-002: Conversion removal and pointer package
 
@@ -328,8 +325,7 @@ Framework verification passed: fresh pointer/slug tests, SDK build/test/vet,
 the full 41-module `make check`, all 23 guards, documentation build, and a
 consumer-style probe of the new import, JSON defaults, typed constructors, and
 copy semantics. The slug implementation/table were compared against the baseline
-and are unchanged. Exact results:
-[plans/utility-package-cleanup.md](plans/utility-package-cleanup.md).
+and are unchanged.
 Consumer applications have not been migrated or run; live datastore tests were
 not configured. No release tag or dependency pin has been changed.
 
@@ -489,11 +485,11 @@ The framework migrated the CMS example's `WithTracing`, SDK tracing handler
 references, and eight CMS no-op test calls. `NewDefault` and the two removed
 namespace lookup wrappers had no observed callers beyond definitions/tests.
 
-Segovia v2, Coordination Hub, and GPS 360 construct logging without the former
+Three sampled hosts construct logging without the former
 option and install request-ID/access middleware: their access logs gain IDs on
 upgrade without a constructor edit. All sampled hosts ignore `LoadEnv` errors;
-apply checked startup handling. Segovia also reports `run` errors using the
-global logger rather than its configured local logger. Coordination Hub's
+apply checked startup handling. One host also reports `run` errors using the
+global logger rather than its configured local logger. Another host's
 `cmd/seed` and `cmd/ingest` construct logging before loading dotenv; reorder them.
 These consumer repositories were inspected only and have not been migrated.
 
@@ -511,8 +507,7 @@ malformed dummy dotenv before serving/opening a datastore; the SDK-only host
 reports invalid `READ_TIMEOUT` as one JSON error on configured STDOUT. A compiled
 migration probe verifies the new APIs and matches an HTTP response request ID
 to its default access log. Live datastores, consumer applications, browser flows,
-and 32-bit runtime behavior were not exercised. Exact commands and logs are in
-[the implementation record](plans/environment-logging-cleanup.md).
+and 32-bit runtime behavior were not exercised.
 
 ## AUDIT-004: Identity, IDs, cryptography, and host password policy
 
@@ -596,9 +591,9 @@ If the application previously passed `[]byte(environmentString)`, use
 decoding and convert the resulting bytes to a string. Changing decoding changes
 the key and invalidates existing access tokens.
 
-Known callers: Segovia v2 decodes hex before construction; Coordination Hub,
-GPS360's server/devcred, and auth-cms use environment-string bytes directly.
-GPS360's testauth harness also names the removed concrete signer and hasher.
+Known callers: one host decodes hex before construction; other hosts
+and auth-cms use environment-string bytes directly.
+One host's testauth harness also names the removed concrete signer and hasher.
 All sampled hosts need import/constructor migration; no consumer apps were edited.
 
 ### Review JWT acceptance changes
@@ -683,8 +678,8 @@ still a host decision.
   principals must fix their write sites. Protected endpoints decide whether a
   principal is required; public endpoints can permit anonymous access.
 - `sdk.IdentityInfo.Addresses` is display/identity information, not notification
-  eligibility. Segovia's first-email recipient selection needs a later consumer
-  review. Do not globally filter the resolver: GPS360 also uses projection
+  eligibility. A host's first-email recipient selection needs a later consumer
+  review. Do not globally filter the resolver: another host also uses projection
   addresses for legacy ownership scoping.
 
 ### Upgrade and verify
@@ -711,8 +706,7 @@ gate, documentation typecheck/build, legacy JWT/AES compatibility, host password
 flow regressions, and the jobs ordering race test. A real local HTTP test covers
 host-approved registration, token issuance, authenticated access, tampered-token
 rejection, and password-policy/bcrypt failures. Live stores and consumer apps
-were not exercised. Exact commands and limitations are recorded in
-[identity-cryptography-cleanup.md](plans/identity-cryptography-cleanup.md).
+were not exercised.
 
 ## AUDIT-005: Listing vocabulary and transaction correctness
 
@@ -757,7 +751,7 @@ change to any host structs embedding the old type, or explicitly name a field
 if preserving a host-owned field name is important.
 
 The generic repository and sparse-write APIs had no active uses in the framework
-or three sampled consumers. GPS360's retired directory-write helper was the sole
+or three sampled consumers. A host's retired directory-write helper was the sole
 `Field` reference; remove that orphan when upgrading if it is still unused.
 Do not introduce a new generic PATCH package just to replace these names.
 Presence, omission, null clearing and validation belong to the domain contract.
@@ -871,8 +865,7 @@ a disposable backend before upgrading production.
 Framework verification passed: full 42-module build/test/vet and architecture
 checks, documentation build, transaction race tests, real SQLite regressions and
 CMS router behavior. Live PostgreSQL, hosted Turso and Firestore runtime suites
-were not exercised; tagged sources were compiled. Exact commands and coverage
-limits are in [listing-transaction-cleanup.md](plans/listing-transaction-cleanup.md).
+were not exercised; tagged sources were compiled.
 
 ## AUDIT-006: Web correctness and API cleanup
 
@@ -899,13 +892,12 @@ Search source, tests, templates and documentation for the APIs in the table
 below, honoring import aliases. Inspect custom response writers, panic/recovery
 middleware, SSE clients, static mounts, log processing and JSON request limits.
 
-Known production `web.WithLogging` callers: Segovia v2 `cmd/server/main.go`,
-Coordination Hub `cmd/server/main.go` and `cmd/devserver/main.go`, GPS360
-`cmd/server/main.go`, framework examples, and CMS's router constructor. The
+Known production `web.WithLogging` callers: three hosts' `cmd/server/main.go` (one also
+`cmd/devserver/main.go`), framework examples, and CMS's router constructor. The
 framework scaffold is updated. No production callers of the removed OpenAPI,
 StreamWriter, Decode alias or generic responders were found in those four trees;
 this does not establish that other consumers have none. The three applications
-have 48 direct DecodeJSON references plus GPS360's shared directory-write helper.
+have 48 direct DecodeJSON references plus one host's shared directory-write helper.
 
 ### Migrate the Go API
 
@@ -964,7 +956,7 @@ retain its defects.
   their existing contracts. Rejected registration bodies do not create users.
 - `DecodeJSON` still accepts unknown fields, rejects top-level null, and invokes
   value/pointer validation exactly once. It introduces no global size limit or
-  stricter field policy. GPS360 deliberately relies on unknown-key acceptance;
+  stricter field policy. One host deliberately relies on unknown-key acceptance;
   do not substitute the strict pocket reader indiscriminately.
 
 Hosts choose their own DTO/upload limits using the standard library:
@@ -1058,8 +1050,7 @@ SSE and shutdown. Inspect log consumers and any maintained OpenAPI document.
 Framework validation passed the full 42-module build/test/vet and guard gate,
 web/cache/tracing race checks, documentation build, affected pocket suites and
 the local HTTP composition/migration proof. Consumer upgrades, browser/HTTP2
-sessions and live datastores were not exercised. Exact commands and coverage
-limits are in [web-cleanup.md](plans/web-cleanup.md); framework tests do not
+sessions and live datastores were not exercised. Framework tests do not
 replace consumer-specific upgrade verification.
 
 ## AUDIT-007: Workers, job middleware and async lifecycle
@@ -1210,22 +1201,22 @@ appropriate ordinary or full-input API explicitly.
 
 ### Consumer evidence and upgrade checks
 
-The original sample found only jobs constructing generic runners; Segovia also
+The original sample found only jobs constructing generic runners; One host also
 uses Pool for events. Refresh any consumer checkout before relying on an earlier
-usage inventory. After the owner updated GPS360, a read-only review of clean main
+usage inventory. After the owner updated another host, a read-only review of clean main
 `e1ab3f0` found echo, delivery and comps workers plus a jobs inspection/retry UI.
-GPS360 now pins SDK v0.7.1 and jobs/stores v0.5.0, without local replacements;
-this supersedes the earlier v0.4.1/local-replace sample. Segovia's sampled SDK/jobs
-pins were v0.8.0/v0.4.2; Coordination Hub's were v0.7.0/v0.3.0.
+That host now pins SDK v0.7.1 and jobs/stores v0.5.0, without local replacements;
+this supersedes the earlier v0.4.1/local-replace sample. The first host's sampled SDK/jobs
+pins were v0.8.0/v0.4.2; a third host's were v0.7.0/v0.3.0.
 
-GPS360's newer workers use jobs.Runtime, ordinary queues, kind filters,
+The updated host's newer workers use jobs.Runtime, ordinary queues, kind filters,
 host-owned timeout wrappers and production-only schedule wiring. They call none
 of the removed SDK hooks/retry helpers. Their wrappers can stay unchanged or move
 to JobMiddleware. Intentional unchanged-content/partial-success outcomes remain
 host policy, not implicit deferral. Its retry UI creates a fresh execution from a
 dead letter; the new empty-logical-key rule does not affect that ordinary path.
 
-A separate, source-reviewed GPS360 follow-up: cancellation while processing the
+A separate, source-reviewed follow-up for the updated host: cancellation while processing the
 last comps race can become a failure-summary string and then a nil overall job
 result (`internal/logic/domains/comps/import.go`, `RunImport` adapter). Propagate
 cancellation at the host workflow boundary while retaining intentional per-race
@@ -1239,8 +1230,7 @@ ownership and atomic fenced refunds. Validate pgx on the host's configured schem
 and Turso on the intended backend. Release SDK/jobs/store module requirements
 together; workspace builds alone do not establish compatible published pins.
 
-Implementation and exact framework verification are recorded in
-[workers-cleanup.md](plans/workers-cleanup.md). Full jobs/events pocket audits and
+Full jobs/events pocket audits and
 the existing SQL latest-generation ordering follow-up remain open.
 
 ## AUDIT-008: Cryptids name restoration
@@ -1268,8 +1258,7 @@ consumers can apply it directly without an intermediate rename.
 
 AUDIT-009 subsequently implements the approved pointer/slug/ID/identity root
 promotion. Validation and environment retain their packages. This naming entry
-describes only the crypto rename. Run consumer build/tests when upgrading. Implementation and exact
-verification: [cryptids-name-and-sdk-shape.md](plans/cryptids-name-and-sdk-shape.md).
+describes only the crypto rename. Run consumer build/tests when upgrading.
 
 ## AUDIT-009: Common primitives promoted into root SDK
 
@@ -1390,8 +1379,7 @@ adopting. Exercise authentication principal propagation, notification adapters,
 custom ID strategies and database-generated IDs at their real application seams.
 Framework verification covers root regressions, those existing pocket/example
 paths and scaffold compilation; live datastores and consumer upgrades remain
-separate. Exact commands, results and changed paths:
-[sdk-root-promotion.md](plans/sdk-root-promotion.md).
+separate.
 
 ## AUDIT-010: Cache storage, data helpers and public-page policy
 
@@ -1542,8 +1530,7 @@ public CMS product projection, with host namespace/TTL/error reporting and HTTP
 no-store independent of data caching. It excludes drafts and demonstrates
 cache invalidation and source fallback in its HTTP/service tests.
 
-Implementation, exact verification and scope limits:
-[plans/cacher-implementation.md](plans/cacher-implementation.md). External
+External
 consumer applications were not migrated or run; no release was published.
 
 ## AUDIT-011: Rate-limiter contract and adapter corrections
@@ -1685,8 +1672,7 @@ Run affected modules' build/test/vet and custom backends through
 `ratelimitertest.Run`. Exercise denial, Burst, canceled calls, live Window changes,
 capacity/outage policy and real HTTP Retry-After. Verify the PostgreSQL migration
 and boot probe in a disposable database, and check physical key overlap before
-rollout. Framework verification and task-relative file inventory are recorded in
-[ratelimiter-implementation.md](plans/ratelimiter-implementation.md); historical
+rollout. Historical
 audit probe scripts describe the old API and must not be run unchanged.
 
 ## AUDIT-012: Event delivery contracts and Redis recovery
@@ -1759,7 +1745,7 @@ poller := eventspocket.NewPoller(outboxRepo, bus.Dispatch)
 Here `sdkevents` is `sdk/capabilities/events` and `eventspocket` is `pockets/events`.
 Memory.Dispatch succeeds with no selected handlers, so handler registration is a
 host precondition. A host with several required operations may compose them into
-one registration. In the sampled Segovia outbox-to-job pattern, replacing this
+one registration. In the sampled host outbox-to-job pattern, replacing this
 handoff with asynchronous Emit would allow marking before job admission succeeds.
 
 For a remote handoff, pass `redisBus.Publish` and explicitly register work with
@@ -1886,8 +1872,7 @@ custom notification buses through `eventstest.Run`. For Redis, verify cross-proc
 fanout separately from same-group competing work, pending recovery after failure,
 unsubscribe and restart, and stable IDs/metadata on actual round trips. Exercise
 the cutover in a disposable namespace before deployment; inspect old pending work
-and retention explicitly. Framework results and task-relative inventory belong in
-[events-implementation.md](plans/events-implementation.md); historical audit probes
+and retention explicitly. Historical audit probes
 use the old API and must not be run unchanged.
 
 ## AUDIT-013: File-storage correctness and direct adapter contracts
@@ -1957,14 +1942,14 @@ session URIs, which authorize access to their objects.
 All object methods now require a nonempty relative UTF-8 key separated by `/`.
 Leading/trailing slashes, empty segments, `.`/`..` segments, backslashes and NUL
 are invalid. `../name` no longer aliases `name`, and `/name` no longer silently
-becomes a relative key. Spaces, Unicode, `.segovia/boot-probe` and names such as
+becomes a relative key. Spaces, Unicode, `.app/boot-probe` and names such as
 `two..dots` remain valid. There is no cleaning, slugging, trimming, case folding
 or Unicode normalization. Hosts must not mechanically slug existing keys during
 migration; that changes object identity.
 
 List uses a **literal prefix**, including a partial final component. Empty prefix
 selects all objects; `im` matches both `image.txt` and `img/a.txt`; `.` matches
-`.segovia/boot-probe`. A trailing slash is allowed. Complete directory segments
+`.app/boot-probe`. A trailing slash is allowed. Complete directory segments
 still follow the key rules. Results contain caller-facing keys, omit directory
 markers, have no order guarantee and are materialized in memory. GCS removes its
 configured prefix from returned keys. The adapters report incompatible listed
@@ -2118,19 +2103,19 @@ wrappers.
 
 Read-only consumer anchors from the audit (recheck their current revisions):
 
-- **Segovia v2**, `segovia/v2`, main/76b3d78,
+- **Host A**, main/76b3d78,
   SDK v0.8.0: `cmd/server/filestorage.go`, `cmd/server/dashboards.go` and
   `internal/outbound/domains/dashboards/content.go` need facade migration.
-  Preserve `.segovia/boot-probe`, generic non-seekable bundle readers, and
+  Preserve `.app/boot-probe`, generic non-seekable bundle readers, and
   errors.Is recognition of ErrBundleTooLarge. Storage is actively used by
   `internal/logic/domains/dashboards/service.go`; its startup comment suggesting
   otherwise was stale.
-- **GPS360**, `gps-360-go`, main/e1ab3f0,
+- **Host B**, main/e1ab3f0,
   SDK v0.7.1: inspect `cmd/server/filestorage.go`, `cmd/workers/comps/main.go`
   and host `integrations/filestorage/{gcs,s3}`. Comps replays intentionally
   overwrite a stable archive key; do not turn the upgrade into create-only
   storage or silently rename race-derived keys.
-- **Coordination Hub**, `coordination-hub`, main/84ff08a,
+- **Host C**, main/84ff08a,
   SDK v0.7.0: `integrations/objectstore/objectstore.go` uses its own S3 Bucket
   interface. Its public/private bucket selection, MIME/cache metadata and CDN
   URLs remain host policy; it is not a mechanical FileStore migration.
@@ -2153,8 +2138,7 @@ non-seekable multipart publication, a failed replacement retaining original byte
 no abandoned multipart uploads, signed GET and explicit multipart initiation.
 GCS exercised the shared storage contract and session initiation → client PUT →
 download/size, with synthetic IAM/credential-context tests. Simultaneous source
-failure/cancellation preserves both causes on all three backends. Exact commands,
-logs and limits are in [filestorage-implementation.md](plans/filestorage-implementation.md).
+failure/cancellation preserves both causes on all three backends.
 Unrelated live datastore suites remain skipped in the workspace gate. Local
 emulation does not verify actual AWS/GCS persistence, cloud IAM permissions or
 browser CORS; external consumers still need their own upgrade checks. Historical
@@ -2387,9 +2371,9 @@ path without redesigning CMS's broader public error/workflow policy.
 ### Consumer checks and verification
 
 Search source, templates, mocks and wiring for the old imports and APIs above.
-Read-only consumer snapshots from the review (recheck current revisions): Segovia
-v2 main/76b3d78 uses plain mail plus authentication; Coordination Hub main/84ff08a
-uses Emailer, HTML/text content, app layouts and branding; GPS360 main/e1ab3f0
+Read-only consumer snapshots from the review (recheck current revisions): one host
+(main/76b3d78) uses plain mail plus authentication; another (main/84ff08a)
+uses Emailer, HTML/text content, app layouts and branding; a third (main/e1ab3f0)
 constructs a presently unused mailer and uses authentication DeliveryOff/Console.
 They pinned different older SDK/authentication versions, so apply preceding AUDIT
 entries too. Hub's custom layout root names need special attention. Provider,
@@ -2401,8 +2385,7 @@ email-only and multiple-delivery actions with owned sinks. Check partial failure
 cancellation and retry selection. Verify deployed SMTP TLS/auth or provider
 credentials separately; no real email, Slack or SMS was sent during this audit.
 
-Framework commands, results, source reviews and their limits are recorded in
-[email-notify-implementation.md](plans/email-notify-implementation.md). Real SMTP
+Real SMTP
 protocol exchanges used owned loopback peers; concurrent SendGrid, redirects and
 response errors used owned HTTP/fake transports. External consumers were not
 modified, and full CMS/pocket workflow audits remain later work.
@@ -2586,7 +2569,7 @@ bounded HTTP metadata subset, not full semantic-convention coverage.
 
 ### Known consumers and verification
 
-Segovia v2, coordination-hub and gps-360-go use the Google constructor through
+Three sampled hosts use the Google constructor through
 authentication. Migrate constructors and deliberately choose host email trust,
 callback configuration and provider consent options. Custom start/callback
 callers must retain and submit proof; bundled browser routes handle it. Consumer
@@ -2601,9 +2584,7 @@ native cookie-free pending-link completion, replay and proof/mode/URI checks.
 Locally signed OIDC/fake HTTP and in-memory tracing tests cover malformed
 identities, trust, redirects, safe errors, cancellation, partial responses,
 propagation and sampling. Live Google/GitHub login, real delivery/collectors and
-mobile OS callback dispatch were not exercised. See the
-[implementation plan](plans/oauth-tracing-implementation.md) for exact commands,
-file inventory, documentation checks and remaining deployment validation.
+mobile OS callback dispatch were not exercised.
 
 
 ## AUDIT-016: Shared pockets module
@@ -2688,8 +2669,7 @@ still pending; this entry does not claim those fixes shipped.
 
 The workspace has 42 modules. Full build/test/vet and architecture checks,
 standalone module resolution, generated pocket/store scaffold compilation,
-shared-contract race tests and actual in-process HTTP mounting are recorded in
-[pockets-module-move.md](plans/pockets-module-move.md). No external consumer
+shared-contract race tests and actual in-process HTTP mounting were verified. No external consumer
 repositories or production services were changed. Module-proxy installation of
 unpublished versions and live adapters were not verified.
 
@@ -2762,8 +2742,7 @@ separate work. No SQL, schema, permission, pagination or worker behavior changed
 
 All 91 relocated files were compared with their baseline after reversing only
 path and layer-name comment changes. Full workspace checks, documentation checks
-and standalone behavior verification are recorded in
-[sdk-pkg-rename.md](plans/sdk-pkg-rename.md). External consumer apps, published
+and standalone behavior verification were verified. External consumer apps, published
 module resolution, live providers/stores and production were not exercised.
 
 
@@ -2834,14 +2813,12 @@ Fenced runtime handler configuration and SDK worker/job middleware are unchanged
 
 ### Known callers and verification
 
-Segovia v2's staged handler map motivated this fix; no external consumer was
+A host's staged handler map motivated this fix; no external consumer was
 modified or executed. The local jobs-minimal host exercises ordinary runtimes;
 auth-cms exercises the fenced delivery surface. Regressions cover empty/nonempty
 staging, invalid late entries, independent runtimes, untouched foreign schedules,
 handler selection, copied scheduler kinds and optional registration.
 
-Commands, real host behavior, task-relative changes and verification limits are
-recorded in [jobs-runtime-implementation.md](plans/jobs-runtime-implementation.md).
 Full jobs scheduling durability, live stores and the remaining pocket ownership
 findings are separate audit work; this entry does not declare those audited.
 
@@ -2906,9 +2883,7 @@ Hosted Turso and external consumer applications were not exercised.
 
 This fixes generation ordering only. The scheduler audit separately found a
 claim-to-enqueue loss window, interval precision problems and stale latest-job
-bookkeeping; no scheduler protocol changed here. See
-[jobs-persistence-audit.md](plans/jobs-persistence-audit.md) for evidence, commands,
-remaining work and verification limits.
+bookkeeping; no scheduler protocol changed here.
 
 
 ## AUDIT-020: Jobs durable scheduling and queue correctness
@@ -2989,8 +2964,7 @@ Memory regressions, SDK/jobs race tests, PostgreSQL bare/named-schema and libSQL
 full race/conformance passed. Migration upgrade tests preserve existing schedules.
 A separate executable admitted work, exited before enqueue, then a new process
 recovered, executed, acknowledged and drained on each SQL adapter. Repository
-`make check` passed. Details and exact paths are tracked in
-[jobs-events-audit-implementation.md](plans/jobs-events-audit-implementation.md).
+`make check` passed.
 
 
 ## AUDIT-021: Events visibility, lifecycle and opaque outbox payloads
@@ -3052,8 +3026,7 @@ arbitrary application code.
 
 Events core and SQL race/conformance passed, including real SSE HTTP behavior,
 PostgreSQL bare/named schemas, libSQL, batch validation, opaque bytes, transaction
-rollback and the PostgreSQL legacy migration. Scope and detailed commands are in
-[jobs-events-audit-implementation.md](plans/jobs-events-audit-implementation.md).
+rollback and the PostgreSQL legacy migration.
 
 
 ## AUDIT-022: Authentication proof lifecycle and host API
@@ -3063,9 +3036,7 @@ rollback and the PostgreSQL legacy migration. Scope and detailed commands are in
 - **Breaking:** stronger repository contracts, verified invitation ownership,
   durable invitation acceptance, logout proof requirements, browser Origin checks,
   configuration validation and independent abuse budgets.
-- Implementation and verification record:
-  [authentication-audit-implementation.md](plans/authentication-audit-implementation.md).
-  Authorization pocket implementation remains deferred.
+- Authorization pocket implementation remains deferred.
 
 ### Rollout and schema
 
@@ -3232,7 +3203,7 @@ aliases, error sentinels and `CurrentSessionID` for live-gated host handlers. Cu
 and authorizes application actions. `RequireRecentAuthentication` proves recency
 and assurance; it does not decide application permissions.
 
-External consumers (including gps-360-go, coordination-hub and segovia-v2) have not
+External consumers (including three sampled hosts) have not
 been modified. Feed this entry into their upgrade work and exercise registration,
 reset/login races, browser login/refresh/logout, verified invitations and the host's
 idempotent grant adapter before rollout. Final verification is recorded in the
@@ -3379,8 +3350,6 @@ reparenting. Choose command ownership, host serialization, or explicitly accept
 weaker concurrency. No revision-aware baseline feature, automatic host rewrite
 or consumer migration was introduced in this pass.
 
-The source-backed design and current Segovia/Coordination Hub/GPS360 patterns are
-in [authorization-guard-dependency-design.md](plans/authorization-guard-dependency-design.md).
 The [complete listing example](examples/auth-cms/internal/outbound/domains/documents/README.md)
 shows the three store/join arrangements, one host operation, query-bound private
 cursors and explicit supported-policy SQL. SQL must match the full selected
@@ -3398,9 +3367,7 @@ listing ran over real HTTP with memory and PostgreSQL, including 1,005 grants,
 name ordering, sparse continuation, cursor binding and changing data.
 
 The full 42-module build/test/vet gate, generation checks, root architecture
-guards and documentation build passed. Exact paths, reports and verified
-seven-fixture cleanup are recorded in
-[authorization-audit-implementation.md](plans/authorization-audit-implementation.md).
+guards and documentation build passed.
 Real Firestore indexes/IAM/production contention and the optional PostgreSQL
 non-C database leg remain unverified. Firestore ambient transaction refusal is
 intentional and tested; the unsupported conformance family skips. No production
@@ -3556,9 +3523,6 @@ verify first-owner and last-owner flows, inspect HTTP/audit refusal handling, an
 exercise listing continuation under the host's configured budgets. Run custom
 stores through the updated conformance suite.
 
-Implementation and verification are tracked in
-[authorization-followup-implementation.md](plans/authorization-followup-implementation.md).
-
 
 ## AUDIT-025: Authorization tuple identity and metadata removal
 
@@ -3658,13 +3622,9 @@ Repository callers and conformance fixtures are updated; external consumer apps
 have not been edited. Exercise grant/revoke, exact userset identity, global and
 scoped roles, and raw pagination after the host upgrade.
 
-Concrete verification and remaining decisions are recorded in
-[authorization-tuples-implementation.md](plans/authorization-tuples-implementation.md).
-
 ## AUDIT-026: Authorization change history and mutation simplification
 
-Status: implemented and verified; results and explicit live-test limits are in
-[the implementation plan](plans/authorization-audit-log-implementation.md).
+Status: implemented and verified.
 Upgrade authorization core and all its store adapters together. This entry
 supersedes the receipt/revision behavior described by earlier audit entries.
 External consumer applications have not been edited.
@@ -3935,8 +3895,7 @@ separate modules; memory and shared conformance remain in their core modules.
 
 There are no compatibility packages at the removed paths. Import only the
 packages a host needs. Most root type aliases and helper re-exports moved to
-their owning packages. The complete machine-readable symbol/import map is
-[plans/pocket-api-migrations.json](plans/pocket-api-migrations.json).
+their owning packages.
 
 ### Authentication
 
@@ -4078,8 +4037,7 @@ found no remaining blockers after the recorded fixes.
 CMS implementation, SDK, module definitions, SQL and persisted formats are
 unchanged from this phase's baseline. Live PostgreSQL/Turso and Firestore
 emulator/cloud checks were not rerun; tagged suites were compiled only. External
-consumer applications were not edited. Detailed evidence and the final handoff
-are in [plans/pocket-structure.md](plans/pocket-structure.md).
+consumer applications were not edited.
 
 ## AUDIT-029: Integration contracts and startup behavior
 
@@ -4200,8 +4158,7 @@ Redis suites passed, as did the non-CMS SQL store suites against local SQLite
 through pinned libsql. Firestore retry/error regressions exercised the real vendor
 loop through an in-process transport; they do not establish cloud conformance.
 
-Exact commands, initial failures, corrections and provider limits are recorded in
-[plans/integration-sweep.md](plans/integration-sweep.md). Remote Turso, Firestore
+Remote Turso, Firestore
 emulator/cloud, real provider delivery/login/storage and collector checks were not
 run. External consumer applications, cloud services, publication and deployment
 were not modified.
@@ -4386,9 +4343,7 @@ store construction remain explicit. Existing generated host code remains
 host-owned; this updates future scaffold output.
 
 The convention is documented in ARCHITECTURE.md and replaces the pocket charter's
-former Config-only rule. Detailed inventory, retained constructor families,
-verification results and separately recorded startup-context follow-ups are in
-[plans/constructor-options.md](plans/constructor-options.md).
+former Config-only rule.
 
 All 42 modules passed build/test/vet through make check; actual-repository guards,
 scaffold generation/build/tests, documentation typecheck/build, targeted SDK/pocket
@@ -4591,9 +4546,6 @@ as before. Missing resource authorization omits resource routes. HTTP adapters
 and repeated HTTP() calls do not subscribe again. Stop stream consumers before
 closing components; the bus remains host-owned.
 
-Implementation plan and exact verification status:
-[plans/pocket-constructor-options.md](plans/pocket-constructor-options.md).
-
 The exact final source passed the 42-module build/test/vet, generation/scaffold
 and guard gate. Actual-workspace guards, all four pocket core race suites,
 migrated host HTTP/jobs tests and documentation typecheck/build passed.
@@ -4605,8 +4557,7 @@ Live SQL/cloud providers and browser-engine suites were not rerun in this phase.
 - **Implemented:** 2026-09-11.
 - **Modules:** PostgreSQL/Turso connectors, SendGrid, S3, events core and affected
   authentication/authorization/jobs store adapters.
-- **Release:** coordinated versions are being prepared in
-  [plans/audit-release-manifest.json](plans/audit-release-manifest.json).
+- **Release:** coordinated versions are being prepared.
   Firestore's three first releases remain held for remote-work reconciliation
   and required live verification.
 - **Impact:** context-first startup APIs, constructor error returns, explicit nil
@@ -4683,9 +4634,7 @@ framework or new connection probes were added.
 Focused build/test/vet and race checks passed for changed connectors/stores,
 SendGrid, S3 and events. Disposable PostgreSQL and local SQLite checks verify a
 returned database remains usable after its startup context is canceled. HTTP
-fixtures verify cancellation, delivery and credential/redirect behavior. The
-release's exact-source workspace/module/browser and consumer checks are tracked
-in [plans/startup-release-segovia.md](plans/startup-release-segovia.md); no cloud
+fixtures verify cancellation, delivery and credential/redirect behavior. No cloud
 Firestore verification is implied by the constructor tests.
 
 
@@ -4717,8 +4666,7 @@ A deterministic real-SQLite reader-lock regression demonstrated the old false
 success, and now verifies the error, unchanged persisted state and successful
 retry after the lock is released. Connector build/race/vet and HTTP libsql fixture
 checks pass. Twenty repeated concurrent-claim runs and all six SQLite
-integration/race suites also pass, with unchanged contention settings. Full
-release evidence is in [plans/startup-release-segovia.md](plans/startup-release-segovia.md).
+integration/race suites also pass, with unchanged contention settings.
 
 
 ## AUDIT-034: Firestore first-release reconciliation
@@ -4768,9 +4716,7 @@ manifest. `WithoutIndexProbe()` transfers index verification to the host; emulat
 success does not establish real index coverage. Do not apply TTL to claimed
 records whose deletion must also release uniqueness claims.
 
-Verification and release status are recorded in
-[firestore-release.md](plans/firestore-release.md) and
-[the Firestore release manifest](plans/firestore-release-manifest.json). These
+These
 notes do not claim a live run or published tag before that evidence exists.
 
 
@@ -4801,7 +4747,6 @@ consumer literals; prefer keyed literals and compile consumers before upgrading.
 
 This records implemented behavior, not release/adoption approval. Real GCP, Turso
 Cloud authority and representative performance acceptance remain open. See the
-[implementation plan](plans/authorization-cacher-implementation.md) and
 [public wiring](pockets/authorization/README.md#optional-tuplecache).
 
 ## AUDIT-036: Turso local file profile and env-tagged config
@@ -4825,7 +4770,6 @@ Added exported struct fields can affect unkeyed consumer literals; prefer keyed
 literals.
 
 This records implemented behavior, not release approval. See the
-[plan](plans/turso-local-file-profile.md) and the
 [connector README](integrations/datastores/turso/README.md#local-file-profile--file-urls-the-localfile-driver-package-env-tags).
 
 
@@ -4836,11 +4780,10 @@ This records implemented behavior, not release approval. See the
   v0.2.0 pins that core and uses readable `tuplecache:{<namespace>}` keys;
   namespaces accept ASCII letters, digits and `:._-/`. Existing Turso v0.9.0
   remains compatible. No SQL migration; restart the single dev server and let
-  its relay rebuild the new hash. See the
-  [follow-up release plan](plans/authorization-filter-tuple-cache-release.md).
+  its relay rebuild the new hash.
   Published from `26c7ff55`; both archives and the SQLite/Redis consumer
   passed public checksum/source and versioned build/test/vet checks. The unchanged
-  Linux SDK `RangeEdges` CI failure remains disclosed in the release plan.
+  Linux SDK `RangeEdges` CI failure remains disclosed.
 - **Implemented and released:** 2026-09-15. Supersedes AUDIT-035.
   Core v0.15.0; Turso v0.9.0; PostgreSQL v0.10.0; Firestore v0.3.0;
   new go-redis adapter v0.1.0. Source: `83d48957` on main.
@@ -4891,8 +4834,7 @@ after commit; they do not promise immediate revocation before delivery.
 
 Local real PostgreSQL, SQLite and Redis checks exercised capture, rollback,
 revocation, steady unrelated writes, disposable outbox recovery and restored Redis
-data. Full details, commands and deployment limitations are retained in the
-[TupleCache plan](plans/authorization-tuple-cache.md) and
+data. Deployment limitations are covered in the
 [host wiring guide](pockets/authorization/README.md#optional-tuplecache).
 Remote Turso/replica routing, live Firestore cleanup and application-scale capacity
 are unverified. No release or host adoption is implied by these local checks.
@@ -4901,8 +4843,7 @@ The same core release includes the completed Through batching change: verificati
 reads are batched across candidate resources while retaining depth/search limits,
 canonical ordering and existing decision semantics. The 366-space lookup, 50-item
 page and 128-dashboard filter are important host acceptance cases; their actual
-query counts must be remeasured on the host dataset. The framework's synthetic
-query-count evidence is in [authorization-through-batching.md](plans/authorization-through-batching.md).
+query counts must be remeasured on the host dataset.
 
 ## AUDIT-038: Consistent authorization lookup reads
 
@@ -4933,18 +4874,15 @@ bounded retry fallback. Hosts may attach Retry-After via errors.Is.
 Upgrade core plus the configured SQL adapter for snapshot behavior. Existing
 TupleCache wiring, Redis v0.2.0, schemas and connector versions remain compatible.
 The fix requires no cache rebuild or migration. The implementation's full local
-checks and 16-reader/2-writer SQL regressions passed; Segovia HTTP benchmarking,
-remote Turso/sqld and live Firestore remain unverified. See the
-[release plan](plans/authorization-lookup-snapshots-release.md) for publication and
-[implementation plan](plans/authorization-lookup-snapshots.md) for exact evidence.
+checks and 16-reader/2-writer SQL regressions passed; host HTTP benchmarking,
+remote Turso/sqld and live Firestore remain unverified.
 
 ## AUDIT-039: Authorization consistency and TupleCache hardening
 
 - **Implemented:** 2026-09-15.
 - **Release:** published from `373ef0668dfdf17a56ba002bb344197d6779e374`; core
   v0.17.0, Turso v0.11.0, PostgreSQL v0.12.0, Redis v0.3.0. Public checksums,
-  archive verification and versioned consumer checks passed. See
-  [release record](plans/authorization-review-hardening-release.md).
+  archive verification and versioned consumer checks passed.
 - **Impact:** coherent permission reads, Redis client configuration and capacity
   limits, explicit rebuild and diagnostics; no data migration.
 
@@ -5004,9 +4942,7 @@ there is no automatic Firestore-to-SQL data migration in this change.
 **Verification:** the full 42-module `make check` and authorization core race
 tests pass. The Python script suite passes all 36 tests after removing the
 Firestore-specific helper modes. Remote datastore suites were not run; remaining
-connector/authentication Firestore behavior is unchanged. See the
-[execution record](plans/authorization-firestore-retirement.md) for commands,
-scope and the pre-existing generated cache-fixture limitation.
+connector/authentication Firestore behavior is unchanged. The pre-existing generated cache-fixture limitation remains.
 
 ## AUDIT-041: Canonical authorization tuple values
 
@@ -5046,8 +4982,7 @@ is authoritative for current setup, raw pagination and facade construction.
 **Release status:** published and publicly verified, 2026-09-16.
 Published versions: core `v0.18.0`, pgx `v0.13.0`, Turso `v0.12.0`, Redis `v0.4.0`,
 and PostgreSQL connector `v0.9.0`.
-Source commit `66d70c511a74b28b1019e526acfc1382044395ad`; see the
-[release record](plans/authorization-unified-release.md) for checks and the existing Linux CI limitation.
+Source commit `66d70c511a74b28b1019e526acfc1382044395ad`; the existing Linux CI limitation remains.
 Core, PostgreSQL, Turso and Redis ship together with
 the `integrations/datastores/pgxdb` snapshot-transaction prerequisite. No application
 must first deploy v0.17.0 binaries; apply supported migration prefixes offline.
@@ -5142,8 +5077,6 @@ flows pass. SQL/Redis proofs had no skips. The benchmark record contains 106
 cases with five samples each. Independent backend and SRE reviews have no
 remaining blockers. Remote Turso and production load remain unverified; release
 pinning/archive checks and publication await the separate release instruction.
-See the [executed plan](plans/authorization-unified-tuples.md) and
-[verification record](plans/authorization-unified-tuples-verification.json).
 
 
 ## AUDIT-043: Authorization cleanup and fresh SQL schema
@@ -5151,8 +5084,7 @@ See the [executed plan](plans/authorization-unified-tuples.md) and
 **Release status:** published and publicly verified, 2026-09-16.
 Published versions: core `v0.18.0`, pgx `v0.13.0`, Turso `v0.12.0`, Redis `v0.4.0`,
 and PostgreSQL connector `v0.9.0`.
-Source commit `66d70c511a74b28b1019e526acfc1382044395ad`; see the
-[release record](plans/authorization-unified-release.md) for checks and the existing Linux CI limitation.
+Source commit `66d70c511a74b28b1019e526acfc1382044395ad`; the existing Linux CI limitation remains.
 This entry supersedes AUDIT-042's unreleased conversion/downgrade design. The
 published release entries and their verification remain historical records.
 
@@ -5206,8 +5138,6 @@ suites passed with race detection, including fresh installation/rollback and
 facade/snapshot contracts; fixture cleanup passed. No SQL/Redis test skipped.
 Memory's ambient-transaction test intentionally skips because it has no host
 transactor. Remote Turso and new performance measurements were not run.
-See the [executed plan](plans/authorization-cleanup.md) and
-[verification record](plans/authorization-cleanup-verification.json).
 
 
 ## AUDIT-044: One authorization middleware API
@@ -5215,8 +5145,7 @@ See the [executed plan](plans/authorization-cleanup.md) and
 **Release status:** published and publicly verified, 2026-09-16.
 Published versions: core `v0.18.0`, pgx `v0.13.0`, Turso `v0.12.0`, Redis `v0.4.0`,
 and PostgreSQL connector `v0.9.0`.
-Source commit `66d70c511a74b28b1019e526acfc1382044395ad`; see the
-[release record](plans/authorization-unified-release.md) for checks and the existing Linux CI limitation.
+Source commit `66d70c511a74b28b1019e526acfc1382044395ad`; the existing Linux CI limitation remains.
 
 Authorization HTTP exposes `Adapter.Require(Predicate)` as its only policy
 middleware. Compose `All`/`Any` over `HasRole`, `HasRelationship`, and `Can`, using
@@ -5270,8 +5199,7 @@ PostgreSQL/SQLite/Redis/CMS HTTP suites passed. No SQL/Redis check skipped.
 Memory's ambient-transaction test intentionally skips; no-test packages also
 produce skip entries. Remote Turso and production capacity remain unverified.
 Architecture/backend reviews found no blocking issue or lost security invariant.
-See the [executed plan](plans/authorization-one-middleware.md),
-[verification record](plans/authorization-one-middleware-verification.json), and
+See the
 [benchmarks](pockets/authorization/BENCHMARKS.md).
 
 ## AUDIT-045: Host denial responses and decision logging
@@ -5279,7 +5207,7 @@ See the [executed plan](plans/authorization-one-middleware.md),
 **Release status:** core `v0.19.0` published from main
 `68866b39e3d68830dd97d4e1d4232ef390d0d23c`; public archive, checksums and HTTP
 consumer verified. GitHub CI retains the pre-existing Linux SDK `RangeEdges`
-failure. See the [release record](plans/authorization-host-policy-release.md).
+failure.
 
 Hosts can retain the framework's `Require`, `Path`, `Can`, `All` and `Any`
 vocabulary while choosing the denied HTTP response with
@@ -5312,9 +5240,7 @@ artifact checks and architecture guards), full authorization core race suite,
 focused HTTP race tests and real loopback HTTP logger wiring passed. Nine
 benchmark workloads produced all 27 required samples. Named architecture and
 backend reviews found no blockers. SQL/Redis live integration and remote Turso
-were not rerun for this transport/logging-only change. See the
-[executed plan](plans/authorization-host-policy.md) and
-[verification record](plans/authorization-host-policy-verification.json).
+were not rerun for this transport/logging-only change.
 
 
 ## AUDIT-046: Inbound authorization ownership
@@ -5360,18 +5286,14 @@ G28 prevents retired authentication callbacks returning to logic and decision
 engine imports returning to the document domain/storage. Verification includes
 an admitted-request/revocation interleaving, HTTP policy denials and exact-command
 execution, and existing listing/guarded-mutation tests. The full 42-module make check, authentication/authorization/example race suites,
-and live PostgreSQL listing/mutation checks passed. See the
-[executed plan](plans/authorization-inbound-policy.md) and
-[verification record](plans/authorization-inbound-policy-verification.json).
+and live PostgreSQL listing/mutation checks passed.
 
 
 ## AUDIT-047: Principal admission and tuple integrity
 
 **Release status:** published in authentication `v0.12.0`, authorization `v0.20.0`,
 PostgreSQL authorization store `v0.14.0` and Turso authorization store `v0.13.0`
-from `f989b89567504273099e07ae885a07db9d54184e`. See the
-[release record](plans/authorization-integrity-release.md) and
-[manifest](plans/authorization-integrity-release-manifest.json).
+from `f989b89567504273099e07ae885a07db9d54184e`.
 
 
 The owner's explicit ruling supersedes AUDIT-046's retained transactional
@@ -5402,8 +5324,6 @@ example race suites, memory/local SQLite/disposable PostgreSQL races, separate
 non-C collation proof, HTTP behavior regressions, eight G29 synthetic cases and
 documentation production build passed. The changed writer benchmarks have 20
 fresh samples. Named architecture and backend reviews have no remaining blockers.
-See the [executed plan](plans/authorization-integrity-policy.md) and
-[verification record](plans/authorization-integrity-policy-verification.json).
 
 Release verification additionally passed independent versioned candidates and
 public archives, auth-CMS/standalone consumer races, unchanged adapter/view
@@ -5416,8 +5336,7 @@ live authentication datastore suites remain unverified.
 
 **Release status:** published: authorization `v0.21.0`,
 PostgreSQL store `v0.15.0`, Turso store `v0.14.0`. SQL adapter and auth-cms pins
-are updated. No SQL schema, persisted cursor or cache protocol change. See the
-[release record](plans/authorization-internal-cleanup-release.md).
+are updated. No SQL schema, persisted cursor or cache protocol change.
 
 Roles and relationships remain views of canonical tuples. Raw relationship
 stores delegate exact existence, counts and listings to the tuple-backed facade,
@@ -5442,14 +5361,13 @@ No production path returned the removed sentinel. `GetSchema` and `SchemaDigest`
 remain available. Four private dead helpers are removed and mutation planning
 uses the shared canonical tuple comparator.
 
-Repository and available local Segovia/GPS source searches found no production
+Repository and available local host source searches found no production
 consumers of the removed APIs outside their obsolete implementation. Graph tests
 retain a local test-only alias; the obsolete error-identity assertion is removed.
 This does not establish compatibility with arbitrary external hosts. The retained
 aggregate relationship store interface and role APIs require no source migration.
 
-Verification and exact limits are recorded in the
-[implementation plan](plans/authorization-internal-cleanup.md). Consumer guidance:
+Consumer guidance:
 [API adoption](pockets/authorization/stores/UPGRADE.md#adopting-the-internal-cleanup-v0210).
 
 Verification passed the 42-module make check, core race suite, disposable
@@ -5466,8 +5384,7 @@ gate did not complete. See the release record for all verification evidence.
 ## AUDIT-049: Independent MCP OAuth sessions
 
 **Affected:** authentication core, pgx/Turso adapters, optional Goth views and
-custom credential/store consumers. Coordinated versions and publication evidence
-are tracked in [the release record](plans/authentication-mcp-oauth-release.md).
+custom credential/store consumers.
 Application deployment is separate.
 
 The optional `WithOAuth2` authorization server creates independent delegated
@@ -5504,9 +5421,7 @@ and delegated session writes. Root-mounted consent/discovery is required; a pref
 registrar alone cannot rewrite endpoint URLs or form actions.
 
 Rollback requires disabling MCP traffic/issuance and draining or revoking delegated
-sessions before old binaries run; leave additive schema installed. See
-[the plan](plans/authentication-mcp-oauth.md) for current verification evidence and
-remaining host-specific Claude acceptance work.
+sessions before old binaries run; leave additive schema installed. Host-specific Claude acceptance work remains.
 
 ## AUDIT-050: Delegated audience admission on shared API routes
 
@@ -5520,8 +5435,7 @@ remain in effect; delegated credentials stay header-only and always live-checked
 API keys. Combining both options intersects their resource constraints regardless
 of order. Defaults, nested narrowing and no-fallback credential resolution are
 unchanged. No token/session schema, migration, endpoint or store/view release is
-required. Publication and regression evidence are recorded in
-[the patch release plan](plans/authentication-delegated-audience-release.md).
+required.
 
 ## AUDIT-051: Login page honors disabled password flows
 
@@ -5534,8 +5448,6 @@ page models; custom renderers should honor the field.
 
 Adopt authentication v0.13.2 and Goth views v0.5.1; the renderer pins the fixed
 core. No route-security, session, token, migration or store change is required.
-Publication and verification status are in
-[the fix plan](plans/authentication-login-password-posture.md).
 
 
 ## AUDIT-052: Atomic operation ledger and invitation grant recovery
@@ -5570,7 +5482,6 @@ purge/teardown and have no age-based retention. Hosts must preserve records that
 producers can retry and account for subject-linked fingerprints in erasure
 procedures. A pre-Apply host precondition can still strand a committed retry, and
 a refused first grant can apply when its refusal clears; both are named follow-ups.
-Plan and verification: [invitation-grant-operation-ledger](plans/invitation-grant-operation-ledger.md).
 
 ## AUDIT-053: cms admin routes are deny-by-absence
 
@@ -5782,8 +5693,7 @@ against the live Auth emulator.
   `integrations/datastores/turso` v0.10.0 (`d5c9f213`, #233), then
   `pockets/authorization/stores/pgx` v0.22.0 and `pockets/authorization/stores/turso`
   v0.21.0 (`18bb3f57`, #234), which repin to them. Record: `RELEASING.md`, "Ambient
-  transactions per datastore instance"; executed plan
-  `plans/querierfrom-instance-scope.md`.
+  transactions per datastore instance".
 - **Modules:** `integrations/datastores/pgxdb`, `integrations/datastores/turso`,
   `pockets/authorization/stores/pgx`, `pockets/authorization/stores/turso`;
   `sdk/capabilities/transaction` (doc comment only, no tag).
@@ -5846,7 +5756,7 @@ against the live Auth emulator.
   v0.16.0 (`181472d6`, #246); `pockets/cms/stores/pgx` v0.6.0 (`d350f081`, #247);
   `pockets/jobs/stores/pgx` v0.8.0 and `…/stores/turso` v0.7.0 (`d5af245f`, #248);
   `workshop/gopernicus` v0.10.0 for the scaffold. Record: `RELEASING.md`, "Default ids by
-  entity class; PostgreSQL 18 floor"; executed plan `plans/database-default-ids.md`.
+  entity class; PostgreSQL 18 floor".
 - **Modules:** the above. Untouched: events, secrets, goredis, cms turso, views, `ui/goth`.
 - **Old behavior:**
   - The zero `sdk.IDGenerator` (a 21-char NanoID) minted every pocket id, and several sites
@@ -5921,8 +5831,7 @@ against the live Auth emulator.
   `workshop/gopernicus` v0.10.0 (`bf1d0d74`, #249, the owed tag) and v0.10.1 (`14b59468`,
   #251); `pockets/jobs/stores/pgx` v0.9.0 and `…/stores/turso` v0.8.0 (`eaf1af26`, #252);
   `pockets/authentication` v0.34.0 (`0850deff`, #253); `workshop/gopernicus` v0.10.2 for the
-  scaffold. Guides: #254. Record: `RELEASING.md`, "Multi-tenant host asks"; executed plan
-  `plans/multi-tenant-host-asks.md`.
+  scaffold. Guides: #254. Record: `RELEASING.md`, "Multi-tenant host asks".
 - **Modules:** the above. Untouched: `pockets`, `pockets/jobs`, the authentication stores and
   views, authorization, pgxdb, every canonical migration set.
 - **Old behavior:**
@@ -5992,7 +5901,7 @@ against the live Auth emulator.
 - authentication: attribution cases (zero, user and system actor; direct-add success and
   failure rows), `DeclineByToken` lifecycle cases, and the HTTP response matrix.
 - `live-stores` green on `main` at `bf1d0d74` and `0850deff`; cold verification of every tag,
-  the train set, the battleboardhq shape and set C; `examples/auth-cms` run against the tags:
+  the train set, the host shape and set C; `examples/auth-cms` run against the tags:
   decline by token 200, a second decline 409, and the created row shows the user actor.
 
 ## AUDIT-059: Key rings with `kid` and legacy read, first-party `iss`/`aud`, bcrypt cost 12, a breach checker, rehash on login
@@ -6003,7 +5912,7 @@ against the live Auth emulator.
   `integrations/cryptids/golang-jwt` v0.4.0 (`6d0acbe1`, #262);
   `pockets/authentication/stores/pgx` v0.18.0 and `…/stores/turso` v0.17.0 (`82fd7c13`,
   #265). Examples and runbooks: #266. Record: `RELEASING.md`, "Key management and password
-  policy (SOC 2 slice S4d part 3)"; executed plan `plans/s4d3-keys-passwords.md`.
+  policy (SOC 2 slice S4d part 3)".
 - **Modules:** the above. Untouched: views/goth, `pockets`, workshop, ui/goth, pgxdb, every
   canonical migration set, every existing port's method set.
 - **Old behavior:**
@@ -6051,7 +5960,7 @@ against the live Auth emulator.
   stored cost).
 - To rotate a key, follow the docs site's *Operations runbooks* "Rotate a key": three phases,
   the window and gate per key, and the boot line as evidence. A pepper ring must keep the id
-  the host's protector uses today (battleboardhq: `primary`).
+  the host's protector uses today (e.g. `primary`).
 - Code that matched a breach checker's own error with `errors.Is` matches
   `ErrPasswordBreachCheckUnavailable` or `sdk.ErrUnavailable`; log alerts keyed on the old
   fail-open message re-key on `password_breach_check_unavailable`.
@@ -6077,8 +5986,7 @@ against the live Auth emulator.
 - **Status:** released 2026-10-28: `pockets/authorization` v0.33.0 (`76660098`, #264) and
   v0.34.0 (`fa288060`, #263); `pockets/authorization/stores/pgx` v0.24.0 and
   `…/stores/turso` v0.23.0 (`a7ba8afd`, #267); `pockets/authentication` v0.36.0
-  (`ed810dda`, #269). Record: `RELEASING.md`, "Host asks #224/#225/#256"; executed plan
-  `plans/host-asks-224-225-256.md`.
+  (`ed810dda`, #269). Record: `RELEASING.md`, "Host asks #224/#225/#256".
 - **Modules:** the above. Untouched: sdk, `pockets/authorization/stores/goredis`, the
   authentication stores and views, pgxdb, `pockets`, workshop, every canonical migration set.
 - **Old behavior:**
@@ -6140,7 +6048,7 @@ against the live Auth emulator.
 - authentication: hook order, refusal, WARN, cancellation and deadline tests, the HTTP
   mapping and the boot refusal; mutation proofs (16).
 - `live-stores` green on `main` before each tag; cold verification of every tag, the
-  gps-three-sixty shape and set C; production-baseline on PostgreSQL 18 (sole owner 409, 200
+  host shape and set C; production-baseline on PostgreSQL 18 (sole owner 409, 200
   after a second owner, audit attributed to the admin) and auth-cms (erase 200, session 401);
   auth-cms and production-baseline built at `GOWORK=off` against the tags boot with no
   integrity WARN.
@@ -6152,7 +6060,7 @@ against the live Auth emulator.
   v0.37.0 (`2fe347f5`, #279); `pockets/authentication/stores/pgx` v0.19.0 and
   `…/stores/turso` v0.18.0 (`118340a7`, #280). Examples and runbook: #281. Record:
   `RELEASING.md`, "Delegated assurance and asserted authentication time (SOC 2 slice S4d part
-  4)"; executed plan `plans/s4d4-delegated-assurance-auth-time.md`.
+  4)".
 - **Modules:** the above. Untouched: go-oidc, auth0, views/goth, pgxdb, `pockets`, workshop,
   ui/goth, every existing port's method set.
 - **Old behavior:**
@@ -6213,8 +6121,7 @@ against the live Auth emulator.
 
 - **Status:** released 2026-10-29: `pockets/authentication` v0.38.0 (`564d7185`, #285), which
   includes the #282 fix (`f3c1db75`, #284; no patch tag, R-2 (a)). Examples and docs: #287.
-  Record: `RELEASING.md`, "Native `all` and the enrollment grace (SOC 2 slice S4c-2)"; executed
-  plan `plans/s4c2-native-all-enrollment-grace.md`.
+  Record: `RELEASING.md`, "Native `all` and the enrollment grace (SOC 2 slice S4c-2)".
 - **Modules:** the above. Untouched: sdk, the authentication stores, views/goth, `pockets`,
   workshop, ui/goth, every existing port's method set. No migration.
 - **Old behavior:**
@@ -6271,7 +6178,7 @@ against the live Auth emulator.
   - `workshop/gopernicus` v0.10.3 (`236141c6`, #293, scaffold pins);
   - hygiene with no tag: #291 (closes #226).
   - Record: `RELEASING.md`, "Cleanup sweep: escaped-redaction refusal and the sprint's residual
-    inventory (SOC 2 slice S9)"; executed plan `plans/s9-cleanup-sweep.md`.
+    inventory (SOC 2 slice S9)".
 - **Modules:** the above. Untouched: every pocket, store and view, goredis, ui/goth (gofmt
   only), `pockets`. No migration. The examples are repinned (go.mod/go.sum only).
 - **Old behavior:**
@@ -6307,7 +6214,7 @@ against the live Auth emulator.
 - The tz fix live (`-c app.timezone=` → session `UTC`). `log_timezone` is proven by unit test
   only: the server refuses it at connect (`55P02`).
 - `live-stores` green on `main` before each tag. Cold verification: sdk alone; the pgx and
-  turso store sets each select sdk v0.25.0; the gps-three-sixty shape; a cold `go install
+  turso store sets each select sdk v0.25.0; the host shape; a cold `go install
   @v0.10.3` with `init --db pgx|turso`, then verify, build, vet and `guard --posture` clean.
 - From the tags (this record): every example at `GOWORK=off`; auth-cms boot (`/auth/me` 401);
   production-baseline two-role bootstrap on PostgreSQL 18.6; an escaped `DB_URL` refused with

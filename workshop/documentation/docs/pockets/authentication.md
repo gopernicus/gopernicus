@@ -1263,5 +1263,4 @@ in the host's migration ledger before boot. Upgrade the core, adapter and views
 together and drain old writers before enabling the feature. PostgreSQL, Turso and
 the example memory store support it.
 The host still owns MCP protected-resource metadata, tool authorization and the
-actual Claude connector acceptance test. See the pocket README and
-`plans/authentication-mcp-oauth.md` for the full API and rollout contract.
+actual Claude connector acceptance test. See the pocket README for the full API and rollout contract.

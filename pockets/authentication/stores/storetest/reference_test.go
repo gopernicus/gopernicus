@@ -437,7 +437,7 @@ func (r refAccountStatus) ProbeSchema(context.Context) error {
 
 // --- user.AdminRepository ---
 
-// refUserAdmin is the reference user-administration capability (CHAU-1.1). Its
+// refUserAdmin is the reference user-administration capability. Its
 // whole point is the SetStatus transaction: the status write, the auth_revision
 // increment, and the session/grant revocation all happen inside ONE critical
 // section, so no observer can see a deactivated user still holding sessions and
@@ -554,7 +554,7 @@ func (r refUserAdmin) SetStatus(_ context.Context, id string, status user.Status
 
 // --- session.ActiveUserRepository ---
 
-// refActiveSessions is the reference fenced session mint (CHAU-1.1): the status
+// refActiveSessions is the reference fenced session mint: the status
 // read and the session insert happen under ONE lock, so a concurrent SetStatus
 // either commits first (and this refuses) or commits after (and revokes the row
 // this wrote). A SQL adapter must reach the same outcome with row locking or
@@ -1784,8 +1784,8 @@ func (r refChallenges) Replace(ctx context.Context, c challenge.Challenge) (chal
 		return challenge.Challenge{}, err
 	}
 	// Delete the prior (SUBJECT KEY, purpose) row (the single-active claim). The
-	// subject key defaults to the user id for every purpose that predates it
-	// (CHAU-6.1), so this is unchanged for all of them.
+	// subject key defaults to the user id for every purpose that predates it,
+	// so this is unchanged for all of them.
 	subjectKey := c.ResolvedSubjectKey()
 	c.SubjectKey = subjectKey
 	for id, ex := range r.challenges {
@@ -2234,7 +2234,7 @@ func (r refAuthGrants) DeleteBySession(_ context.Context, sessionID string) erro
 
 // --- passwordless.Repository ---
 
-// refPasswordless is the reference atomic magic-link redemption (CHAU-6.2). It is
+// refPasswordless is the reference atomic magic-link redemption. It is
 // the behavioral SPEC the two SQL implementations are held to, so it is written to
 // be readable rather than clever: one critical section, a snapshot taken before
 // any mutation, and an explicit restore on every rejection path so a refused

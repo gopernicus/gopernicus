@@ -4,8 +4,8 @@ import (
 	"net/url"
 )
 
-// PasswordResetTokenParam is the query parameter the reset landing URL receives
-// (CHAU-5.2). It is exported so the public auth package's configuration validator
+// PasswordResetTokenParam is the query parameter the reset landing URL receives.
+// It is exported so the public auth package's configuration validator
 // and a host's SPA route agree on one name rather than two string literals.
 const PasswordResetTokenParam = "token"
 

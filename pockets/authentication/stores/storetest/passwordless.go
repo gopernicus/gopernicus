@@ -18,7 +18,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// The atomic magic-link redemption conformance cases (CHAU-6.2 / CHAU-6.3).
+// The atomic magic-link redemption conformance cases.
 //
 // This is the adversarial suite, not a happy-path check. Provisioning turns a
 // magic link into an account-creation credential, so what has to be proven is

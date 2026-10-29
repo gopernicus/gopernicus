@@ -367,8 +367,8 @@ func TestAccountPageOffersLinkableProviders(t *testing.T) {
 
 // TestIdentifierEditPageCarriesRemovableHint proves the edit-identifier page learns an
 // identifier's removability from the same masked inventory the account page reads, so
-// the form can offer a removal control only where the credential policy would allow one
-// (Segovia flag #18). The seeded account's sole recovery-capable address is
+// the form can offer a removal control only where the credential policy would allow one.
+// The seeded account's sole recovery-capable address is
 // non-removable; a second verified recovery address makes it advisory-removable.
 func TestIdentifierEditPageCarriesRemovableHint(t *testing.T) {
 	f := newAccountFormFixture(t)

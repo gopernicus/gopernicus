@@ -8,9 +8,7 @@ description: What the framework refuses in production today, what is documented 
 This page describes the framework **as it is on `main` at 2026-10-26, after SOC 2 slices S1–S3,
 S4a, S4b, S4c, S5 and S6** (the production posture floor, audit completeness and integrity, retention
 and erasure, the MFA posture, passkeys, TOTP and recovery codes, transport and abuse hardening, secrets and logging;
-release records in `RELEASING.md`, host handoffs in `plans/soc2-s1-production-posture-handoff.md`,
-`plans/soc2-s2-audit-completeness-handoff.md` and `plans/soc2-s3-retention-erasure-handoff.md`;
-S4a, S4b, S4c, S5 and S6 have no handoff file — their records carry the upgrade notes).
+release records and upgrade notes in `RELEASING.md`).
 Where a control is still planned, it says so; an item marked *planned* is not a control a host
 can claim yet.
 

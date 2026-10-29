@@ -126,7 +126,7 @@ func TestOwnerKeyRotation(t *testing.T) {
 	ctx := context.Background()
 	repo := memory.New()
 	v, r := services(t, repo, wrapper(t, "m1", "m1"))
-	o := owner("gps")
+	o := owner("globex")
 	for _, name := range []string{"a", "b", "c"} {
 		if _, err := v.Put(ctx, vault.Ref{Owner: o, Name: name}, []byte("value-"+name), staff); err != nil {
 			t.Fatal(err)
@@ -170,7 +170,7 @@ func TestRotationIsAtomic(t *testing.T) {
 	ctx := context.Background()
 	repo := memory.New()
 	v, r := services(t, repo, wrapper(t, "m1", "m1"))
-	o := owner("gps")
+	o := owner("globex")
 	for _, name := range []string{"a", "b"} {
 		if _, err := v.Put(ctx, vault.Ref{Owner: o, Name: name}, []byte("v"), staff); err != nil {
 			t.Fatal(err)
@@ -201,7 +201,7 @@ func TestRotationStampsCorrelation(t *testing.T) {
 	ctx := sdk.WithTraceID(sdk.WithRequestID(context.Background(), "req-rotate"), "trace-rotate")
 	repo := memory.New()
 	v, _ := services(t, repo, wrapper(t, "m1", "m1"))
-	o := owner("gps")
+	o := owner("globex")
 	if _, err := v.Put(context.Background(), vault.Ref{Owner: o, Name: "a"}, []byte("v"), staff); err != nil {
 		t.Fatal(err)
 	}

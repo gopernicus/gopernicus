@@ -79,15 +79,14 @@ each module receives fixes. Latest tags at the time of writing:
 | `workshop/gopernicus` | v0.10.3 |
 
 Every module declares `go 1.26.10`; a host that honors the pin builds with a standard
-library carrying the fixes listed in `plans/soc2-s8-toolchain-pgx-repin-handoff.md`.
+library carrying the fixes for the pinned toolchain release.
 
 ## Change management
 
 The repository has one maintainer. The compensating control for the missing second
 reviewer is written here and enforced by configuration, not by habit:
 
-1. **Plan-file ratification.** Significant work is designed in a plan file under
-   `.claude/plans/` (released copies in `plans/`) and ratified by the owner before any code
+1. **Plan-file ratification.** Significant work is designed in a plan file and ratified by the owner before any code
    is written; the plan names the verification each slice must pass.
 2. **Required status checks on `main`.** A repository ruleset on `main` requires a pull
    request, the `check` status (the hermetic `make check` gate: per-module vet, build, test,

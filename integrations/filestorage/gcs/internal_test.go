@@ -62,7 +62,7 @@ func TestMapErr(t *testing.T) {
 }
 
 func TestOpenCanonicalPrefix(t *testing.T) {
-	for _, prefix := range []string{"", "tenant", "tenant/", "a/b", "a/b/", ".segovia", " spaced /文件"} {
+	for _, prefix := range []string{"", "tenant", "tenant/", "a/b", "a/b/", ".app", " spaced /文件"} {
 		t.Run(prefix, func(t *testing.T) {
 			st := testStore(t, Config{Prefix: prefix}, func(*http.Request) (*http.Response, error) {
 				t.Error("unexpected request")

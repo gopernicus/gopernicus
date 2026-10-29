@@ -22,7 +22,7 @@ import (
 // mutation rail both compare-and-swap on it so a stale, safe-looking method set
 // can never win a concurrent mutation. It starts at 0 and increments once per
 // applied mutation.
-// Status is the account lifecycle posture (CHAU-1.1); see status.go. It is
+// Status is the account lifecycle posture; see status.go. It is
 // StatusActive for every user the domain constructs and, after the bundled
 // status migration, for every pre-existing row. A store reader may resolve a
 // legacy empty column with NormalizeStatus. StatusChangedAt is the last

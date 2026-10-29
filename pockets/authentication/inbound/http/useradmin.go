@@ -57,7 +57,7 @@ var securityEventQueryKeys = []string{
 	list.QueryKeyLimit, list.QueryKeyCursor, list.QueryKeyOffset, list.QueryKeyCount, list.QueryKeySearch, list.QueryKeyOrder,
 }
 
-// The user-administration surface (CHAU-1.6). Registered by Mount ONLY when the
+// The user-administration surface. Registered by Mount ONLY when the
 // host supplied WithUserAdminCheck AND the administration/fenced-mint
 // repositories are wired — deny-by-absence, the Providers precedent. A host that
 // wires nothing here has no admin routes at all, and every path below 404s.
@@ -204,7 +204,7 @@ func mountUserAdmin(r pockets.RouteRegistrar, h *handlers, userAdministration, b
 	r.Handle("GET", "/auth/admin/users/{id}", h.adminGetUser, userAdministration)
 	r.Handle("POST", "/auth/admin/users/{id}/deactivate", h.adminDeactivateUser, userAdministration, browserSafe)
 	r.Handle("POST", "/auth/admin/users/{id}/reactivate", h.adminReactivateUser, userAdministration, browserSafe)
-	// The AUTHORIZED counterpart of the public, enumeration-safe resend (CHAU-2.3).
+	// The AUTHORIZED counterpart of the public, enumeration-safe resend.
 	// It rides the same gate chain as the lifecycle mutations and may report real
 	// target state.
 	r.Handle("POST", "/auth/admin/users/{id}/verification/resend", h.adminResendVerification, userAdministration, browserSafe)

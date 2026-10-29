@@ -16,8 +16,7 @@ component styles are hand-written plain CSS consuming the token custom propertie
 A host that wants Tailwind runs it in its own build against the stable `.goth-*`
 surface, as the documented adopter option in §5 only.
 
-Authority for scope and verification is `.claude/plans/ui-goth/plan.md`. The
-cross-implementation family charter and semantic-role vocabulary are in
+The cross-implementation family charter and semantic-role vocabulary are in
 [`../README.md`](../README.md). The frozen 64-entry parity mapping and the API
 family each entry uses are in [`catalog.md`](catalog.md).
 
@@ -469,8 +468,8 @@ const (
 | `Appearance` | `""` → treated as `AppearanceLight` by helpers | unknown → light fallback | host/controller selects; never a primitive |
 | `Direction` | `""` → `DirectionLTR` | unknown → LTR fallback | host/page sets; primitives inherit |
 
-Brand values (Segovia/GPS) are proof/override inputs only. The role names are the
-contract; specific values do not generalize and no Segovia/GPS360 code is
+Brand values (e.g. a downstream brand theme) are proof/override inputs only. The role names are the
+contract; specific values do not generalize and no downstream product code is
 imported.
 
 ---
@@ -726,22 +725,19 @@ func MergeAttributes(caller templ.Attributes, owned templ.Attributes) templ.Attr
   registered **once** in the runtime entrypoint using `@alpinejs/csp` — no inline
   expression is evaluated, so no `unsafe-eval`. (`gothTooltip`/`gothHoverCard` were
   added for the Hover Card/Tooltip primitives by a recorded owner reopen of this
-  frozen list — see the 2026-07-17 GOTH-4.3 addendum in
-  `.claude/plans/ui-goth/gate-b-review.md`. Escape-hide and hover-intent are not
+  frozen list. Escape-hide and hover-intent are not
   expressible in CSS and no existing controller fits a non-trapping,
   hover/focus-opened, describedby overlay; both new controllers compose the
   frozen GOTH-4.1 mechanics with no fork. Popover rides native
   `popover`/`popovertarget` and Select rides a native `<select>`, so neither adds
   a controller. `gothMessageScroller` was added for Message Scroller (P60) by a
-  recorded owner reopen — see the 2026-07-18 GOTH-6.2 addendum in
-  `.claude/plans/ui-goth/gate-b-review.md`; scroll-position management — live-edge
+  recorded owner reopen; scroll-position management — live-edge
   following, history-prepend-without-jump, jump-to-message focus, unread/scroll
   state — is expressible in no frozen controller, and the F4-native precedent cannot
   apply because the no-JS transcript covers read/jump but not live-follow. It
   composes the frozen GOTH-4.1 mechanics + `mechanics/live-region.js` over a
   server-rendered `role=log` transcript with no fork. `gothResizable` was added for
-  Resizable (P61) by a recorded owner reopen — see the 2026-07-18 GOTH-6.3 addendum
-  in `.claude/plans/ui-goth/gate-b-review.md`; split-pane drag (pointer capture +
+  Resizable (P61) by a recorded owner reopen; split-pane drag (pointer capture +
   APG keyboard resize + bounds) is expressible in no CSS and no frozen controller
   provides pointer-drag geometry, and there is no honest no-JS live-resize baseline.
   It reads separator drag/keyboard input and writes pane geometry through a
@@ -1015,7 +1011,7 @@ Changes to any name/shape above reopen GOTH-0.3 and re-enter Gate B.
 
 §1–§10 are the frozen contract. This section is the adopter guide: how a host wires
 the kit, how a pocket ships a `views/goth` adapter, the CSP recipe, the component
-layer, the HTMX migration trigger, and the Segovia/GPS360 handoff. Every Go snippet
+layer, the HTMX migration trigger, and the downstream handoff. Every Go snippet
 here is proven against the real API by executed tests — the host wiring and HTMX
 grammar by `examples/minimal/cmd/server/goth_htmx_proof_test.go` and
 `examples/auth-cms/cmd/server/goth_proof_test.go`, and the CSP-formatter +
@@ -1285,13 +1281,13 @@ Two caveats for a host:
   headers no longer apply). Self-hosting is the supported and tested path; CDN
   relocation is a host responsibility outside the kit's contract.
 
-### 11.10 Theming a brand (the GPS/Segovia token override) and handoff
+### 11.10 Theming a brand (the brand token override) and handoff
 
 Theming is CSS-only (§5): the kit ships neutral contract fallbacks + a default palette,
 and a host overrides tokens by serving a stylesheet loaded *after* the kit stylesheet
 (`WithThemeStylesheetPath`). Brand values are override inputs, not part of the
-contract — the token **names** generalize, specific values do not, and **no Segovia or
-GPS360 code is imported into this repository.**
+contract — the token **names** generalize, specific values do not, and **no downstream product
+code is imported into this repository.**
 
 One rule is REQUIRED, not branding: **the kit reset deliberately leaves the document
 surface unpainted** — the kit reset touches `<body>` only for `margin`/line
@@ -1302,11 +1298,11 @@ behind (the exact symptom that surfaced this rule in the first adopter's dark-mo
 screenshot). Because the rule reads the tokens, redeclaring `--background`/
 `--foreground` in the dark block repaints both appearances — verify light AND dark.
 
-A GPS-branded host ships its own stylesheet redeclaring the tokens it wants:
+A brand-themed host ships its own stylesheet redeclaring the tokens it wants:
 
 ```css
 /* the host's own brand stylesheet, served under 'self' and pointed at by     */
-/* WithThemeStylesheetPath. This is illustrative GPS branding — no Segovia  */
+/* WithThemeStylesheetPath. This is illustrative branding — no downstream  */
 /* code or asset is imported; only the frozen kit token NAMES are used.        */
 
 /* REQUIRED: the kit reset leaves the document surface unpainted. */
@@ -1316,7 +1312,7 @@ body {
 }
 
 :root {
-  --primary: oklch(0.52 0.17 250);           /* GPS brand blue */
+  --primary: oklch(0.52 0.17 250);           /* brand blue */
   --primary-foreground: oklch(0.99 0 0);
   --ring: oklch(0.52 0.17 250);
   --radius: 0.375rem;
@@ -1335,7 +1331,7 @@ appearance-dependent token), retint the values, serve it, and set
 into its own Tailwind build (§5, "Using Tailwind in YOUR app") — that is an adopter
 convenience; the kit never ships or recompiles Tailwind.
 
-**Segovia/GPS360 handoff.** A downstream product (e.g. Segovia/GPS360) adopts `ui/goth`
+**Downstream handoff.** A downstream product adopts `ui/goth`
 by: (1) `go get`-ing the module and wiring a host per §11.1; (2) choosing a profile
 (§11.2); (3) mapping `Requirements` into its CSP (§11.3) and running the boot-time
 self-check (§11.5); (4) shipping a brand stylesheet redeclaring the token names above;

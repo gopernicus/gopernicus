@@ -431,7 +431,7 @@ func TestOAuthCallbackRegisterAndLink(t *testing.T) {
 // TestOAuthCallbackRegisterCarriesProviderName proves that first-sign-in
 // provisioning seeds the account's display name from the provider's reported
 // name, on BOTH the OIDC id-token lane and the userinfo lane. Without it every
-// OAuth-provisioned account is minted nameless (coordination-hub #152).
+// OAuth-provisioned account is minted nameless.
 func TestOAuthCallbackRegisterCarriesProviderName(t *testing.T) {
 	for _, tc := range []struct {
 		name string

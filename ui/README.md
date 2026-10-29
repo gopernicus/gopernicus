@@ -6,8 +6,7 @@ every implementation must use Go packaging. Its first and only member today is
 [`goth/`](goth/) (templ + plain CSS + Alpine CSP + optional HTMX). Later `react/` and
 `vue/` implementations are legitimate future members.
 
-Authority for scope, contracts, and verification is
-`.claude/plans/ui-goth/plan.md`. The exact primitive API, attribute/ID grammar,
+The exact primitive API, attribute/ID grammar,
 bundle-profile API, and semantic token contract were **frozen in GOTH-0.3
 (2026-07-17)** in [`goth/README.md`](goth/README.md), pending Gate B review; this
 file is the family charter and the home of the cross-implementation vocabulary
@@ -66,7 +65,7 @@ A host adopts `ui/goth` by wiring a bundle, serving its embedded assets, and
 rendering pages through it (directly or through a pocket `views/goth` adapter).
 The complete adopter guide — install/wiring, profiles, the CSP recipe, the
 `components/` layer, custom pocket `Views`, the HTMX migration trigger, module
-tags, the SRI/CDN caveats, and the brand-token override + Segovia/GPS360 handoff —
+tags, the SRI/CDN caveats, and the brand-token override + downstream handoff —
 is [`goth/README.md`](goth/README.md) §11. The three reference wirings are
 `examples/{cms,minimal,auth-cms}`; the two pocket adapters are
 `pockets/authentication/views/goth` and `pockets/cms/views/goth`.
@@ -90,9 +89,9 @@ its light/`.dark`/`[data-theme]` and neutral-fallback rules live in
 - radius, shadows, typography families, motion durations/easing, density, and
   named z-index layers.
 
-Brand values (e.g. a Segovia/GPS theme) are proof/override inputs, not part of
-the contract: the **role names** generalize, specific values do not. No Segovia
-or GPS360 code is imported into this repository.
+Brand values (e.g. a downstream brand theme) are proof/override inputs, not part of
+the contract: the **role names** generalize, specific values do not. No downstream
+product code is imported into this repository.
 
 ## Parity rules
 

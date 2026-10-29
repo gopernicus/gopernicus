@@ -190,10 +190,10 @@ func TestListUsesLiteralPrefixAndRemovesOnlyConfiguredDirectory(t *testing.T) {
 		if got := r.URL.Query().Get("prefix"); got != "tenant/." {
 			t.Errorf("prefix=%q", got)
 		}
-		return response(r, 200, `{"items":[{"name":"tenant/.segovia"},{"name":"tenant/.folder/"},{"name":"tenant/..literal"}]}`), nil
+		return response(r, 200, `{"items":[{"name":"tenant/.app"},{"name":"tenant/.folder/"},{"name":"tenant/..literal"}]}`), nil
 	})
 	got, err := st.List(context.Background(), ".")
-	if err != nil || strings.Join(got, ",") != ".segovia,..literal" {
+	if err != nil || strings.Join(got, ",") != ".app,..literal" {
 		t.Fatalf("list=%v err=%v", got, err)
 	}
 }

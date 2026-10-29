@@ -13,8 +13,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 )
 
-// Registration-verification resend budgets (coordination-hub-auth-upstream
-// CHAU-2.1). They deliberately mirror the passwordless start budgets rather than
+// Registration-verification resend budgets.
+// They deliberately mirror the passwordless start budgets rather than
 // inventing a cooldown table: both are unauthenticated, enumeration-sensitive
 // starts that submit opaque work, and one shape is easier to reason about and to
 // operate than two.
@@ -61,7 +61,7 @@ var ErrUserDeactivated = fmt.Errorf("the account is deactivated: %w", sdk.ErrCon
 var ErrNoVerifiableEmail = fmt.Errorf("the account has no active primary email identifier: %w", sdk.ErrNotFound)
 
 // ResendVerification is the PUBLIC, enumeration-safe registration-verification
-// resend (CHAU-2.2).
+// resend.
 //
 // The request path does exactly three things: normalize, rate-limit, and submit
 // opaque delivery work. It performs NO account lookup, NO challenge issue, NO
@@ -153,7 +153,7 @@ func (s *Service) recordVerificationResend(ctx context.Context, status string) {
 	})
 }
 
-// ResendVerificationForUser is the AUTHORIZED admin resend (CHAU-2.3). Unlike the
+// ResendVerificationForUser is the AUTHORIZED admin resend. Unlike the
 // public path it MAY report real target state, because the caller has already
 // been authorized to see it: an unknown user is not-found, an already-verified or
 // deactivated account is a typed 409.
@@ -228,7 +228,7 @@ func (s *Service) activePrimaryEmail(ctx context.Context, userID string) (identi
 }
 
 // initRegistrationVerification is the worker initializer for a registration
-// verification resend (CHAU-2.2). Everything enumeration-sensitive happens HERE,
+// verification resend. Everything enumeration-sensitive happens HERE,
 // off the request path:
 //
 //  1. resolve the active primary email claim for the enqueued normalized address;

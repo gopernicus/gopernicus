@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// CHAU-2.3 — the registration-verification resend surface over real HTTP through
+// The registration-verification resend surface over real HTTP through
 // exported host seams.
 //
 // The public route's whole contract is that its response cannot be used to learn

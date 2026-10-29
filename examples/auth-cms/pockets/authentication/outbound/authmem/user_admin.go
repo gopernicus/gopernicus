@@ -12,7 +12,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-// The account-lifecycle ports (coordination-hub-auth-upstream CHAU-1.1): the
+// The account-lifecycle ports: the
 // operator directory plus the atomic status transition, and the fenced session
 // mint that closes the deactivate-versus-login race.
 //

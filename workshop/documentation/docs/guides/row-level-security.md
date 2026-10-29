@@ -213,9 +213,9 @@ transaction in the context is neither joined nor refused, so an identity store c
 business `TransactWithSettings` runs on its own pool, unscoped, which is what a global table wants.
 See *Persistence & migrations*, "Two databases never share a transaction".
 
-## Battleboard's `Scope`, against pgxdb v0.16.0
+## A host `Scope`, against pgxdb v0.16.0
 
-Battleboard's tenant scope (`internal/outbound/domains/tenancy/scope.go`) shrinks to host policy
+A host's tenant scope shrinks to host policy
 over the two primitives. Written against pgxdb v0.16.0 (there is no package-level `TxFromContext`
 since v0.15.0):
 
@@ -428,7 +428,7 @@ A clean schema returns zero rows. Typical findings:
 ```
 
 The query does not check foreign keys or views. The checklist's items for those still stand, and
-battleboard's `checkCompositeForeignKeys` is one way to automate the first.
+a host-side composite foreign key check is one way to automate the first.
 
 ### The runtime role
 
@@ -586,7 +586,7 @@ ROLLBACK;
 
 Zero rows is a pass. Run it in the release pipeline before the deploy, and fail the deploy on
 any row. With `psql -X -f preflight.sql`, wrap the count in `\gset` and `\if` to get a non-zero
-exit. Battleboard's `workshop/dbroles/preflight.sql` does this, with the matrix in
+exit. A host-side `preflight.sql` can do this, with the matrix in a separate
 `_matrix.sql`.
 
 ## An endpoint matrix

@@ -36,7 +36,7 @@ type AuthenticationService interface {
 	// ResendVerification is the PUBLIC registration-verification resend: it
 	// normalizes, rate-limits, and submits an opaque issuance command, resolving no
 	// account on the request path, so every target state yields one accepted
-	// outcome (CHAU-2.2).
+	// outcome.
 	ResendVerification(ctx context.Context, email string) error
 	ResetPassword(ctx context.Context, token, newPassword string) error
 

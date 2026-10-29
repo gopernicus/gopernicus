@@ -152,13 +152,13 @@ type Repository interface {
 	AppendAudit(ctx context.Context, records []AuditRecord) error
 }
 
-// Owner scopes secrets and holds one data key: for example {tenant, gps}.
+// Owner scopes secrets and holds one data key: for example {tenant, globex}.
 type Owner struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
 }
 
-// Ref names one secret: for example {tenant gps}/cloudflare.api_token.
+// Ref names one secret: for example {tenant globex}/cloudflare.api_token.
 type Ref struct {
 	Owner Owner  `json:"owner"`
 	Name  string `json:"name"`

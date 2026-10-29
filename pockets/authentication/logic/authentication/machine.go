@@ -532,7 +532,7 @@ func (s *Service) verifyAPIKeyCredential(ctx context.Context, rawKey string) (Pr
 	}
 	p := effectivePrincipal(sa)
 	// An act-as-user key authenticates AS a human subject, so the subject's
-	// lifecycle status governs it exactly as it governs a login (CHAU-1.5).
+	// lifecycle status governs it exactly as it governs a login.
 	// Without this, deactivating a user would leave every act-as-user key still
 	// acting as them — a live credential the admin console believes it revoked.
 	// A service-account principal has no user subject and is unaffected.

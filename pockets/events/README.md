@@ -6,8 +6,7 @@ poller that drains it onto the shared `sdk/capabilities/events` bus, and an SSE 
 that fans bus events out to authenticated browser streams. Built on
 `sdk/capabilities/events` (the bus vocabulary), `sdk` (connect-time identity),
 `sdk/pkg/web` (SSE primitives + responders), and `sdk/pkg/workers` (the poller's
-pool). Design of record: `.claude/plans/roadmap/events-pocket-design.md`,
-executed via `.claude/plans/events-v1/plan.md`.
+pool).
 
 Package-name note (O5): this package is `events` and so is `sdk/capabilities/events` —
 this module and its hosts alias the sdk one as `sdkevents`.

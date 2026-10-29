@@ -141,7 +141,7 @@ type Challenge struct {
 	ID string
 	// SubjectKey is the stable, PII-FREE key a live challenge is unique under:
 	// Replace's uniqueness is (SubjectKey, Purpose), and ConsumeCode resolves by
-	// it (CHAU-6.1).
+	// it.
 	//
 	// For every purpose that already existed it IS the user id, and Replace
 	// defaults it to UserID when unset, so nothing changes for them. It exists

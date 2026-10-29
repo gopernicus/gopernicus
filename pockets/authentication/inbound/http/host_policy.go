@@ -91,7 +91,7 @@ type InvitationResourceRule struct {
 }
 
 // UserAdminAction is the user-administration operation a host UserAdminCheck
-// policy is asked about (coordination-hub-auth-upstream CHAU-1.1). The set is
+// policy is asked about. The set is
 // closed: a new administrative capability adds a value here, so a host policy's
 // default arm always sees an action it can recognize or refuse.
 type UserAdminAction string

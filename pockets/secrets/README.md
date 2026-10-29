@@ -3,8 +3,7 @@
 A pluggable, datastore-free secrets pocket: values encrypted at rest under a
 per-owner data key, data keys wrapped by a rotatable master key ring, every
 read, write, delete and key operation recorded in an append-only audit log in
-the same transaction as the change. Design of record:
-[plans/secrets-pocket.md](../../plans/secrets-pocket.md).
+the same transaction as the change..
 
 ## Layout
 
@@ -21,7 +20,7 @@ stores/pgx/             independent PostgreSQL module and migration
 
 ## The model
 
-- An **Owner** is `{Type, ID}`, for example `{tenant, gps}`. The pocket does
+- An **Owner** is `{Type, ID}`, for example `{tenant, acme}`. The pocket does
   not know what a tenant is; the host does.
 - A **Ref** is an owner plus a name, for example `cloudflare.api_token`.
   Values are opaque bytes up to `vault.MaxValueBytes` (64 KiB).

@@ -25,12 +25,6 @@ mounted over the unchanged JSON API. `BrowserConfig.Views == nil` keeps the pock
 JSON-only with no view technology in the host graph; a non-nil `Views` adds HTML
 GET pages + form handling without touching a single JSON contract.
 
-Designs of record: `.claude/plans/restructure/auth-pocket-design.md` (v1),
-`.claude/plans/roadmap/auth-v2-pocket-design.md` (v2, AV1–AV11),
-`.claude/plans/roadmap/auth-jwt-session-refresh.md` (the refresh change,
-D1–D8), and `.claude/plans/roadmap/auth-v3-identity-design.md` (v3, the identity
-milestone — executed through `.claude/plans/authv3/`).
-
 ## MCP authorization server (v0.13.0)
 
 `WithOAuth2(OAuth2Config{...})` enables one OAuth endpoint family for approved
@@ -55,12 +49,12 @@ components, err := authentication.New(repos, signer, mode, deliveryMode,
             Issuer: "https://app.example.com",
             MCPResource: "https://mcp.example.com/mcp",
             APIResource: "https://app.example.com/api",
-            ConfidentialClientID: "gps-mcp",
+            ConfidentialClientID: "example-mcp",
             ConfidentialSecretHashes: [][32]byte{sha256.Sum256([]byte(mcpSecret))},
         },
         Clients: clients,
         Views: views, // implements inbound/http.OAuthViews as well as Views
-        CapabilityDescription: "Use the enabled GPS tools within your current permissions.",
+        CapabilityDescription: "Use the enabled Example Co tools within your current permissions.",
     }),
 )
 ```
@@ -191,9 +185,7 @@ additive schema. Do not resume an old binary against live delegated sessions.
 Existing first-party refresh grace and stateless token expiry remain unchanged.
 Legacy rows without a profile are accepted only with an empty delegation binding.
 Custom token signers must not inject OAuth-reserved claims into first-party tokens.
-Use the [implementation plan](../../plans/authentication-mcp-oauth.md) for complete
-verification and the host handoff checklist. Published versions and evidence are
-recorded in [the release record](../../plans/authentication-mcp-oauth-release.md).
+Published versions and evidence are recorded in `RELEASING.md`.
 
 ## Authentication audit adoption
 
@@ -1675,7 +1667,7 @@ Issuer: "https://auth.example.com"})`. This verifies tokens; it does not create
 grants or an authorization server. The root `WithOAuth2` option composes the
 authorization service, delegated verifier, endpoints and connection management
 together. Use the current SQL adapters with migration `0019` applied before
-enabling issuance; see [the MCP OAuth plan](../../plans/authentication-mcp-oauth.md).
+enabling issuance.
 
 A delegated token requires one audience, its issuer and client, a separate live
 session, and an active user. `Credential` exposes `Profile`, `Issuer`, `Audiences`,
@@ -1807,7 +1799,7 @@ Firebase Auth, Auth0, Clerk, Cognito, Okta, Keycloak — as ordinary
 provider's subject to a local user and stays the identity home. Downstream
 pockets read `sdk.PrincipalFromContext` and never learn a provider exists.
 Take **v0.19.1** (v0.19.0 shipped a bearer-classification regression; see
-RELEASING). Design of record: `plans/external-identity-providers.md`.
+RELEASING).
 
 The pieces:
 
@@ -3816,7 +3808,7 @@ lifecycle, exactly like the jobs and events pollers.
 By default a magic link sent to an address with no account delivers nothing: the
 worker resolves the address, finds no owner, and terminates the job silently. With
 `PasswordlessConfig.PasswordlessProvisionOnRedeem` the link is delivered instead, and clicking
-it **creates the account** (CHAU-6.x).
+it **creates the account**.
 
 This is a real security decision, not a convenience toggle. Read the whole section
 before enabling it.
@@ -3964,7 +3956,7 @@ must restart after the audit upgrade; there is no reset schema migration.
 
 Reset mail used to print a raw token and tell the user to "use this token". That
 is not a flow anyone can complete without a hand-built form. It now carries a
-clickable link to a landing route the host configures (CHAU-5.x).
+clickable link to a landing route the host configures.
 
 ### Configuration
 
@@ -4052,7 +4044,7 @@ a link added no enumeration signal.
 
 A user who never clicked the verification mail is locked out of a
 `RequireVerifiedEmail` host with no way back. The fix is one use case exposed
-twice, deliberately shaped differently (CHAU-2.x).
+twice, deliberately shaped differently.
 
 ### `POST /auth/verification/resend` — public, enumeration-safe
 
@@ -4157,7 +4149,7 @@ not have.
 
 An admin console needs two things authentication did not have: a list of users,
 and a way to switch one off. Both ship here as an **opt-in, host-authorized**
-capability (CHAU-1.1).
+capability.
 
 ### The closed vocabulary
 
@@ -4621,8 +4613,7 @@ Properties worth relying on:
   usable until `AccessTokenTTL` even after the session is revoked. That bound is
   deliberate and documented rather than silently changed here; whether this
   route should move to a `Live()` posture is an open question for the lifecycle
-  work (see
-  `.claude/plans/coordination-hub-auth-upstream/01-user-directory-and-lifecycle.md`).
+  work.
   The *sensitive* half of the pair — the unlink routes — already run behind
   `CredentialManagement`'s `RequireAccessTokenLive()`.
 

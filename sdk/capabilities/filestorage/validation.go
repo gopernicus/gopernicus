@@ -13,7 +13,7 @@ import (
 
 // ValidatePath checks a nonempty relative UTF-8 object key. Slash separates
 // segments; empty, dot and dot-dot segments, backslashes and NUL are invalid.
-// Names such as .segovia, two..dots and names containing spaces remain valid.
+// Names such as .app, two..dots and names containing spaces remain valid.
 // It never cleans, slugs, case-folds or normalizes a key.
 func ValidatePath(path string) error {
 	if path == "." || !fs.ValidPath(path) || strings.ContainsAny(path, "\\\x00") {
@@ -23,7 +23,7 @@ func ValidatePath(path string) error {
 }
 
 // ValidatePrefix checks a literal key prefix. Empty and a trailing slash are
-// valid, as are partial final components (including '.' matching '.segovia').
+// valid, as are partial final components (including '.' matching '.app').
 // Complete directory components follow the same rules as ValidatePath.
 func ValidatePrefix(prefix string) error {
 	if !utf8.ValidString(prefix) || strings.ContainsAny(prefix, "\\\x00") || strings.HasPrefix(prefix, "/") {

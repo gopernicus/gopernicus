@@ -134,13 +134,13 @@ func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error
 		CredentialMutations:  NewCredentialMutationStore(db),
 		// The user-administration capability is ALWAYS supplied by this bundled
 		// store. It does not by itself mount an admin HTTP surface — that requires
-		// the host to wire Config.UserAdminCheck (CHAU-1.1) — so returning it here
+		// the host to wire Config.UserAdminCheck — so returning it here
 		// costs a host nothing and leaves the decision where it belongs.
 		UserAdmin:      NewUserAdminStore(db),
 		ActiveSessions: NewActiveSessionStore(db),
 		// The atomic magic-link redemption is always supplied too. It changes nothing
 		// for a host that leaves Config.PasswordlessProvisionOnRedeem off — that flag
-		// is what routes redemption through it (CHAU-6.1).
+		// is what routes redemption through it.
 		Passwordless:     NewPasswordlessStore(db),
 		ExternalSubjects: NewExternalSubjectStore(db),
 		// Retention and erasure (SOC 2 S3) run on this same database: the rail

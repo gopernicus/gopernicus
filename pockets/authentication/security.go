@@ -35,13 +35,13 @@ const (
 var (
 	// ErrRuntimeModeRequired is returned when runtimeMode is empty. The
 	// mode has no default so a host cannot accidentally ship the dev posture. It
-	// WRAPS the canonical environment.ErrModeRequired (CHAU-3.3), so
+	// WRAPS the canonical environment.ErrModeRequired, so
 	// errors.Is matches this sentinel and the sdk one; only the message gained a
 	// canonical-error suffix.
 	ErrRuntimeModeRequired = fmt.Errorf(`auth: runtimeMode is required ("development" or "production"): %w`, environment.ErrModeRequired)
 	// ErrRuntimeModeInvalid is returned when runtimeMode is a value other
 	// than "development" or "production". It WRAPS the canonical
-	// environment.ErrModeInvalid (CHAU-3.3) on the same terms as
+	// environment.ErrModeInvalid on the same terms as
 	// ErrRuntimeModeRequired.
 	ErrRuntimeModeInvalid = fmt.Errorf(`auth: runtimeMode must be "development" or "production": %w`, environment.ErrModeInvalid)
 	// ErrInsecureDeliveryTransport is returned in production RuntimeMode when a
@@ -193,8 +193,8 @@ var (
 	// HTTP exposes the single-use token in transit.
 	ErrPublicAuthBaseURLInsecure = errors.New("auth: production RuntimeMode requires an HTTPS LinksConfig.PublicAuthBaseURL")
 	// ErrPasswordResetURLRequired is returned in production RuntimeMode when the
-	// challenge-backed forgot/reset rail is wired without a LinksConfig.PasswordResetURL
-	// (CHAU-5.1). Reset mail that prints only a raw token is not an acceptable
+	// challenge-backed forgot/reset rail is wired without a LinksConfig.PasswordResetURL.
+	// Reset mail that prints only a raw token is not an acceptable
 	// production experience, so the omission fails at construction rather than
 	// degrading silently. Development permits it with a startup WARN.
 	ErrPasswordResetURLRequired = errors.New("auth: production RuntimeMode requires LinksConfig.PasswordResetURL when the password-reset rail is wired")
@@ -262,7 +262,7 @@ var (
 
 // validateRuntimeMode enforces the required-enum rule (design §8): empty →
 // ErrRuntimeModeRequired, unknown → ErrRuntimeModeInvalid, else nil. The rule
-// itself is the canonical environment.ValidateMode (CHAU-3.3); this only
+// itself is the canonical environment.ValidateMode; this only
 // re-labels the verdict in auth's stable constructorConfig-oriented vocabulary, and both
 // sentinels remain errors.Is-matchable because auth's wrap the sdk's.
 func validateRuntimeMode(m environment.Mode) error {
@@ -412,7 +412,7 @@ func limiterInProcessOnly(limiter ratelimiter.Limiter) bool {
 	return false
 }
 
-// validatePasswordResetURL validates the reset landing URL (CHAU-5.1).
+// validatePasswordResetURL validates the reset landing URL.
 //
 // Empty is handled by the CALLER, because its meaning depends on the mode:
 // production requires it (ErrPasswordResetURLRequired) while development falls

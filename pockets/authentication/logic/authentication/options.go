@@ -60,7 +60,7 @@ type Repositories struct {
 	Passwords         user.PasswordRepository
 	Sessions          session.SessionRepository
 	SessionManagement session.ManagementRepository
-	// UserAdmin is the OPTIONAL user-administration repository (CHAU-1.1): the
+	// UserAdmin is the OPTIONAL user-administration repository: the
 	// paginated operator directory plus the atomic status/revocation transition.
 	// Nil → the administration service methods fail closed with
 	// ErrUserAdminUnavailable and the bundled admin routes are not registered.
@@ -69,8 +69,8 @@ type Repositories struct {
 	// same transaction-capable adapter as Users, Identifiers, Sessions and the
 	// rest. Nil → EraseUser fails closed with ErrUserErasureUnavailable.
 	UserErasure user.EraseRepository
-	// PasswordlessRedeem is the OPTIONAL atomic magic-link redemption repository
-	// (CHAU-6.1). Named apart from the Passwordless KIND list above, which is a
+	// PasswordlessRedeem is the OPTIONAL atomic magic-link redemption repository.
+	// Named apart from the Passwordless KIND list above, which is a
 	// different thing entirely. Required only when ProvisionOnRedeem is enabled;
 	// package auth enforces that pairing.
 	PasswordlessRedeem passwordless.Repository
@@ -464,7 +464,7 @@ type LinksConfig struct {
 	// http(s), HTTPS in production) whenever a passwordless kind is enabled.
 	PublicAuthBaseURL string
 	// PasswordResetURL is the absolute public reset landing route, BEFORE the token
-	// query parameter is appended (CHAU-5.1). Empty → the legacy raw-token reset
+	// query parameter is appended. Empty → the legacy raw-token reset
 	// template is rendered instead; package auth rejects an empty value in
 	// production and warns in development. The link is built from THIS value only —
 	// never from a request header.

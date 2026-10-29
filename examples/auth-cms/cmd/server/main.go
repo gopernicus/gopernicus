@@ -1133,7 +1133,7 @@ func buildAuthConfig(log *slog.Logger, mode environment.Mode, granter invitation
 			// request Host/forwarded headers NEVER participate.
 
 			PublicAuthBaseURL: origin + "/auth/magic",
-			// The password-reset landing route the reset mail links to (CHAU-5.1),
+			// The password-reset landing route the reset mail links to,
 			// config-only: the link is built in the delivery worker from THIS value,
 			// never from a request Host/forwarded header. Production requires it.
 			// AUTH_PASSWORD_RESET_URL overrides this host's own reset page.

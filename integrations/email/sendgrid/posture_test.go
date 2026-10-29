@@ -11,7 +11,7 @@ import (
 )
 
 // TestCheckSenderCompatibility is the integration-side half of the sdk's
-// capability-owned production check (coordination-hub-auth-upstream CHAU-3.2).
+// capability-owned production check.
 // The sdk validator detects a reporter structurally, so this proves the real
 // third-party Sender — not a fake — resolves the way its Capabilities claim.
 func TestCheckSenderCompatibility(t *testing.T) {

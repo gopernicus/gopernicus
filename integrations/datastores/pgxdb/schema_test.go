@@ -18,7 +18,7 @@ func TestSchema(t *testing.T) {
 			"public",
 			"a",
 			"Auth",
-			"gps_360",
+			"app_360",
 			"s1",
 			"tenant_0001",
 			strings.Repeat("a", 63), // exactly the Postgres identifier limit

@@ -13,7 +13,7 @@ import (
 )
 
 // provisionRevokeChallengePurposes are the outstanding secrets an ADOPTION
-// revokes for the adopted account (CHAU-6.5). They are the ones a squatter who
+// revokes for the adopted account. They are the ones a squatter who
 // registered the address without proving it could still redeem: a pending reset
 // link, a pending OTP, and a pending magic link other than the one being consumed.
 //
@@ -34,7 +34,7 @@ func (s *Service) provisionOnRedeemEnabled() bool {
 }
 
 // magicLinkSubjectKey is the stable, PII-FREE key an email magic-link challenge is
-// unique under (CHAU-6.1).
+// unique under.
 //
 // It is derived from the identifier digest plus the purpose, so it exists whether
 // or not the address currently maps to a user — which is the whole point. A resend
@@ -69,7 +69,7 @@ func (s *Service) newMagicLinkBinding(kind, normalizedValue string, ident identi
 }
 
 // redeemPasswordlessAtomic completes a magic link through the ONE-transaction
-// redemption repository (CHAU-6.5).
+// redemption repository.
 //
 // The plaintext session credentials are generated HERE, in service memory, and
 // only the stored representation crosses into the repository. If the transaction
@@ -137,7 +137,7 @@ func (s *Service) redeemPasswordlessAtomic(ctx context.Context, token string) (T
 }
 
 // recordPasswordlessOutcome writes the secret-free audit distinction between
-// provisioning, adoption, and an ordinary login (CHAU-6.6).
+// provisioning, adoption, and an ordinary login.
 //
 // The PUBLIC response stays generic; the audit rail is where an operator can tell
 // the three apart. Details carry the outcome class and the identifier kind only —

@@ -11,8 +11,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// CHAU-7.1 — characterization for the EXISTING session-gated account-linking
-// flow. The coordination-hub upstream flag claimed the capability was missing; it
+// Characterization for the EXISTING session-gated account-linking
+// flow. A host-reported flag claimed the capability was missing; it
 // has shipped since pockets/authentication/v0.1.0. These tests pin the contract
 // so the flow cannot regress into the shape the flag described, and they document
 // what the server-side state actually binds.

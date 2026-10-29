@@ -18,7 +18,7 @@ import (
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 
-	// CHAU-6.7 — provision-on-consumption, end to end over real HTTP through exported
+	// Provision-on-consumption, end to end over real HTTP through exported
 	// host seams.
 	//
 	// The load-bearing sequence is: request a link for an address with NO account →
@@ -58,7 +58,7 @@ func (g *recordingGranter) grants() []string {
 }
 
 // newProvisioningHostWithInvitations boots a provisioning host whose invitation
-// surface is mounted, so the CHAU-6.6 resolve-on-provision path is reachable.
+// surface is mounted, so the resolve-on-provision path is reachable.
 func newProvisioningHostWithInvitations(t *testing.T) (*linkHost, *recordingGranter) {
 	t.Helper()
 	granter := &recordingGranter{}
@@ -298,7 +298,7 @@ func TestProvisionWiringFailsLoudly(t *testing.T) {
 	})
 }
 
-// TestProvisionedAccountResolvesPendingInvitations pins CHAU-6.6: a newly
+// TestProvisionedAccountResolvesPendingInvitations pins resolve-on-provision: a newly
 // provisioned account resolves its pending invitations exactly as a password
 // registration does — and an ordinary link LOGIN does not re-run that resolution.
 func TestProvisionedAccountResolvesPendingInvitations(t *testing.T) {

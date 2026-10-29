@@ -17,7 +17,7 @@ import (
 )
 
 // PasswordlessStore implements passwordless.Repository over libSQL: the
-// ONE-transaction magic-link redemption (CHAU-6.3). It is the dialect sibling of
+// ONE-transaction magic-link redemption. It is the dialect sibling of
 // the pgx PasswordlessStore — same contract, same outcomes, same conformance
 // suite.
 //

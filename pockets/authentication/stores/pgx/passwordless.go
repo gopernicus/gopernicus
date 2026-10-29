@@ -16,7 +16,7 @@ import (
 )
 
 // PasswordlessStore implements passwordless.Repository over PostgreSQL: the
-// ONE-transaction magic-link redemption (CHAU-6.3).
+// ONE-transaction magic-link redemption.
 //
 // Everything happens inside a single transaction — consuming the challenge,
 // deciding the branch, creating or adopting the identity, revoking a squatter's

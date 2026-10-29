@@ -98,7 +98,7 @@ type Repositories struct {
 	// suite is enabled (phase 6). Nil is tolerated until then.
 	CredentialMutations credential.MutationRepository
 
-	// UserAdmin is the OPTIONAL user-administration capability (CHAU-1.1): the
+	// UserAdmin is the OPTIONAL user-administration capability: the
 	// paginated operator directory (user.Summary pages) plus the ATOMIC lifecycle
 	// transition that writes the status, increments auth_revision, and deletes
 	// every session and authentication grant in one store transaction.
@@ -109,7 +109,7 @@ type Repositories struct {
 	// is nil the trusted service methods fail closed with sdk.ErrNotFound.
 	UserAdmin user.AdminRepository
 
-	// ActiveSessions is the OPTIONAL fenced session-minting capability (CHAU-1.1):
+	// ActiveSessions is the OPTIONAL fenced session-minting capability:
 	// it inserts a proposed session only while the owning user is atomically proven
 	// active under the same serialization boundary, so a concurrent deactivation
 	// cannot leave a session created after it.
@@ -125,8 +125,8 @@ type Repositories struct {
 	// Sessions.
 	ActiveSessions session.ActiveUserRepository
 
-	// Passwordless is the OPTIONAL atomic magic-link redemption capability
-	// (CHAU-6.1): ONE transaction that consumes the link's challenge, decides
+	// Passwordless is the OPTIONAL atomic magic-link redemption capability:
+	// ONE transaction that consumes the link's challenge, decides
 	// login / adopt / provision, performs the identity mutation and any revocation,
 	// and inserts the session.
 	//

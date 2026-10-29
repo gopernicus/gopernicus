@@ -65,8 +65,8 @@ func bytesFrom(ns sql.NullString) []byte {
 }
 
 // Replace atomically replaces the prior (subject key, purpose) challenge with c
-// and returns the stored row, defaulting an unset SubjectKey to c.UserID
-// (CHAU-6.1). A colliding (purpose, secret_digest) → sdk.ErrAlreadyExists.
+// and returns the stored row, defaulting an unset SubjectKey to c.UserID.
+// A colliding (purpose, secret_digest) → sdk.ErrAlreadyExists.
 func (s *ChallengeStore) Replace(ctx context.Context, c challenge.Challenge) (challenge.Challenge, error) {
 	if c.Version == 0 {
 		c.Version = 1

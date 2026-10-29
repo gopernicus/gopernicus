@@ -20,7 +20,7 @@ import (
 //     (purpose, secret_digest) is sdk.ErrAlreadyExists.
 //
 //     The subject key is Challenge.ResolvedSubjectKey() — the explicit SubjectKey
-//     when set, else UserID (CHAU-6.1). Every purpose that predates the field
+//     when set, else UserID. Every purpose that predates the field
 //     leaves it unset and therefore keys on the user id exactly as before; the
 //     email magic link sets a stable PII-free digest so a link issued for an
 //     address with NO account is still replaceable.

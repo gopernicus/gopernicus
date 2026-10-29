@@ -47,7 +47,7 @@ var ErrInvitationRepoRequired = errors.New("auth: InvitationsConfig.Granter set 
 
 // ErrUserAdminReposRequired is returned by New when
 // AdministrationConfig.UserAdminCheck enables the bundled user-administration routes but the
-// repositories that make them safe are not both wired (CHAU-1.1).
+// repositories that make them safe are not both wired.
 //
 // BOTH are required, and the second is the load-bearing one:
 //
@@ -63,7 +63,7 @@ var ErrUserAdminReposRequired = errors.New("auth: AdministrationConfig.UserAdmin
 
 // ErrPasswordlessProvisionWiring is returned by New when
 // PasswordlessConfig.PasswordlessProvisionOnRedeem is enabled but the wiring that makes
-// provision-on-consumption safe is incomplete (CHAU-6.1).
+// provision-on-consumption safe is incomplete.
 //
 // Provisioning turns a magic link into an account-CREATION credential, so every
 // piece it depends on is required, not best-effort: the email passwordless kind

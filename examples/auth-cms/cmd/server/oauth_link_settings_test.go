@@ -15,9 +15,9 @@ import (
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 )
 
-// CHAU-7.2 — the settings-page account-linking proof.
+// The settings-page account-linking proof.
 //
-// The coordination-hub upstream flag claimed authentication had "no
+// A host-reported flag claimed authentication had "no
 // user-initiated OAuth linking". The audit found the opposite: Service.StartLink
 // and the session-gated GET /auth/oauth/{provider}/link/start have shipped since
 // pockets/authentication/v0.1.0. What was missing was a runnable end-to-end

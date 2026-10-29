@@ -319,7 +319,7 @@ type triggerEvidence struct {
 // check a store runs in its constructor so a host pointed at a database
 // without its tables fails before serving traffic, naming the table, instead
 // of 500ing on the first query. The name may be schema-qualified
-// ("gps.organizations") or bare (resolved on the connection's search_path);
+// ("app.organizations") or bare (resolved on the connection's search_path);
 // it is bound as a parameter, never concatenated.
 //
 // Existence is resolved by to_regclass, which yields NULL for an absent

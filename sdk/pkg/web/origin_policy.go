@@ -19,7 +19,7 @@ type OriginNamespace struct {
 	// Scheme is "https" or "http".
 	Scheme string
 	// Suffix is the registrable parent the label sits under, such as
-	// "flight.deck.example.com". It needs at least two labels and carries no
+	// "portal.apps.example.com". It needs at least two labels and carries no
 	// wildcard and no trailing dot.
 	Suffix string
 	// Ports lists the admitted ports and is exhaustive. Nil or empty admits

@@ -74,7 +74,7 @@ func (s *Service) UserAdminEnabled() bool { return s.userAdmin != nil }
 // being minted (the act-as-user API-key path), so there is nothing to serialize
 // against. Every session mint goes through the atomic ActiveSessions capability
 // instead: a read here followed by a write elsewhere would be exactly the race
-// CHAU-1.1 forbids.
+// the lifecycle contract forbids.
 func (s *Service) userDeactivated(ctx context.Context, userID string) (bool, error) {
 	u, err := s.users.Get(ctx, userID)
 	if err != nil {

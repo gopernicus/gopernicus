@@ -18,7 +18,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 
-	// CHAU-5.3 — the password-reset link rail, driven over real HTTP through exported
+	// The password-reset link rail, driven over real HTTP through exported
 	// host seams.
 	//
 	// The load-bearing assertion is that the token extracted FROM THE DELIVERED MAIL

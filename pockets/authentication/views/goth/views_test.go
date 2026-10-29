@@ -623,7 +623,7 @@ func identifierRemovalRegion(t *testing.T, body string) string {
 }
 
 // TestIdentifierForm_NonRemovableExplained proves the edit form offers a removal
-// control only where the credential policy would allow the removal (Segovia flag #18).
+// control only where the credential policy would allow the removal.
 // A non-removable identifier renders the muted explanation and NO remove form anywhere
 // on the page; a removable one renders the remove form and no explanation (the golden
 // is the pre-gate output, byte-for-byte). Both shapes are pinned.
@@ -750,15 +750,15 @@ func TestWithBrandAndAppName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bundle: %v", err)
 	}
-	brand := templ.Raw(`<header class="host-brand"><img src="/theme/brand/logo.png" alt="GPS Impact"></header>`)
-	v, err := New(b, WithBrand(brand), WithAppName("GPS Impact"))
+	brand := templ.Raw(`<header class="host-brand"><img src="/theme/brand/logo.png" alt="Example Co"></header>`)
+	v, err := New(b, WithBrand(brand), WithAppName("Example Co"))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
 	login := render(t, v.Login(inbound.LoginPage{PageContext: ctx()}))
 	mustContain(t, "branded login", login,
-		`<title>Sign in · GPS Impact</title>`,
+		`<title>Sign in · Example Co</title>`,
 		`class="host-brand"`,
 	)
 	// The brand renders BEFORE the shell main (a logo header above the card).
@@ -772,13 +772,13 @@ func TestWithBrandAndAppName(t *testing.T) {
 
 	// The chrome rides the shared page seam: other page families carry it too.
 	reset := render(t, v.ResetPassword(inbound.ResetPage{PageContext: ctx()}))
-	mustContain(t, "branded reset", reset, `class="host-brand"`, "· GPS Impact</title>")
+	mustContain(t, "branded reset", reset, `class="host-brand"`, "· Example Co</title>")
 	status := render(t, v.Status(inbound.StatusPage{PageContext: ctx()}))
 	mustContain(t, "branded status", status, `class="host-brand"`)
 
 	// Zero-option construction stays unbranded with bare titles.
 	plain := render(t, newViews(t).Login(inbound.LoginPage{PageContext: ctx()}))
-	mustNotContain(t, "plain login", plain, "host-brand", "· GPS Impact")
+	mustNotContain(t, "plain login", plain, "host-brand", "· Example Co")
 	mustContain(t, "plain login", plain, "<title>Sign in</title>")
 }
 

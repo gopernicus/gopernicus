@@ -8,9 +8,6 @@ FROZEN (not candidates). Browser/accessibility tooling (Playwright, axe-core)
 remains deferred to GOTH-1.5's harness and is intentionally NOT part of the
 asset-build toolchain — axe-core is MPL-2.0 and must never reach `dist/`.
 
-Plan authority: `.claude/plans/ui-goth/plan.md` — "Toolchain and asset policy"
-and preflight items 5–6.
-
 ## Design-source provenance (Shadcn)
 
 `ui/goth` is a from-scratch GOTH interpretation of the dated Shadcn catalog. The

@@ -53,8 +53,8 @@ func (r challengeRepo) Replace(ctx context.Context, c challenge.Challenge) (chal
 		return challenge.Challenge{}, err
 	}
 	// Delete the prior (SUBJECT KEY, purpose) row (the single-active claim). The
-	// subject key defaults to the user id for every purpose that predates it
-	// (CHAU-6.1), so this is unchanged for all of them.
+	// subject key defaults to the user id for every purpose that predates it,
+	// so this is unchanged for all of them.
 	subjectKey := c.ResolvedSubjectKey()
 	c.SubjectKey = subjectKey
 	for id, ex := range r.challenges {

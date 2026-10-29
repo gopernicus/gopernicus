@@ -1,7 +1,7 @@
 # cms v0.1 — proving-ground decision log
 
 What repurposed cleanly from gopernicus vs. what needed adaptation, captured to
-feed the gopernicus restructuring. Plan: `.claude/plans/v0.1-cms.md`.
+feed the gopernicus restructuring.
 
 ## Repurposed cleanly (import-rewrite only)
 
@@ -120,7 +120,7 @@ All green, including against live Turso (a `.env` with real creds was supplied):
 
 ## v0.2 — A Real CMS (built on top of v0.1)
 
-Plan: `.claude/plans/v0.2-cms.md`. Built and live-verified against real Turso,
+Built and live-verified against real Turso,
 phase by phase:
 
 - **Content model:** `Article` → `Post` (excerpt, author, publishedAt,
@@ -210,7 +210,7 @@ silently lost. The referenced `v0.1-cms.md` / `v0.2-cms.md` plan files are
 
 Same-day amendment to D5 (which had renamed `sol` → `core`): the hexagon
 directory is **`internal/logic`**, aligning with the convention jrazmi settled
-in `gps/gps-360` (`src/internal/{inbound,logic,outbound}`, hexagon split as
+in a host repo (`src/internal/{inbound,logic,outbound}`, hexagon split as
 `logic/{domains,compositions}`). One convention across the ecosystem; `logic`
 also avoids echoing the original gopernicus's flawed `core/` layer. As with the
 previous rename, zero code exists under any of these names in this repo — the
@@ -245,7 +245,6 @@ apply (`0001_init.sql`), checksum-guarded re-apply no-op — all passed.
 Hermetic `make check` stays green with a loud skip when `POSTGRES_TEST_DSN`
 is unset. Ledger/apply semantics mirror turso's; legacy-adoption path and
 `RunMigrations` deliberately omitted (no legacy postgres databases exist).
-Phase log: `.claude/plans/datastore-portability/01-postgres-connector.md`.
 
 ## 2026-07-02 — datastore-portability P2: storetest caught a live turso bug
 
@@ -256,8 +255,7 @@ store's `-tags=integration` leg). First session out, it exposed: (1) turso
 (stale posts→entries rename); fixed to `entry_terms`, but the fix is
 LIVE-UNVERIFIED until the milestone-close turso run (no TURSO_* creds in
 env); (2) memstore entry pagination ignored cursors and lacked the id
-tie-break — fixed against the shared codec. Phase log:
-`.claude/plans/datastore-portability/02-cms-storetest.md`.
+tie-break — fixed against the shared codec.
 
 ## 2026-07-02 — datastore-portability P3: cms×postgres conformance LIVE-VERIFIED
 
@@ -269,8 +267,7 @@ postgres, DSN class local docker (postgres:17, :55432), result GREEN —
 every subtest ran, including the mandatory timestamp-precision pagination
 case (cursors encode from stored µs-truncated values, not in-memory ns).
 `make test-stores` added. Outstanding for milestone close: cms×turso live
-run (TURSO_* creds absent) + P4 docs sync. Phase log:
-`.claude/plans/datastore-portability/03-cms-store-postgres.md`.
+run (TURSO_* creds absent) + P4 docs sync.
 
 ## 2026-07-02 — datastore-portability milestone CLOSED (one flag for jrazmi)
 
@@ -295,7 +292,7 @@ either way (its phase 7 needed only P1).
 ## 2026-07-02 — turso close-gate artifact upgraded: REAL Turso, GREEN
 
 jrazmi authorized truncating the playground database
-libsql://gopernicus-cms-playground-gps-impact.aws-us-east-2.turso.io
+libsql://gopernicus-cms-playground-example-co.aws-us-east-2.turso.io
 (authorization is for THAT URL specifically — always verify the env's URL
 matches it before a destructive run; the .env may point elsewhere in the
 future). Ran `go test -tags=integration -count=1 -run TestConformance_Turso`
@@ -316,8 +313,7 @@ gating cms admin via `Config.AdminMiddleware`. The five-step cookie-jar flow
 401 → register 201 → login 200+cookie → admin 200 → logout 200 → 401;
 public home 200 sessionless throughout. Constitution rule 6 demonstrated
 with two real features — neither imports the other (greps empty both
-directions); the host's main is the only composition point. Phase log:
-`.claude/plans/auth-v1/04-proof-host.md`.
+directions); the host's main is the only composition point.
 
 ## 2026-07-02 — auth-v1 phase 5: auth×turso conformance LIVE-VERIFIED
 
@@ -329,8 +325,7 @@ suite features/auth/storetest, dialect turso, DSN class real Turso
 deliberate schema calls logged in the phase file: plain session tokens
 (the port contract's opaque-token shape; hashing = v2 hardening) and no
 enforced FKs on child tables (the suite exercises child ports without a
-users row; connector doesn't enable PRAGMA foreign_keys). Phase log:
-`.claude/plans/auth-v1/05-auth-store-turso.md`.
+users row; connector doesn't enable PRAGMA foreign_keys).
 
 ## 2026-07-02 — auth-v1 phase 7: auth×postgres conformance LIVE-VERIFIED
 
@@ -341,7 +336,7 @@ loop-leg -count=1 re-run): suite features/auth/storetest, dialect postgres,
 DSN class local docker (postgres:17, :55432), result GREEN — 17/17 leaf
 subtests. With phase 5's turso runs, BOTH auth dialects now pass one suite:
 the ratified DP1 out-of-the-box guarantee holds for the second feature
-built under it. Phase log: `.claude/plans/auth-v1/07-auth-store-postgres.md`.
+built under it.
 
 ## 2026-07-02 — feature-layout + store-posture rulings (jrazmi)
 
@@ -372,8 +367,7 @@ intra-module moves; zero module-path changes. Verified post-move: make
 check green (13 modules), stale-path greps zero, G2 prove-can-fail, ALL
 FOUR live conformance legs green (cms+auth × postgres local docker,
 cms+auth × turso playground), five-step auth flow (b) firsthand
-401→201→200→200→200→401. Plan + log:
-`.claude/plans/roadmap/feature-trio-relayout.md`.
+401→201→200→200→200→401.
 
 ## 2026-07-02 — auth-v1 milestone CLOSED
 
@@ -415,8 +409,7 @@ authorized playground Turso — suite features/jobs/storetest, dialect
 turso, DSN class real Turso (playground), result GREEN (16/16 cases incl.
 ConcurrentClaim 60/60 distinct, 60.1s). The lesson mirrors P2's: the
 conformance suite is only as honest as its slowest real dialect — another
-entry for the storetest pattern's design notes. Phase log:
-`.claude/plans/jobs-v1/05-store-turso.md`.
+entry for the storetest pattern's design notes.
 
 ## 2026-07-02 — jobs-v1 phase 7: jobs×postgres LIVE-VERIFIED
 
@@ -428,7 +421,7 @@ ConcurrentClaim (FOR UPDATE SKIP LOCKED: 60/60 distinct in 0.33s, no
 busy-retry needed) and the 3.1s lease-reclaim sleep. One logged deviation:
 payload is JSON not JSONB (byte-exact round-trip beats canonicalization
 for an opaque column). With phase 5's turso runs, BOTH jobs dialects pass
-one suite. Phase log: `.claude/plans/jobs-v1/07-store-postgres.md`.
+one suite.
 
 ## 2026-07-02 — jobs-v1 phase 8: the §8 proof protocol LIVE-VERIFIED
 
@@ -440,7 +433,7 @@ restart proves ID determinism + catch-up, not cross-restart dedup);
 SIGTERM mid-handler → full 5s handler completion → clean drain → exit 0.
 CronSchedule ruling: type alias (option b) — robfig parser wires directly,
 zero adapter. Ergonomics flag: no Config knob for the runtime pools'
-logger (slog.Default). Phase log: `.claude/plans/jobs-v1/08-proof-host.md`.
+logger (slog.Default).
 
 ## 2026-07-02 — jobs-v1 milestone CLOSED
 
@@ -488,7 +481,7 @@ re-verification every leg, real-interaction checks mandatory):
 **Deferred, with resume paths:** events-v1 (design RATIFIED at
 roadmap/events-feature-design.md with the trio note; preconditions all
 satisfied — sdk/workers ships its poller's requirements; resume = the
-loop-handoff pattern at its planning leg, cutting .claude/plans/events-v1/
+loop-handoff pattern at its planning leg, cutting the events-v1 plan
 from the design's §11). Telemetry (sdk/tracing port + otel integration)
 after events, per the ratified order. Workshop v2 last (store scaffolding
 is now a headline deliverable per posture C).
@@ -504,9 +497,7 @@ pre-existing).
 The original repo's deferred general-purpose surface is ported: 8 phases, 27
 tasks, 18→21 modules, every phase gated green (`make check` + guards), the
 web phase closed with a run-and-look drive of examples/cms on the playground
-Turso DB (admin create/edit → themed public render → X-Cache MISS→HIT). Plan:
-`.claude/plans/sdk-parity/plan.md`; per-phase deviations:
-`.claude/plans/sdk-parity/execution-log.md`.
+Turso DB (admin create/edit → themed public render → X-Cache MISS→HIT).
 
 **Shipped.** New sdk packages: `validation`, `async`, `conversion`, `tracing`
 (+`Noop`), `cryptids` (`Encrypter`+`AESGCM`, `SHA256Hasher`, `JWTSigner`
@@ -574,8 +565,7 @@ design.
 
 ## 2026-07-06 — kvstore-consolidation EXECUTED (rulings R-KV1–R-KV3, jrazmi)
 
-Same-day follow-on to sdk-parity; plan + rulings at
-`.claude/plans/kvstore-consolidation/plan.md`. Module count stays 21.
+Same-day follow-on to sdk-parity. Module count stays 21.
 
 - **R-KV1 (multi-port integrations):** one integration module may implement
   several sdk facility ports when one client library serves them.
@@ -615,7 +605,7 @@ Same-day follow-on to sdk-parity; plan + rulings at
 
 ## 2026-07-06 — fast-follows EXECUTED (backends for every sdk port, 21→26 modules, jrazmi)
 
-Third same-day milestone; plan at `.claude/plans/fast-follows/plan.md`. Five
+Third same-day milestone. Five
 new integration modules close the original-repo port queue, plus the task-0
 quality-of-life pair. Final gate green: fresh `go clean -testcache && make
 check` across all 26 modules, go.work↔Makefile agreement (26/26), all four
@@ -807,7 +797,7 @@ Amendments dispatched to the three planners for fold-in; drafts stay DRAFT
 pending jrazmi ratification against the consolidated call list.
 
 Housekeeping (jrazmi directive): closed-milestone plan dirs relocated
-`.claude/plans/` → `.claude/past/` (datastore-portability, auth-v1,
+to `.claude/past/` (datastore-portability, auth-v1,
 jobs-v1, sdk-parity, kvstore-consolidation, fast-follows; mapping README
 at `.claude/past/README.md`). Pre-2026-07-07 citations in this file and in
 ratified/historical docs were NOT rewritten (append-only); they resolve
@@ -829,7 +819,7 @@ plus the three owner-only calls:
   milestone is decoupled and schedules on its own merits)**.
 - **repo-hardening** — RH1 = `github.com/gopernicus/gopernicus`, **PUBLIC**.
   Conscious confirmation recorded per the RH1↔RH2 cross-link: with RH2's
-  tracked set (NOTES.md, `.claude/plans/`, `.claude/past/`,
+  tracked set (NOTES.md, `.claude/past/`,
   `.claude/agents/`) the planning corpus is world-readable by design.
   Phase 4 (D8) collapses to a verification pass; NO quiet window exists —
   the rename-vs-code-milestone collision risk is erased. RH3 (playground
@@ -858,7 +848,7 @@ phase files cut from the design's §13 when its execution window opens
 
 Same day as the design ratification, jrazmi opened the planning window
 early (legal under AV11 — no events-v1 dependency). The milestone was cut
-to `.claude/plans/auth-v2/` (00-overview + phases A1, A2, A3, A4, A5, A6,
+(00-overview + phases A1, A2, A3, A4, A5, A6,
 A7a, A7b, A9, A10; struck A8 recorded as its deferred disposition; ten
 cut-time refinements logged). The plan-cut gate ran per the design's own
 requirement: architecture-steward + lead-backend-engineer (tier-review
@@ -900,8 +890,7 @@ timeout context). Hygiene fixes landed as code: the stale `sdk/tracing`
 package doc (task-1), `sdk/ratelimiter` doc staleness (task-3), and the
 `jobs.Config.Logger` runtime-pool knob (task-5, wired in
 examples/jobs-minimal). Drive evidence — exact commands, span + log
-excerpts — lives in `.claude/plans/telemetry-closeout/plan.md`'s
-Execution log: DSN class of the evidence is **remote playground Turso**;
+excerpts — was recorded in the milestone execution log. DSN class of the evidence is **remote playground Turso**;
 the OTLP shutdown-flush leg PASSED via Jaeger (SIGTERM inside the batch
 window, all final spans arrived — the fresh-context Shutdown flush
 proved); a main-session browser leg observed pattern-named spans and the
@@ -938,8 +927,7 @@ RATIFIED" entry):
   module paths, host imports, and docs for zero behavior.
 - **C1 non-root-prefix links → ASSESS-ONLY DONE** (origin: 2026-07-02
   ROADMAP LOOP FINAL SUMMARY open flags; documented limitation in
-  features/README.md §4). Forward-plan shape at
-  `.claude/plans/telemetry-closeout/c1-assessment.md`: inventory of 36
+  features/README.md §4). Forward-plan shape: inventory of 36
   templ link sites + 25 Go-side sites; recommended seam is a named
   optional `BasePath()` interface in `sdk/feature` satisfied by
   `PrefixRegistrar`. The fix stays future-milestone scope, trigger-gated
@@ -993,8 +981,7 @@ each waits for its trigger, then gets its own plan.
   already exist (`ratelimiter.Memory`, `goredis.Limiter`) — this is
   middleware-shape work only.
 - **C1 — cms non-root-prefix link fix** (documented limitation,
-  features/README §4; forward-plan shape produced at the telemetry closeout,
-  `.claude/plans/telemetry-closeout/c1-assessment.md`). TRIGGER: a host needs
+  features/README §4; forward-plan shape produced at the telemetry closeout). TRIGGER: a host needs
   cms mounted under a non-root prefix, or a multi-feature mount forces
   non-root prefixes.
 - **Span vocabulary — server/client span kinds** (conscious loss at the
@@ -1043,7 +1030,7 @@ below).
   the full `features/auth/storetest` (v1 leaves + the six new sub-runners:
   OAuthAccounts, OAuthStates, ServiceAccounts, APIKeys, SecurityEvents,
   Invitations); DSN class = remote playground
-  (`libsql://gopernicus-cms-playground-gps-impact.aws-us-east-2.turso.io`,
+  (`libsql://gopernicus-cms-playground-example-co.aws-us-east-2.turso.io`,
   env-verified pre-run); `go test -tags=integration -count=1 -p 1 -v ./...`
   → **PASS**, 69 leaf PASS, 0 FAIL, ~205s wall. One wrinkle, resolved: the
   first run tripped the checksum guard on `default:0003_sessions.sql` — A1's
@@ -1146,8 +1133,7 @@ the standing housekeeping rule.
 ## 2026-07-07 — feature-standard RATIFIED (jrazmi): FS1–FS10 extension model; convergence execution opened
 
 Ratified at Claude's recommendations
-(`.claude/plans/feature-standard/{00-charter,01-convergence}.md`;
-architecture-steward reviewed, 14 findings folded pre-ratification). The
+(architecture-steward reviewed, 14 findings folded pre-ratification). The
 decisions: **FS1** feature core modules import sdk only (machine-checked;
 supersedes D7 via its own revisit clause — the headless host materialized);
 **FS2** the public `Service` is the feature's driving surface — use-cases
@@ -1197,7 +1183,7 @@ identity-in-context vocabulary was still sealed behind a private context
 key, forcing every consumer to hold a matched middleware+port PAIR from
 the same provider.
 
-**A-I1 (`.claude/plans/events-v1/plan.md`): `sdk/identity`** — vocabulary
+**A-I1: `sdk/identity`** — vocabulary
 only (`Principal{Type, ID}` per AV5, `User`/`ServiceAccount` constants,
 `WithPrincipal`/`FromContext`; the oauth/errs shape — no default, no
 middleware, no authorization vocabulary). Cashes the charter §5
@@ -1227,7 +1213,7 @@ trivially over content edits, not vice versa.
 
 ## 2026-07-07 — events-v1 RATIFIED (jrazmi, at defaults); overnight implementation loop authorized; backlog committed + pushed
 
-events-v1 (`.claude/plans/events-v1/plan.md`) RATIFIED at defaults: open
+events-v1 RATIFIED at defaults: open
 questions 1–4 at their recommended/decided answers — wiring page in the
 feature README (1), pgx payload JSON (2), G5 guard stands (3), P5
 MaxConnAge no-disable confirmed (4). Amendments A-I1 (`sdk/identity`) and
@@ -1236,8 +1222,7 @@ day (previous entry). Remaining pre-execution plan edit: the FS2 fold-in
 (task-11 sync note / feature-standard W4) — assigned to the loop's
 pre-flight leg.
 
-Overnight implementation loop authorized and kicked off per
-`.claude/plans/roadmap/overnight-loop-2026-07-07.md` (queue:
+Overnight implementation loop authorized and kicked off (queue:
 feature-standard remainder B2 + D2–D6 → events-v1 phases 0–6 →
 authorization-v1 plan CUT as DRAFT only; fences: no tags, no LICENSE,
 close-blocked-not-faked live legs). In-session confirmations: git
@@ -1288,14 +1273,14 @@ events-v1 phase 4's docker run.
   go.mods (pre-date B2); `tableExists` unused test helper in the turso
   connector.
 
-Plans housekeeping: `.claude/plans/feature-standard/` →
+Plans housekeeping: feature-standard moved to
 `.claude/past/feature-standard/` this session, README table updated.
 
 ## 2026-07-08 — events-v1 milestone CLOSED
 
 Three new modules (27→30 with feature-standard's views/templ the same day):
 `features/events` + `stores/{turso,pgx}`. Shipped per
-`.claude/plans/events-v1/plan.md` (phases 0–6, every leg committed and
+the events-v1 plan (phases 0–6, every leg committed and
 CI-green before the next): **task-0** the A-R1 rename
 (`features/auth` → `features/authentication`, 43 files, alias-based — the
 example's call sites unchanged); **phase 1** `Mount.Events` (emit-only,
@@ -1357,7 +1342,7 @@ observation logged at task-11. (3) The D5-era storetest empty-page gap
 (auth/jobs) still stands from feature-standard's close. (4) The appender
 seam is unguarded by design (§5 cost 1).
 
-Plans housekeeping: `.claude/plans/events-v1/` → `.claude/past/events-v1/`
+Plans housekeeping: events-v1 moved to `.claude/past/events-v1/`
 this session, README table updated.
 
 ## 2026-07-08 — feature rim rename `logic/` → `domain/` (trio-relayout L1 amendment)
@@ -1389,8 +1374,7 @@ text/event-stream).
 
 ## 2026-07-08 — pgx-crud-v1 RATIFIED; authorization-v1 codex fold (two owner rulings)
 
-**pgx-crud-v1 cut and RATIFIED same day** (`.claude/plans/pgx-crud-v1/`,
-P1–P6): the pgx v5 idiom sweep (NamedArgs, CollectRows/RowToStructByName
+**pgx-crud-v1 cut and RATIFIED same day** (P1–P6): the pgx v5 idiom sweep (NamedArgs, CollectRows/RowToStructByName
 via store-local db-tagged row structs, UNNEST bulk writes) + the sdk/crud
 List standards — order wired end to end, bidirectional cursor pagination,
 opt-in `Total` counts, opt-in limit/offset mode. Pre-cut owner rulings:
@@ -1476,12 +1460,12 @@ stays the only env-defaultable list knob); no ListRequest field growth.
 Archived as `.claude/past/pgx-crud-v1/v1b-list-limits.md`. Still
 UNCOMMITTED with the parent milestone + v1a — jrazmi's commit call.
 
-## 2026-07-08 — segovia-lessons phase 01 EXECUTED: inbound anatomy ratified (flag #1); D1 = `internal/inbound/<feature>/`
+## 2026-07-08 — host-lessons phase 01 EXECUTED: inbound anatomy ratified; D1 = `internal/inbound/<feature>/`
 
-The segovia-lessons milestone opened as the standing intake for framework
-gaps flagged by Segovia v2 (flags adopted VERBATIM from Segovia's
-`04-gopernicus-flags.md`; that doc is never edited from here — owner flips
-statuses there). Flag #1 ratified and executed same day: ARCHITECTURE.md
+The host-lessons milestone opened as the standing intake for framework
+gaps flagged by a host (flags adopted VERBATIM from the host's
+flags doc; that doc is never edited from here — owner flips
+statuses there). The first flag ratified and executed same day: ARCHITECTURE.md
 gained the §"Inbound anatomy" subsection (per-domain
 `internal/inbound/domains/<domain>/` with routes.go/api.go/html.go/
 views.go/templates/; `inbound/http/` plumbing-only; `inbound/views/`
@@ -1490,12 +1474,12 @@ growth rule; never `/api`/`/html`/`/htmx` subdirs). One gopernicus-side
 extension of the flag text, marked as such: the **maximal flatten** —
 single-resource, single-transport, small handler set may keep handlers in
 `routes.go` (`features/events/internal/inbound/events/routes.go` is the
-blessed example); candidate to flow back to Segovia's doc.
+blessed example); candidate to flow back to the host's doc.
 
 **D1 ratified (d)** after the owner declined the three post-cut reviews'
 keep-`inbound/http` recommendation and withdrew the original
 `inbound/domain` lean: the feature inbound package is
-`internal/inbound/<feature>/` — Segovia names handler packages for the
+`internal/inbound/<feature>/` — the host names handler packages for the
 DOMAIN, never the transport, so `http/` means plumbing on BOTH sides of
 the app/feature line (a feature has none until real plumbing appears).
 Root-socket aliases `internalhttp` → `inbound`. The mirror stays
@@ -1530,9 +1514,9 @@ mechanical enforcement point). Flags #2 (sdk/id kind-set — owner
 reviewing) and #3 (RELEASING.md old-monolith import-path collision note)
 remain QUEUED in the milestone ledger.
 
-## 2026-07-08 — segovia-lessons phase 02 CLOSED as amended: route.go deleted; Methods sugar built-then-DECLINED (D4); per-route override story documented
+## 2026-07-08 — host-lessons phase 02 CLOSED as amended: route.go deleted; Methods sugar built-then-DECLINED (D4); per-route override story documented
 
-Flag #4 (owner-raised — feature route tables can't use the sdk's verb
+One flag (owner-raised — feature route tables can't use the sdk's verb
 helpers) closed with a shape nobody predicted at cut: **the answer to the
 flag was documentation, not surface.** D2 executed — `sdk/feature/route.go`
 (`Route`/`RegisterRoutes`, FS7's data form) deleted with zero consumers;
@@ -1547,7 +1531,7 @@ ceremony line per Mount, and an accept-structs wart in the mountX
 signatures. The stringly `r.Handle("POST", …)` form is ruled deliberate
 signposting: a feature registers as a GUEST through a one-method seam; an
 app-local domain owns the concrete router and gets the verbs free
-(segovia's dashboards form). Resurrect trigger: real host-developer demand.
+(a host's dashboards form). Resurrect trigger: real host-developer demand.
 The durable deliverable: features/README.md §4 item 3 — the per-route
 override pattern (wrap the registrar: deny/replace/re-path one route in ~8
 lines of host code, the `inviteOnly` example), framed as the route-level
@@ -1556,9 +1540,9 @@ unshipped. Session lesson recorded: building the thing was what produced
 the evidence to decline it — the accept-structs wart and the per-line
 delta were visible only in the diff.
 
-## 2026-07-09 — segovia-lessons phase 03 CLOSED: sdk/id nanoid rework (flag #2); port typing wait-for-demand
+## 2026-07-09 — host-lessons phase 03 CLOSED: sdk/id nanoid rework; port typing wait-for-demand
 
-Flag #2 closed same-day: cut on the owner's ID-strategy direction (nanoid
+The ID-strategy flag closed same-day: cut on the owner's ID-strategy direction (nanoid
 shape with custom length/alphabet like the original; no third-party libs
 in sdk — UUID needs none, ~15 lines of stdlib). **D5 shipped:** `New()`
 (21 chars, ~119.8 bits), `NewCustom(alphabet, size)` (validated: ≥2 chars,
@@ -1571,21 +1555,21 @@ biased generation toward Z; now 52 unique bytes, guarded by test). Panic
 posture split: `New`/`UUID` panic on crypto/rand failure (21 call sites
 stay clean); `NewCustom` returns validation errors. Behavior change ruled
 acceptable: New() output 26-char base32 → 21-char nanoid (TEXT columns,
-zero shape assertions verified, dev data only; segovia inherits via its
+zero shape assertions verified, dev data only; the host inherits via its
 replace directive). Live-proven: auth-cms register→verify→login→logout
 201/200/200/200 with observed 21-char new-alphabet IDs. **D6:** the
 int/uuid PORT-typing half is wait-for-demand — crud stays string-keyed
 (uuid flows as canonical strings already; int keys are DB-assigned; zero
-consumers embed crud over a non-string key, segovia v2 verified crud-free
+consumers embed crud over a non-string key, the host verified crud-free
 and all-string); Getter/Lister split and UUIDv7 likewise deferred with
 triggers. **D7 (owner-raised):** pluggable ID generation recorded, not
 shipped — app-local code needs no framework support (hosts own their call
 sites); the feature-side design is pre-agreed (sdk `sdk.IDGenerator` func
 type + per-feature nil-safe `Config.IDGenerator`, extension tier 2);
 trigger = first host needing feature entities keyed by its own generator.
-Owner carry-back: flip Segovia flag #2, drop its interim-workaround note.
+Owner carry-back: flip the host's flag, drop its interim-workaround note.
 
-## 2026-07-09 — segovia-lessons phase 04 EXECUTED (as amended in-session): the cryptids facility; sdk/id retired; ID strategy decided-once, threaded, and store-honored
+## 2026-07-09 — host-lessons phase 04 EXECUTED (as amended in-session): the cryptids facility; sdk/id retired; ID strategy decided-once, threaded, and store-honored
 
 **D8 (as built):** `sdk/id` folded into `sdk/cryptids` — the original
 gopernicus "crypto tidbits" home. One port: zero-arg
@@ -1643,7 +1627,7 @@ the honest relationship). 31 modules.
 
 Supersession story: phase 03's D5 API lived one day — the build-to-evaluate
 work was the evidence that produced the cryptids design; 03 carries the
-marker. Segovia carry-over (task-2): `sdk/id` deletion breaks segovia v2's
+marker. Host carry-over (task-2): `sdk/id` deletion breaks a host's
 `id.New()` on next build (live replace directive) — migrate per-domain to
 `cryptids.IDGenerator{}`.MustGenerate() or thread its own Config strategy.
 
@@ -1664,7 +1648,7 @@ Makefile MODULES both correctly list 31.
 
 The 2026-07-06 authorization ruling cashed: **supported, never required** —
 three postures, all first-class, all demonstrated. Shipped per
-`.claude/plans/authorization-v1/` (design of record:
+the authorization-v1 plan (design of record:
 `auth-v2-feature-design.md` §§2/10/13 as amended by the 2026-07-08
 multi-kind owner direction): `features/authorization` (module 32) with TWO
 independently-wireable KINDS — **relationships** (the ReBAC engine salvage,
@@ -1745,7 +1729,7 @@ cut, not now. The feature README documents the seam verbatim in intent.
 
 **Execution notes:** the plan's salvage tree `../gopernicus-original/`
 does not exist on this machine — DDL verified against the identical copy
-under the sibling `menagerie` repo; the pgx UNNEST insert + both
+under a sibling host repo; the pgx UNNEST insert + both
 dialects' CTEs were DERIVED from the port contract + memstore semantics
 (the shared suite is the equivalence proof, which is design risk 3's
 mitigation working as designed). Z1 exported no order allow-list from the
@@ -1761,7 +1745,7 @@ either dialect (store-stamped, one timestamp per batch — the id tiebreak
 is fully load-bearing for keyset order); (3) the storetest suite leaves
 the ALL-non-empty and MIXED CreateRelationships branches hermetically
 untested (every conformance case mints via the default engine path);
-(4) the `.claude/plans/authorization-v1/` → `.claude/past/` archive move
+(4) the authorization-v1 → `.claude/past/` archive move
 lands with this close.
 
 ## 2026-07-09 — datastore-hardening EXECUTED: connector parity, strictness, scaffolded seams
@@ -1892,7 +1876,7 @@ notifier → accepted by token 200 → grant live 200; slack kind (unwired)
 400; email 201 throughout.
 
 Deferred ledger: provider integrations (`integrations/notify/<tech>` —
-trigger: the first host wiring real SMS/Slack; Segovia likely) · address
+trigger: the first host wiring real SMS/Slack) · address
 verification (enables non-email account-match binding) · authorization
 grant-notifications over this port · unifying verification/reset mail
 onto notify (the documented invitations-only asymmetry) · tenancy.
@@ -1949,9 +1933,9 @@ P1-era `sdk/errs` prose comment in sendgrid.go swept at P5 — none
 remain; (3) traced-workers reintroduction trigger stands (first host
 wanting it → a decorator in capabilities/tracing).
 
-## 2026-07-11 — authorizer `Check` is pure schema evaluation (segovia-lessons 05)
+## 2026-07-11 — authorizer `Check` is pure schema evaluation (host-lessons 05)
 
-Downstream feedback from segovia v2 (first real consumer of
+Downstream feedback from a host (first real consumer of
 `features/authorization`): the two policy short-circuits that ran before any
 schema rule — `checkPlatformAdmin` (probed `platform:main#admin@<subj>` on
 EVERY check) and `checkSelf` (hardcoded `user`/`service_account` self-access on
@@ -1978,7 +1962,7 @@ CLOSED as documented host closure recipes.
   a `platform` type with an `admin` PERMISSION + run its `Check` first in the
   host closure (`isPlatformAdmin` in auth-cms `membership.go`, used by
   `requireMembership` + `demoMyProjects`); self-access = ~8-line ID-equality
-  check in the host closure (auth-cms/segovia carry none). The
+  check in the host closure (auth-cms and the host carry none). The
   `platform:main#admin` DATA tuple and "admin is DATA, never Config" are
   unchanged.
 - Engine tests flipped: `TestCheckPlatformAdminIsNotMagic` /
@@ -1987,15 +1971,14 @@ CLOSED as documented host closure recipes.
   DENIED on an unrelated resource and gets no implicit self-access. Green on
   memstore + pgx + turso conformance.
 
-Downstream: segovia v2 adds the platform-admin closure atop its
-`access.Checker.Check` + the `admin` permission rule to `BuildSchema()` (flags
-#4–#7); it never used checkSelf.
+Downstream: a host adds the platform-admin closure atop its
+`access.Checker.Check` + the `admin` permission rule to `BuildSchema()`; it never used checkSelf.
 
 ## 2026-07-11 — middleware-consolidation EXECUTED: where HTTP middleware lives
 
 The middleware review's three ratified decisions (jrazmi, 2026-07-11) encoded,
 plus an owner-added track C — no relitigation, no module churn (still 36
-modules, no go.mod changes). Plan: `.claude/plans/middleware-consolidation.md`.
+modules, no go.mod changes).
 
 - **Decision 1 — generic HTTP middleware STAYS in `sdk/foundation/web`.** The
   layering law already assigns pure mechanism there; the "scattered" feeling is
@@ -2053,14 +2036,14 @@ modules, no go.mod changes). Plan: `.claude/plans/middleware-consolidation.md`.
 
 ## 2026-07-11 — auth-jwt-session-refresh RATIFIED + EXECUTED (amends AV6): JWT access + refresh rotation as the default
 
-Plan `.claude/plans/roadmap/auth-jwt-session-refresh.md`, ratified by a
+Ratified by a
 five-reviewer gate (lead-backend, architecture-steward, data-integration,
 platform-sre, product-manager — three re-plan verdicts, zero boundary
 violations, all findings folded in) and **executed the same day**, decisions
 **D1–D8**. This reverses ratified AV6's "no refresh" arm and supersedes §4.4's
 framing of JWTs as a side convenience: the **access JWT becomes the primary
 access credential**, the **session row becomes the revocation + refresh anchor**.
-Upstream only — the segovia host carry (§8) remains OPEN.
+Upstream only — the host carry (§8) remains OPEN.
 
 - **The model.** One mint path issues an access JWT (`{user_id, session_id, exp,
   iat}`, 15m) + an opaque rotating refresh token (SHA-256 at rest, fixed 7d
@@ -2106,7 +2089,7 @@ Owner ruling, issued on sighting `0014_sessions_refresh.sql`'s
 GREENFIELD** — they define the final schema for a new host and are copied
 once into the host's tree; they never carry upgrade/evolution/destructive
 files. Schema evolution for an existing host is host-owned (the host writes
-its own migration in its own tree — segovia's `0018_sessions_refresh.sql`
+its own migration in its own tree — a host's `0018_sessions_refresh.sql`
 is the exemplar). Applied same day, pre-commit of the jwt-refresh work:
 
 - **auth stores (both dialects):** `0003_sessions.sql` now ships the id-keyed
@@ -2130,8 +2113,7 @@ is the exemplar). Applied same day, pre-commit of the jwt-refresh work:
 
 ## 2026-07-13 — auth-v3 release/change inventory (AV3-9.4)
 
-The auth-v3 identity milestone's release/version/tag inventory. Plan
-`.claude/plans/authv3/10-docs-and-closeout.md` (AV3-9.4); phases 0–8 closed,
+The auth-v3 identity milestone's release/version/tag inventory. Task AV3-9.4; phases 0–8 closed,
 AV3-9.1–9.3 complete. Docs-only; the milestone diff is the uncommitted worktree
 (no tags cut — tagging is release execution, owner-authorized separately). The
 breaking surface itself is anchored in `RELEASING.md` (the keyed `auth v3
@@ -2228,8 +2210,7 @@ that same break list rather than re-deriving it.
 
 ### 2026-07-13 — AV3D delivery-runtime refactor: release/change delta (AV3D-5.4)
 
-Amends the AV3-9.4 inventory above with the delivery-refactor deltas (plan
-`.claude/plans/authv3-delivery-refactor/`, AV3D-5.4). The refactor folds into the
+Amends the AV3-9.4 inventory above with the delivery-refactor deltas (task AV3D-5.4). The refactor folds into the
 **same untagged** auth-v3 milestone cut — no separate tag — so the deltas revise
 the auth-v3 tag record rather than adding a new tagged surface. Docs-only task; the
 milestone diff remains the uncommitted worktree (no tags cut).
@@ -2277,8 +2258,8 @@ milestone diff remains the uncommitted worktree (no tags cut).
   snake_case token lives only in `RELEASING.md`, outside guard G14's
   `features/authentication` scope.
 - **Compatibility inventory (grep, 2026-07-13):** every removed symbol/table returns
-  ZERO hits in shipping code/docs outside intentional history — `.claude/plans/**`
-  (deliberate plan record) and `RELEASING.md`'s historical runbook (per the
+  ZERO hits in shipping code/docs outside intentional history — the deliberate plan record
+  and `RELEASING.md`'s historical runbook (per the
   resolution above). Residual stale CODE COMMENTS referencing the old `DeliveryJobs`
   field (`authsvc/service.go`, `invitationsvc/service.go`) and `deliveryjob.Repository`
   (`features/jobs/domain/job/fenced.go`) are flagged as a non-doc follow-up, not
@@ -2287,7 +2268,7 @@ milestone diff remains the uncommitted worktree (no tags cut).
 ## 2026-07-13 — AV3-9.8 Batch 1 (release/runbook correctness + inventory corrections)
 
 Bounded remediation Batch 1 of the AV3-9.8 reviewer disposition (owner-gated per the
-IX-01..IX-23 table in `.claude/plans/authv3/10-docs-and-closeout.md`). Docs + fixtures
+IX-01..IX-23 table). Docs + fixtures
 only; no code behavior changed (Go edits were comments only). This entry is a dated
 CORRECTION appended beside the AV3-9.4 / AV3D-5.4 inventory above (the historical
 entries are left intact).
@@ -2373,8 +2354,7 @@ post-v3), `sdk.ErrUnavailable` ADDED (non-default owner choice — delivery
 capacity/closed reclassified from ErrConflict, HTTP stays 503), live fenced
 DSNs authorized.
 
-Remediation ran as five bounded batches (per-batch logs in
-.claude/plans/authv3/10-docs-and-closeout.md): B1 release/runbook + inventory
+Remediation ran as five bounded batches: B1 release/runbook + inventory
 (drain fixtures green both dialects); B2 browser/transport security (same-site
 Origin-allowlist fix, logout origin gate, §5.8 mapper, reset-token retention);
 B3 runtime containment (per-job recover boundary, host supervision of the
@@ -2401,7 +2381,7 @@ during the milestone.
 ## 2026-07-14 — authorization-v3 release/compatibility inventory (AZ3-5.3)
 
 The authorizationv3 correctness-kernel milestone's release/version/tag inventory
-(plan `.claude/plans/authorizationv3/07-docs-and-closeout.md`, task AZ3-5.3; phases
+(task AZ3-5.3; phases
 0–4 closed, AZ3-5.1/5.2 complete). Docs + one Makefile guard; the milestone diff is
 the uncommitted worktree (no tags cut — tagging is owner-authorized release
 execution). The breaking surface, consumer changes, migration decision, jobs/work
@@ -2502,14 +2482,13 @@ phase 4 ≈ 5, phase 5 ≈ 6). The load-bearing ones:
 
 Verify (agent-run): `make guard` prints 16 guard lines and exits 0 (the new
 `guard-authorization-no-delivery-repo` runs last, zero-hit); `make check` "all checks
-passed". No `.claude/plans/` file was edited; no commit/tag/push. The sole
+passed". No commit/tag/push. The sole
 code-adjacent change is the Makefile guard; all other edits are RELEASING.md +
 this NOTES.md entry (docs).
 
 ## 2026-07-14 — authorization-v3 final adversarial and race audit (AZ3-5.4)
 
-Final adversarial/race audit of the authorizationv3 correctness kernel (plan
-`.claude/plans/authorizationv3/07-docs-and-closeout.md`, task AZ3-5.4; phases 0–4 closed,
+Final adversarial/race audit of the authorizationv3 correctness kernel (task AZ3-5.4; phases 0–4 closed,
 AZ3-5.1/5.2/5.3 complete). Outcome: **PASS — no overgrant, double mutation,
 system-capability leak, or shipped session-only mutation path surfaced; NO stop condition
 triggered; NO REOPEN**. Two in-task fixes made (one named regression test added; one
@@ -2519,7 +2498,7 @@ disposition table swept); the two flagged production-orphan cleanups are reject-
 
 **Placement of this audit record:** a dated NOTES.md section under the AZ3-5.3 entry — the
 option the task offers and the shape AZ3-5.5's gate can cite. (auth-v3 recorded AV3-9.5 in
-its plan execution log, but `.claude/plans/` is off-limits this task, so NOTES.md is the
+its plan execution log, but NOTES.md is the
 repo-convention home.)
 
 **The 13-item audit table** (item → evidence → disposition; every item is a finding):
@@ -2567,15 +2546,14 @@ Verify (agent-run): `features/authorization` build/vet/`test -race` → ok; `sto
 build/vet/test → ok; `stores/turso` build/vet/`vet -tags=integration`/test → ok;
 `examples/auth-cms` build/vet/`test -race` → ok (`cmd/server` 29.3s, new test included);
 `make check` "all checks passed"; `make guard` 16 lines exit 0; both live `-count=2` legs
-above green. No `.claude/plans/` edit; no commit/tag/push. Sole code change: the one new
+above green. No commit/tag/push. Sole code change: the one new
 auth-cms regression test file.
 
 ## 2026-07-15 — auth-adopter-hardening CLOSED (AAH-1..6): invitation operation integrity, host authorization, store preflight, canonical collation
 
 The pre-tag breaking hardening packet that closes the framework gaps the first
-authorization-v3/authentication-v3 adopter (Segovia's v2 plan) exposed, folded into
-the same untagged auth-v3 cut (plan `.claude/plans/auth-adopter-hardening/plan.md`,
-task prefix `AAH`; owner ratified D1–D5 in-session 2026-07-15, D3 = issuance-time
+authorization-v3/authentication-v3 adopter (a host's v2 plan) exposed, folded into
+the same untagged auth-v3 cut (task prefix `AAH`; owner ratified D1–D5 in-session 2026-07-15, D3 = issuance-time
 authority). Preflight re-confirmed zero `features/authentication*`/`features/authorization*`
 tags (`git tag -l` empty), so the public-API and canonical-migration edits carried no
 append-only constraint. AAH-6 is this closeout (docs + verification transcript).
@@ -2701,7 +2679,7 @@ snippets; the rest is docs.
   mode + boot-time `Manifest.Assets()` reachability self-check, the `views/goth`
   adapter + `HTMLPolicy` recipe, the HTMX migration trigger + settled hidden-input CSRF,
   the `views/templ`→`views/goth` tag posture, the SRI + CDN-relocation caveats, and the
-  GPS-token brand override + Segovia/GPS360 handoff — no Segovia code imported). §1–§10
+  brand-token override + host handoff — no host code imported). §1–§10
   frozen contract untouched.
 - **Gate-C GOTH-7.4 obligations discharged in §11:** the asset-route self-check pattern
   (§11.5), the SRI CDN-relocation caveat (§11.9). The `Requirements`→CSP-directive-string
@@ -2738,7 +2716,7 @@ that had been dead since the rename. That is now closed on the doc side.
   and what a composition root may do. Each rule has exactly one canonical
   sentence; those eleven sentences are what `gopernicus guard --list` will
   print, so the binary and the page cannot drift.
-- **gps-360-go is THE reference host** (owner ruling). The rules generalize
+- **A single host is THE reference host** (owner ruling). The rules generalize
   from its layout; where the contract and the reference disagree, that is a
   finding to settle, not a style choice.
 - **A composition takes only domain SERVICES** (owner ruling). `Dependencies`
@@ -2772,13 +2750,13 @@ that had been dead since the rename. That is now closed on the doc side.
   the three conforming examples, with auth-cms and goth-showcase as named,
   dated exemptions. Tag: `workshop/gopernicus` v0.3.0, nothing else.
 
-Plan of record `.claude/plans/host-layout-contract.md`. No Go code changed in
+No Go code changed in
 this half; no sdk, pocket, integration, or ui symbol moves at all.
 
 ## 2026-10-20 — host-contract-reconciliation RATIFIED: the host contract adopts the reference shape (H0–H14, issue #90)
 
 The 2026-08-27 contract described a host the reference no longer was, and its
-executable floor never shipped. gps-360-go retired its `internal/` technology
+executable floor never shipped. the reference host retired its `internal/` technology
 adapter slot on 2026-08-28 and put host adapters at top-level
 `integrations/<capability>/<vendor>`; the `gopernicus guard` verb promised
 for "next PR" was never built, and `workshop/gopernicus/v0.3.0` (tagged
@@ -2830,8 +2808,7 @@ text, not yet the moves or the verb.
   H0's scope), `pockets/auth/views` (→ `pockets/auth/inbound/views`), and
   `internal/inbound/domains/manual` importing `workshop/testweb` (H12).
 
-Plan of record `.claude/plans/host-contract-reconciliation.md` (copied to
-`plans/` at release). PR-1 changes text only — `examples/README.md`,
+PR-1 changes text only — `examples/README.md`,
 `ARCHITECTURE.md`, `README.md`, `RELEASING.md`, the docs-site host-contract
 and examples pages; no Go package moves.
 

@@ -8,7 +8,7 @@ import (
 	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
-// CHAU-5.1 — the reset landing URL's configuration contract.
+// The reset landing URL's configuration contract.
 //
 // Every rejection here exists because the alternative failure is invisible until
 // production: a fragment silently swallows the token query, a pre-existing

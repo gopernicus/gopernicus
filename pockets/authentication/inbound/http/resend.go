@@ -8,7 +8,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
-// The registration-verification resend surface (CHAU-2.3). Two routes for one use
+// The registration-verification resend surface. Two routes for one use
 // case, deliberately shaped differently:
 //
 //   - POST /auth/verification/resend is PUBLIC and enumeration-safe. It is a
