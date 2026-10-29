@@ -115,8 +115,8 @@ written `true` (P5), where an acknowledgement prints `ack`.
 |---|---|---|---|
 | turso | `LogQueries` (`DB_LOG_QUERIES`) or `LogQueryArgs` (`DB_LOG_QUERY_ARGS`), checked before the TLS test and joined with any TLS refusal; the error names field and variable, `Config.LogQueries (DB_LOG_QUERIES)` | `ErrQueryLoggingRefused` | none — unset it |
 | pgxdb | `LogQueryArgs` (`DB_LOG_QUERY_ARGS`), even alone, beside S1's `LogQueries` and logging `Tracer`; the error names field and variable | `ErrQueryLoggingRefused` | none — unset it |
-| pgxdb, turso | a revealed `DSN`/`Password` (pgxdb) or `URL`/`AuthToken` (turso) containing `[redacted]`, at `Open` before any dial (all modes) | `sdk.ErrRedactedSecret`, naming the field | none — compose from `Reveal()` |
-| sdk `notify/email` | an `SMTPConfig.Password` containing `[redacted]`: `Probe` and `Send` fail (all modes; production hosts probe at boot) | `sdk.ErrRedactedSecret` | none |
+| pgxdb, turso | a revealed `DSN`/`Password` (pgxdb) or `URL`/`AuthToken` (turso) containing `[redacted]` or, since S9 (pgxdb v0.18.0, turso v0.11.0), its percent-encoded form `%5Bredacted%5D` in any hex case, at `Open` before any dial (all modes) | `sdk.ErrRedactedSecret`, naming the field | none — compose from `Reveal()` |
+| sdk `notify/email` | an `SMTPConfig.Password` containing `[redacted]` or (sdk v0.25.0) `%5Bredacted%5D`: `Probe` and `Send` fail (all modes; production hosts probe at boot) | `sdk.ErrRedactedSecret` | none |
 
 `guard --posture` (workshop/gopernicus v0.9.0) gives the turso refusal its pre-deploy signal: an
 uncommented `DB_LOG_QUERIES` or `DB_LOG_QUERY_ARGS` set true in `.env.example`, bare or
@@ -530,8 +530,12 @@ notes table with module versions.
   Guard G37 keeps every new credential-named field under `integrations/` and `sdk/` an
   `sdk.Secret`.
 - **A composed secret fails loudly.** A DSN or URL built from a Secret with `fmt` or `+` carries
-  `[redacted]` instead of the credential. pgxdb and turso `Open`, and SMTP `Probe`/`Send`, refuse
-  it with `sdk.ErrRedactedSecret` before any dial (table above): compose from `Reveal()` and wrap
+  `[redacted]` instead of the credential; through `url.UserPassword`, `url.Values` or
+  `url.PathEscape` it carries `%5Bredacted%5D`. pgxdb and turso `Open`, and SMTP `Probe`/`Send`,
+  refuse either form (`sdk.ContainsRedacted`, any hex case; the percent-encoded form since sdk
+  v0.25.0, pgxdb v0.18.0, turso v0.11.0) with `sdk.ErrRedactedSecret` before any dial (table
+  above). A value transformed further (double-encoded, base64) is not detectable and still fails
+  at the wire. Compose from `Reveal()` and wrap
   the result in `sdk.Secret(…)`. A key composed into a sendgrid, s3, gcs or OAuth call fails at
   its first use. `pgxdb.Config.Redacted()` and `turso.Config.Redacted()` remain the operator's
   view of the target.

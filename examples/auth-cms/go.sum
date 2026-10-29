@@ -37,10 +37,10 @@ github.com/gopernicus/gopernicus/integrations/cryptids/go-webauthn v0.1.0 h1:E/9
 github.com/gopernicus/gopernicus/integrations/cryptids/go-webauthn v0.1.0/go.mod h1:dUnMbw0alm0WWvYznRBZKf2gBEbN+7W5L9sJR4caL7E=
 github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt v0.4.0 h1:g+pi+Y0putaP0XezM80/JkyktJItBxiKDjSG+2g2j8k=
 github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt v0.4.0/go.mod h1:veUWzyXMER9hOXTE40MMY1AIMLSrGFJ9wX42zYwZaAk=
-github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.17.0 h1:LFoTMXgx43YIvL3RWmjOWdds+pCX57mkX0sw2n4xIQk=
-github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.17.0/go.mod h1:VoUomlLH7YG7esv+SCSKScjY0C8R3BqX77wJnbn/3SY=
-github.com/gopernicus/gopernicus/integrations/datastores/turso v0.10.0 h1:9pKRxB73uD3DoPnzb9ViUUWdkqyEkcelT0nzIaFNxCs=
-github.com/gopernicus/gopernicus/integrations/datastores/turso v0.10.0/go.mod h1:nHHL9uIw5nQa0NpWMwoR58JU5ibaFjtY6o4EPxIojgk=
+github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.18.0 h1:BVv7ijoHQsId/LtgCgluRnym5xe1nv6aXVhrijNsWjU=
+github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.18.0/go.mod h1:oFQ+rIsQaMPgjxChwoLRu06AVo1M93fVhBsxPWLdSr8=
+github.com/gopernicus/gopernicus/integrations/datastores/turso v0.11.0 h1:96kiC9nPJ2pr/MRp0M9UoMnbawTcgbpk9oS+yhYvm3Y=
+github.com/gopernicus/gopernicus/integrations/datastores/turso v0.11.0/go.mod h1:sAoFw2sp1onPzm5annaiCDzRzgelkVOYbjNdf/ajsXM=
 github.com/gopernicus/gopernicus/integrations/encoding/rsc-qr v0.1.0 h1:WA5mUVIkppR8UxtA2zIxjZ4mySs6WQ3yw9I2/La66tg=
 github.com/gopernicus/gopernicus/integrations/encoding/rsc-qr v0.1.0/go.mod h1:V8sMoFgNSoKEEC7C0yJKIeGJKNSbm39Ay8efD1XygPw=
 github.com/gopernicus/gopernicus/pockets v0.1.0 h1:2WcybbfPw1km00DmG37CekPbxYmObyyj3T1Ec0eFSRY=
@@ -65,8 +65,8 @@ github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx v0.9.0 h1:5aLk7XaUx66d5
 github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx v0.9.0/go.mod h1:AyNfXUYPt5CH+crptuJjm4UzJW+glZ3Q2xSEmY07YhM=
 github.com/gopernicus/gopernicus/pockets/jobs/stores/turso v0.8.0 h1:gGCYopXg99u03Pxprcpy8USAulfuO7vTNfA84YX9x9Q=
 github.com/gopernicus/gopernicus/pockets/jobs/stores/turso v0.8.0/go.mod h1:BYNhSNE24u3KamEFc2HJg9ankthke+if0E0+8LmW/Lw=
-github.com/gopernicus/gopernicus/sdk v0.24.0 h1:r4SVyk70lWC5mO7kkS+4hirYoe3GghOqmISmYWytbT0=
-github.com/gopernicus/gopernicus/sdk v0.24.0/go.mod h1:zo9DGgXEfFANGvuo3VAIRWyRmlN4YRqavdncRsnCzu8=
+github.com/gopernicus/gopernicus/sdk v0.25.0 h1:Hu7VrYHngYzjhTcXNDe5oF4EtfSApS/6UyY8n7d9WXw=
+github.com/gopernicus/gopernicus/sdk v0.25.0/go.mod h1:zo9DGgXEfFANGvuo3VAIRWyRmlN4YRqavdncRsnCzu8=
 github.com/gopernicus/gopernicus/ui/goth v0.2.1 h1:qy8IzRvxKOm6wbqAjsjZ/3FrsMtvaey33MWRtvBWvOY=
 github.com/gopernicus/gopernicus/ui/goth v0.2.1/go.mod h1:geQPeUJwfv4AwJCdMt+Q+faWRuLog0VXb7RhqFVDOA4=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=

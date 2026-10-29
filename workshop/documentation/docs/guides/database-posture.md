@@ -176,7 +176,9 @@ the runner's `postureTables`, and `-posture-role` judges it with the same rules.
 - The DSN is a secret (it carries the password): `pgxdb` `DSN`/`Password` and `turso`
   `URL`/`AuthToken` are `sdk.Secret`, which prints `[redacted]`; read one with `Reveal()`. `Open`
   refuses a DSN or URL composed from a printed Secret (`sdk.ErrRedactedSecret`), and the
-  connectors redact the target from errors and logs (shipped S6).
+  connectors redact the target from errors and logs (shipped S6). Since pgxdb v0.18.0 / turso
+  v0.11.0 (S9) the refusal also catches the percent-encoded form `%5Bredacted%5D` that
+  `url.UserPassword` and `url.Values` produce.
 - `DB_LOG_QUERIES=true` (`LogQueries`) logs each query's SQL with its argument count and types —
   never values — plus the SQLSTATE and constraint (pgx) of a failed query, never its error text.
   `DB_LOG_QUERY_ARGS=true` (`LogQueryArgs`) adds bind values (and, on pgx, the error text),
