@@ -412,8 +412,8 @@ Deviations from the task text:
 - **PR-3:** the production-baseline Makefile stays comment-only (owner). #272 rechecked green on fresh databases and
   closed by the lead (R-7).
 - **PR-5:** **D13 was wrong** — `AUTHORIZATION_TURSO_DISPOSABLE_URL` is live (the authorization turso fixture guard,
-  its README and `live-stores.yml`); only the Makefile `test-stores` comment lacks it, so the S3 note still holds and
-  the record says so. D11's C1 line got only its follow-up clause flipped to "closed S9". R-8 filed #294 (L10), #295
+  its README and `live-stores.yml`); only the Makefile `test-stores` comment lacked it (added in PR-5 on the owner's call), so the S3 note
+  held and the record says so. D11's C1 line got only its follow-up clause flipped to "closed S9". R-8 filed #294 (L10), #295
   (L11), #296 (L12), #297 (L13), #298 (L21), #299 (L22); #35 closed as superseded. Extra: #300 — `gopernicus version`
   prints `0.0.0-dev` for a `go install …@<tag>` binary (a hard-coded placeholder since the CLI's first commit; no
   LATER group fit).

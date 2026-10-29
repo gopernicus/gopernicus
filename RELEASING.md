@@ -225,9 +225,9 @@ plan's "Design §3").
   "closed S9". **D13 was wrong** and is corrected here instead of applied. The S3 Known line
   "`make test-stores` needs `AUTHORIZATION_TURSO_DISPOSABLE_URL` for the authorization turso
   leg" still holds: the variable gates `pockets/authorization/stores/turso`'s destructive
-  fixtures (`fixture_safety_test.go`), and `live-stores.yml` sets it. What is missing is only
-  the note in the Makefile's `test-stores` comment. That is the S3 follow-up, still open, and
-  recorded here (a one-line Makefile comment).
+  fixtures (`fixture_safety_test.go`), and `live-stores.yml` sets it. What was missing was only
+  the note in the Makefile's `test-stores` comment; this PR adds it, which closes the S3
+  follow-up.
 - **LATER 26 groups:**
   - **Filed by this sweep:**
     - **#294** (L10, remove the `InvitationTokenInQuery` hatch with the next authentication
@@ -249,8 +249,6 @@ plan's "Design §3").
 
 **Known and deferred.**
 - **I7** (above), sequenced after #276.
-- The Makefile's `test-stores` comment does not name `AUTHORIZATION_TURSO_DISPOSABLE_URL` (D13,
-  above).
 - **Out of scope by plan:** extending the refusal to goredis and the other eight integrations
   (R-2); double-encoded or otherwise transformed values; any pocket or store tag.
 - **Pre-existing, still open:** #271, #273 (via #276), #274, #275, #286, #288.
