@@ -5,7 +5,7 @@ go 1.26.10
 require (
 	cloud.google.com/go/auth v0.20.0
 	firebase.google.com/go/v4 v4.22.0
-	github.com/gopernicus/gopernicus/sdk v0.18.0
+	github.com/gopernicus/gopernicus/sdk v0.24.0
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/api v0.279.0
 )
