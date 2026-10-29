@@ -404,18 +404,19 @@ func TestOIDCMapping(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 	want := authentication.Identity{
-		Issuer:          testIssuer,
-		Subject:         "subject-1",
-		Email:           "a@example.test",
-		EmailVerified:   true,
-		Phone:           "+15550100",
-		PhoneVerified:   true,
-		DisplayName:     "Ada",
-		Tenant:          "org-1",
-		AuthenticatedAt: now.Add(-5 * time.Minute).UTC(),
-		ExpiresAt:       time.Unix(claims["exp"].(int64), 0).UTC(),
-		Methods:         []string{"pwd"},
-		MFA:             true,
+		Issuer:           testIssuer,
+		Subject:          "subject-1",
+		Email:            "a@example.test",
+		EmailVerified:    true,
+		Phone:            "+15550100",
+		PhoneVerified:    true,
+		DisplayName:      "Ada",
+		Tenant:           "org-1",
+		AuthenticatedAt:  now.Add(-5 * time.Minute).UTC(),
+		ExpiresAt:        time.Unix(claims["exp"].(int64), 0).UTC(),
+		Methods:          []string{"pwd"},
+		AuthTimeAsserted: true,
+		MFA:              true,
 	}
 	if fmt.Sprintf("%+v", id) != fmt.Sprintf("%+v", want) {
 		t.Fatalf("Identity =\n%+v\nwant\n%+v", id, want)
@@ -433,6 +434,9 @@ func TestOIDCMapping(t *testing.T) {
 		}
 		if got, want := id.AuthenticatedAt, time.Unix(c["iat"].(int64), 0).UTC(); !got.Equal(want) {
 			t.Errorf("AuthenticatedAt = %v, want iat %v", got, want)
+		}
+		if id.AuthTimeAsserted {
+			t.Error("AuthTimeAsserted = true on the iat fallback, want false")
 		}
 		if id.MFA || id.Methods != nil || id.Attributes != nil {
 			t.Errorf("MFA/Methods/Attributes = %v/%v/%v, want unset", id.MFA, id.Methods, id.Attributes)

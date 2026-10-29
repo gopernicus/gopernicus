@@ -44,6 +44,7 @@ func RunProvider(t *testing.T, newProvider func(t *testing.T) authentication.Pro
 	t.Run("Oversize", func(t *testing.T) { testOversize(t, newProvider(t), mint) })
 	t.Run("EmptyAndMalformed", func(t *testing.T) { testMalformed(t, newProvider(t)) })
 	t.Run("MethodsCloned", func(t *testing.T) { testMethodsCloned(t, newProvider(t), mint) })
+	t.Run("AuthTimeAsserted", func(t *testing.T) { testAuthTimeAsserted(t, newProvider, mint) })
 	t.Run("CapabilityReporter", func(t *testing.T) { testCapabilityReporter(t, newProvider(t)) })
 }
 
@@ -175,6 +176,56 @@ func testMethodsCloned(t *testing.T, p authentication.Provider, mint Minter) {
 	}
 }
 
+// testAuthTimeAsserted pins what AuthTimeAsserted means: true only when
+// AuthenticatedAt is the token's own auth_time; an absent auth_time falls back
+// to iat and reads false. An unparseable auth_time either falls back the same
+// way or rejects the credential; a provider whose decoder types the claim
+// refuses the token, which is the stricter outcome.
+func testAuthTimeAsserted(t *testing.T, newProvider func(t *testing.T) authentication.Provider, mint Minter) {
+	t.Run("Asserted", func(t *testing.T) {
+		p := newProvider(t)
+		claims := validClaims(p.Issuer(), time.Now())
+		id, err := authenticate(p, mint(t, claims))
+		if err != nil {
+			t.Fatalf("Authenticate(auth_time) error = %v", err)
+		}
+		assertNear(t, "AuthenticatedAt", id.AuthenticatedAt, claims["auth_time"].(int64))
+		if !id.AuthTimeAsserted {
+			t.Error("Identity.AuthTimeAsserted = false with a valid auth_time, want true")
+		}
+	})
+	fallbacks := []struct {
+		name         string
+		authTime     any // nil: the claim is absent
+		mayBeInvalid bool
+	}{
+		{name: "IatFallback"},
+		{name: "Garbage", authTime: "garbage", mayBeInvalid: true},
+	}
+	for _, tc := range fallbacks {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newProvider(t)
+			claims := validClaims(p.Issuer(), time.Now())
+			delete(claims, "auth_time")
+			if tc.authTime != nil {
+				claims["auth_time"] = tc.authTime
+			}
+			id, err := authenticate(p, mint(t, claims))
+			if err != nil && tc.mayBeInvalid {
+				assertRejected(t, id, err)
+				return
+			}
+			if err != nil {
+				t.Fatalf("Authenticate(auth_time=%v) error = %v", tc.authTime, err)
+			}
+			assertNear(t, "AuthenticatedAt (iat fallback)", id.AuthenticatedAt, claims["iat"].(int64))
+			if id.AuthTimeAsserted {
+				t.Errorf("Identity.AuthTimeAsserted = true with auth_time=%v, want false on the iat fallback", tc.authTime)
+			}
+		})
+	}
+}
+
 // testCapabilityReporter pins the posture round trip: CheckProvider reports
 // exactly what the provider declares, refuses a declared DevelopmentOnly
 // provider in production only, and accepts a provider that declares nothing.
@@ -221,6 +272,14 @@ func assertRejected(t *testing.T, id authentication.Identity, err error) {
 	}
 	if !reflect.DeepEqual(id, authentication.Identity{}) {
 		t.Errorf("Identity = %+v on error, want zero", id)
+	}
+}
+
+func assertNear(t *testing.T, field string, got time.Time, wantUnix int64) {
+	t.Helper()
+	want := time.Unix(wantUnix, 0)
+	if d := got.Sub(want); d < -time.Second || d > time.Second {
+		t.Errorf("Identity.%s = %v, want %v", field, got, want)
 	}
 }
 

@@ -239,6 +239,7 @@ func identityFromToken(token *auth.Token, issuer string, denySignIn []string) (s
 	switch {
 	case token.AuthTime > 0:
 		id.AuthenticatedAt = time.Unix(token.AuthTime, 0).UTC()
+		id.AuthTimeAsserted = true
 	case token.IssuedAt > 0:
 		id.AuthenticatedAt = time.Unix(token.IssuedAt, 0).UTC()
 	}

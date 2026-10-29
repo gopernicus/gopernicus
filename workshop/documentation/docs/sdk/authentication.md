@@ -13,7 +13,7 @@ verified `Identity`: what the issuer says about who presented it, and how well.
 | Type | Role |
 |---|---|
 | `Credential` | `Transport` (`header` or `cookie`) and `Raw`; `Raw` is never logged |
-| `Identity` | `Issuer`, `Subject`, `Email`/`EmailVerified`, `Phone`/`PhoneVerified`, `DisplayName`, `Tenant`, `AuthenticatedAt` (`auth_time`, else `iat`), `ExpiresAt`, `Methods` (`amr`), `MFA` (see [MFA](#mfa)), `Attributes` (string-valued, at most `MaxAttributes` = 16) |
+| `Identity` | `Issuer`, `Subject`, `Email`/`EmailVerified`, `Phone`/`PhoneVerified`, `DisplayName`, `Tenant`, `AuthenticatedAt` (`auth_time`, else `iat`), `ExpiresAt`, `Methods` (`amr`), `AuthTimeAsserted` (true only when `AuthenticatedAt` is `auth_time` or the provider's own sign-in instant; false on the `iat` fallback and for a provider that cannot tell), `MFA` (see [MFA](#mfa)), `Attributes` (string-valued, at most `MaxAttributes` = 16) |
 | `Provider` | `Issuer()` and `Authenticate(ctx, Credential) (Identity, error)` |
 | `RevocationChecker` | optional: `CheckRevocation(ctx, issuer, subject)` returns `RevocationFacts` (`Disabled`, `ValidAfter`, `CheckedAt`) |
 | `ClaimMapping`, `Profile` | the vendor-neutral claim mapping `NewOIDC` uses: dotted paths with OIDC defaults, `TrustPhone`, `DenySignIn` |
@@ -106,7 +106,8 @@ out a subject who signed in again. An unknown subject is `Disabled` or
 `authenticationtest.RunProvider(t, newProvider, mint)` pins a valid token's
 `Identity` (`Issuer` equals `Issuer()`), wrong issuer → `ErrIssuerMismatch`,
 expired → `ErrInvalidCredential`, oversize rejected without calling the
-verifier, `Methods` cloned, and no fabricated `Identity` on error.
+verifier, `Methods` cloned, `AuthTimeAsserted` (a valid `auth_time` → true; absent
+→ `iat`, false; unparseable → `iat`, false, or `ErrInvalidCredential`), and no fabricated `Identity` on error.
 `authenticationtest.RunRevocation` pins the checker contract. go-oidc runs
 `RunProvider` against a real JWKS server, and the Firebase preset runs both
 suites hermetically and against the Auth emulator.

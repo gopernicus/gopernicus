@@ -97,6 +97,7 @@ func (o *OIDC) identity(claims map[string]any) (Identity, error) {
 	id.ExpiresAt = exp
 	if at, ok := lookupTime(claims, m.AuthTime); ok {
 		id.AuthenticatedAt = at
+		id.AuthTimeAsserted = true
 	} else if at, ok := lookupTime(claims, "iat"); ok {
 		id.AuthenticatedAt = at
 	}
