@@ -101,7 +101,7 @@ func (g GlobalResource) Holds(r authorization.Resource) bool { return r.Type == 
 
 // Fixtures returns every fixture, freshly built.
 func Fixtures() []Fixture {
-	return []Fixture{Documents(), GPSGlobal(), SegoviaChain(), Usersets()}
+	return []Fixture{Documents(), GlobalRoles(), TenantChain(), Usersets()}
 }
 
 // FixtureNamed returns one fixture by name.

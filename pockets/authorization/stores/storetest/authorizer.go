@@ -35,10 +35,10 @@ func AuthorizerModel(name string) (decisions.Model, error) {
 		return documentsModel(), nil
 	case "usersets":
 		return usersetsModel(), nil
-	case "segovia-chain":
-		return segoviaChainModel(), nil
-	case "gps-global":
-		return gpsGlobalModel(), nil
+	case "tenant-chain":
+		return tenantChainModel(), nil
+	case "global-roles":
+		return globalRolesModel(), nil
 	}
 	return decisions.Model{}, fmt.Errorf("storetest: no engine schema for authorization fixture %q", name)
 }
@@ -140,14 +140,14 @@ func usersetsModel() decisions.Model {
 	})
 }
 
-// segoviaChainModel is a tenant/space/item hierarchy, the global resource type
+// tenantChainModel is a tenant/space/item hierarchy, the global resource type
 // platform, and the test-only recursive node chain.
-func segoviaChainModel() decisions.Model {
+func tenantChainModel() decisions.Model {
 	users := subjectTypes("user")
-	tenant := decisions.ResourceTypeDef{Relations: declare(users, "owner", "admin", "gps_team"), Permissions: map[string]decisions.Expression{
-		"create_space": directAny("owner", "admin", "gps_team"), "list": directAny("owner", "admin", "gps_team"),
-		"read": directAny("owner", "admin", "gps_team"), "manage": directAny("owner", "admin", "gps_team"), "delete": directAny("owner"),
-		"manage_entitlements": directAny("gps_team"), "manage_gps_link": directAny("gps_team"),
+	tenant := decisions.ResourceTypeDef{Relations: declare(users, "owner", "admin", "staff_team"), Permissions: map[string]decisions.Expression{
+		"create_space": directAny("owner", "admin", "staff_team"), "list": directAny("owner", "admin", "staff_team"),
+		"read": directAny("owner", "admin", "staff_team"), "manage": directAny("owner", "admin", "staff_team"), "delete": directAny("owner"),
+		"manage_entitlements": directAny("staff_team"), "manage_partner_link": directAny("staff_team"),
 	}}
 	space := decisions.ResourceTypeDef{Relations: declare(users, "owner", "admin", "editor", "viewer", "vendor_collaborator"), Permissions: map[string]decisions.Expression{
 		"view_timeline_space": directAny("owner", "admin", "editor", "viewer", "vendor_collaborator"),
@@ -197,11 +197,11 @@ func segoviaChainModel() decisions.Model {
 	})
 }
 
-// gpsGlobalModel keeps global Role branches and exact RoleIn grants, declares
+// globalRolesModel keeps global Role branches and exact RoleIn grants, declares
 // the scoped role labels as relations so the protocol can answer them, and
 // declares role_<label> on platform: the relations the engine adapter maps
 // back to exact global role reads.
-func gpsGlobalModel() decisions.Model {
+func globalRolesModel() decisions.Model {
 	actors := subjectTypes("user", "service_account")
 	role := decisions.Role
 	scoped := func(roles ...string) decisions.Expression {

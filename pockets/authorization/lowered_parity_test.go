@@ -183,7 +183,7 @@ func parityScenarios() []parityScenario {
 	long := strings.Repeat("a", 250)
 	return []parityScenario{
 		{
-			fixture: "gps-global",
+			fixture: "global-roles",
 			principals: []sdk.Principal{parityUser("stella"), parityUser("fern"), parityUser("vin"), parityUser("mo"), parityUser("ed"), parityUser("pv"),
 				parityUser("half"), parityUser("led"), parityUser("lev"), parityUser("dev"), parityUser("nobody"), {Type: "service_account", ID: "bot"}},
 			values: map[string][]string{"organizationId": {"org1", "org2", "org3", "", "org.dot", long}, "?programId": {"p1", "p3", "missing", "boom"}},
@@ -195,18 +195,18 @@ func parityScenarios() []parityScenario {
 				{name: "G4 HasRole(steward, Global())", trips: 1, pred: H("steward", G())},
 				{name: "G5 Any(Can(edit section), All(HasRole page ×2))", trips: 2,
 					pred: Any(Can("edit", Fixed("section", "operations")), All(H("viewer", Fixed("page", "contact-proposals")), H("viewer", Fixed("page", "mailbox-scan"))))},
-				{name: "G6 Any(HasRole viewer ledger, HasRole editor ledger)", trips: 1, pred: Any(H("viewer", Fixed("ledger", "gps")), H("editor", Fixed("ledger", "gps")))},
+				{name: "G6 Any(HasRole viewer ledger, HasRole editor ledger)", trips: 1, pred: Any(H("viewer", Fixed("ledger", "main")), H("editor", Fixed("ledger", "main")))},
 				{name: "G7 hub Any(… Resource(programHub) …)", params: []string{"?programId"}, trips: 2,
 					pred: Any(H("steward", G()), H("firmwide_clients", G()), H("viewer", hubProgram), H("member", hubProgram))},
 				{name: "G8 hub Any(…, Can(enter, Fixed(section, operations)))", params: []string{"organizationId"}, trips: 1,
 					pred: Any(H("steward", G()), H("firmwide_clients", G()), H("viewer", hubPath), H("member", hubPath), Can("enter", Fixed("section", "operations")))},
 				{name: "G9 Any(Can(edit section), steward G, firmwide G, member Path)", params: []string{"organizationId"}, trips: 1,
 					pred: Any(Can("edit", Fixed("section", "operations")), H("steward", G()), H("firmwide_clients", G()), H("member", hubPath))},
-				{name: "G10 HasRole(editor, Fixed(ledger, gps))", trips: 1, pred: H("editor", Fixed("ledger", "gps"))},
+				{name: "G10 HasRole(editor, Fixed(ledger, main))", trips: 1, pred: H("editor", Fixed("ledger", "main"))},
 			},
 		},
 		{
-			fixture: "segovia-chain",
+			fixture: "tenant-chain",
 			principals: []sdk.Principal{parityUser("vic"), parityUser("ed"), parityUser("vera"), parityUser("sam"), parityUser("gus"), parityUser("gina"),
 				parityUser("tom"), parityUser("pat"), parityUser("nobody")},
 			values: map[string][]string{"timelineID": {"t1", "t2", ""}, "tenantID": {"acme", "other", ""}, "spaceID": {"s1", "s2", ""}},
@@ -322,7 +322,7 @@ func TestLoweredPolicyParity(t *testing.T) {
 // TestLoweredShortCircuit pins what the native walk would never reach: an
 // unreached input's error is discarded, a reached one surfaces.
 func TestLoweredShortCircuit(t *testing.T) {
-	f, native, port := parityFixture(t, "gps-global")
+	f, native, port := parityFixture(t, "global-roles")
 	lowered, _ := loweredGuard(t, f, port)
 	H, G := authorizationhttp.HasRole, authorizationhttp.Global
 	hubPath := authorizationhttp.Path("client_hub", "organizationId")
@@ -438,7 +438,7 @@ func TestLoweredUnavailableIs503(t *testing.T) {
 // A global role lowers to its relation, never to the permission of the same
 // name: dev holds the developer permission but not the steward role.
 func TestLoweredGlobalRoleUsesRelation(t *testing.T) {
-	f, _, port := parityFixture(t, "gps-global")
+	f, _, port := parityFixture(t, "global-roles")
 	guard, _ := loweredGuard(t, f, port)
 	pred := authorizationhttp.HasRole("developer", authorizationhttp.Global())
 	if got := guardStatus(t, guard, pred, parityRequest{parityUser("stella"), nil}, authorizationhttp.WithLoweredPolicy()); got != http.StatusForbidden {

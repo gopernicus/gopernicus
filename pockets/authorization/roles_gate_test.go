@@ -24,12 +24,12 @@ import (
 // principal at all.
 const testPrincipalHeader = "X-Test-Principal"
 
-// gpsRoleModel is the gps-360-go product model (plan D1), transcribed by
+// productRoleModel is a roles-only host's product model, transcribed by
 // effective behaviour: every role and permission that host declares today, with
 // its globally assigned steward listed EXPLICITLY on each permission it should
 // grant. Nothing here is a bypass — delete steward from one permission's grantor
 // list and it stops granting that one permission (proved below).
-func gpsRoleModel() decisions.Model {
+func productRoleModel() decisions.Model {
 	return decisions.Model{
 		ResourceTypes: map[string]decisions.ResourceTypeDef{
 			"platform": {
@@ -50,11 +50,11 @@ func gpsRoleModel() decisions.Model {
 	}
 }
 
-// newGPSHost builds the roles-only host the way gps-360-go wires it: the roles
-// kind and the atomic mutation repository, no relationship kind, the D1 model as
+// newRolesOnlyHost builds a roles-only host the way such a host wires it: the roles
+// kind and the atomic mutation repository, no relationship kind, the product model as
 // WithRoleModel. model is passed so the negative half can boot the SAME
 // assignments under a model with one grantor removed.
-func newGPSHost(t *testing.T, store *memory.Store, model decisions.Model) Components {
+func newRolesOnlyHost(t *testing.T, store *memory.Store, model decisions.Model) Components {
 	t.Helper()
 	comps, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithModel(model))
 	if err != nil {
@@ -63,7 +63,7 @@ func newGPSHost(t *testing.T, store *memory.Store, model decisions.Model) Compon
 	return comps
 }
 
-func assignGPSRole(t *testing.T, mutator *mutations.Service, subjectType, subjectID, roleName, resourceType, resourceID string) {
+func assignProductRole(t *testing.T, mutator *mutations.Service, subjectType, subjectID, roleName, resourceType, resourceID string) {
 	t.Helper()
 	receipt, err := mutator.AssignRole(context.Background(), mutations.AssignRoleCommand{
 
@@ -93,25 +93,25 @@ func injectTestPrincipal(next http.Handler) http.Handler {
 	})
 }
 
-// TestRoleGatesWithRealEngine is the real-engine proof: the gps-360-go host
-// shape — a roles-only host, its D1 model, assignments made through the trusted
+// TestRoleGatesWithRealEngine is the real-engine proof: the
+// roles-only host shape — its product model, assignments made through the trusted
 // mutator — served through web.NewWebHandler and driven with httptest. No fake
 // engine, no stub decision: every status below is the composite dispatching to
 // the role engine over a live role store.
 func TestRoleGatesWithRealEngine(t *testing.T) {
 	store := memory.New()
-	comps := newGPSHost(t, store, gpsRoleModel())
+	comps := newRolesOnlyHost(t, store, productRoleModel())
 	svc := comps
 
-	assignGPSRole(t, comps.Mutations, "user", "member", "viewer", "organization", "org-1")
-	assignGPSRole(t, comps.Mutations, "user", "member", "report_editor", "organization", "org-1") // several roles on one subject is normal
-	assignGPSRole(t, comps.Mutations, "service_account", "sa-1", "viewer", "organization", "org-1")
-	assignGPSRole(t, comps.Mutations, "user", "boss", "steward", "", "") // platform roles are global
+	assignProductRole(t, comps.Mutations, "user", "member", "viewer", "organization", "org-1")
+	assignProductRole(t, comps.Mutations, "user", "member", "report_editor", "organization", "org-1") // several roles on one subject is normal
+	assignProductRole(t, comps.Mutations, "service_account", "sa-1", "viewer", "organization", "org-1")
+	assignProductRole(t, comps.Mutations, "user", "boss", "steward", "", "") // platform roles are global
 
 	router := web.NewWebHandler()
 	group := router.Group("/api/v1", injectTestPrincipal)
 	noContent := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
-	// One route per D1 resource type, each mounted in coordinates.
+	// One route per product-model resource type, each mounted in coordinates.
 	group.Handle(http.MethodGet, "/orgs/{id}", noContent, svc.HTTP.Require(authorizationhttp.Can("view", authorizationhttp.Path("organization", "id"))))
 	group.Handle(http.MethodGet, "/orgs/{id}/publish", noContent, svc.HTTP.Require(authorizationhttp.Can("report_publish", authorizationhttp.Path("organization", "id"))))
 	group.Handle(http.MethodGet, "/sections/{id}", noContent, svc.HTTP.Require(authorizationhttp.Can("enter", authorizationhttp.Path("section", "id"))))
@@ -226,7 +226,7 @@ func TestRoleGatesWithRealEngine(t *testing.T) {
 // resource type, or a nameless coordinate is a REGISTRATION bug — it panics when
 // the route is mounted, never when a request arrives.
 func TestRoleGatesRefuseNonsenseAtBoot(t *testing.T) {
-	comps := newGPSHost(t, memory.New(), gpsRoleModel())
+	comps := newRolesOnlyHost(t, memory.New(), productRoleModel())
 	svc := comps
 
 	for name, mount := range map[string]func(){
@@ -259,14 +259,14 @@ func TestRoleGatesRefuseNonsenseAtBoot(t *testing.T) {
 // is what "a globally held role is data, not a bypass" means operationally.
 func TestStewardGrantsOnlyWhatTheModelNames(t *testing.T) {
 	store := memory.New()
-	full := newGPSHost(t, store, gpsRoleModel())
-	assignGPSRole(t, full.Mutations, "user", "boss", "steward", "", "")
+	full := newRolesOnlyHost(t, store, productRoleModel())
+	assignProductRole(t, full.Mutations, "user", "boss", "steward", "", "")
 
-	narrowed := gpsRoleModel()
+	narrowed := productRoleModel()
 	organization := narrowed.ResourceTypes["organization"]
 	organization.Permissions["report_publish"] = decisions.Any(decisions.RoleIn("report_publisher"), decisions.Role("report_publisher"))
 	narrowed.ResourceTypes["organization"] = organization
-	svc := newGPSHost(t, store, narrowed)
+	svc := newRolesOnlyHost(t, store, narrowed)
 
 	ctx := context.Background()
 	boss := authmodel.PrincipalRef{Type: "user", ID: "boss"}
@@ -293,7 +293,7 @@ func TestStewardGrantsOnlyWhatTheModelNames(t *testing.T) {
 }
 
 func TestOpaqueRoleDoesNotGrantNamedPermission(t *testing.T) {
-	comps := newGPSHost(t, memory.New(), gpsRoleModel())
+	comps := newRolesOnlyHost(t, memory.New(), productRoleModel())
 	ctx := context.Background()
 	_, err := comps.Mutations.AssignRole(ctx, mutations.AssignRoleCommand{Subject: prinU("member"), Role: "vewer", Scope: tuples.On("organization", "org-1")})
 	if err != nil {
