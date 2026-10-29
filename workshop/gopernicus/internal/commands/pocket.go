@@ -23,7 +23,7 @@ var pocketTemplates embed.FS
 // the GOMODCACHE `make check` already warmed (the warm-cache invariant, W3
 // scaffold-test leg). Bump them together with the repo's store modules.
 const (
-	pgxVersion        = "v5.8.0"
+	pgxVersion        = "v5.9.2"
 	libsqlVersion     = "v0.0.0-20260528064733-9d5d30a29a60"
 	scaffoldGoVersion = "1.26.10"
 	defaultAggregate  = "item"

@@ -46,10 +46,10 @@ var (
 // go.mod must carry. Bump them with every tag the templates move to.
 var (
 	inlineHint = regexp.MustCompile(`^[A-Z0-9_]+=\S*\s+#`)
-	sdkPin     = baseModule + "/sdk v0.22.0"
+	sdkPin     = baseModule + "/sdk v0.25.0"
 	dbPins     = map[string]string{
-		"pgx":   baseModule + "/integrations/datastores/pgxdb v0.17.0",
-		"turso": baseModule + "/integrations/datastores/turso v0.10.0",
+		"pgx":   baseModule + "/integrations/datastores/pgxdb v0.18.0",
+		"turso": baseModule + "/integrations/datastores/turso v0.11.0",
 	}
 )
 

@@ -184,7 +184,7 @@ P9   1 finding
 P9  github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx/migrations/0005_iam_audit_integrity.sql: ledger copy missing from workshop/migrations/primary (re-export: copy the store file into the ledger; never edit a copy)
 ```
 
-A host without the `tool` pin runs the posture check in CI with `go run github.com/gopernicus/gopernicus/workshop/gopernicus@v0.6.0 guard --posture .`. A release older than v0.5.0 refuses `--posture` (unknown flag): the binary exits 2, and a `go run` invocation prints `exit status 2` and returns 1; treat any non-zero status as a broken invocation, never a pass.
+A host without the `tool` pin runs the posture check in CI with `go run github.com/gopernicus/gopernicus/workshop/gopernicus@v0.10.3 guard --posture .`. A release older than v0.5.0 refuses `--posture` (unknown flag): the binary exits 2, and a `go run` invocation prints `exit status 2` and returns 1; treat any non-zero status as a broken invocation, never a pass.
 
 Exit codes: `0` clean, `1` findings, `2` for a missing or malformed `go.mod`, an unparsable Go file, or bad flags.
 

@@ -9,7 +9,7 @@ imports no pocket core and no example). Milestone of record:
 workshop-v2 scope brief (`.claude/plans/restructure/workshop-v2-brief.md`).
 
 ```sh
-go install github.com/gopernicus/gopernicus/workshop/gopernicus@v0.6.1
+go install github.com/gopernicus/gopernicus/workshop/gopernicus@v0.10.3
 gopernicus <command>
 # To exercise this checkout: go run . <command>
 ```
