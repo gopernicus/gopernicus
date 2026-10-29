@@ -35,6 +35,15 @@ const (
 	// that recorded none signs no claim; a delegated token carries the
 	// approving session's, as for tokenClaimAssurance.
 	tokenClaimMethods = "methods"
+	// tokenClaimMFAEnrollBy is native all's enrollment deadline (unix
+	// seconds), signed on a first-party token below AAL2 whose holder has no
+	// AAL2 factor. It is read on the first-party profile only.
+	tokenClaimMFAEnrollBy = "mfa_enroll_by"
+	// tokenClaimMFAEnrolled is true on a first-party token below AAL2 under
+	// native all whose holder holds an AAL2 factor, so the floor asks for a
+	// step-up rather than a refresh. It is read on the first-party profile
+	// only.
+	tokenClaimMFAEnrolled = "mfa_enrolled"
 )
 
 // firstPartyDelegationMarkers are the claims only a delegated token carries.
@@ -110,7 +119,9 @@ func (s *Service) verifyAccessClaims(raw string) (string, Credential, bool) {
 // exactly the configured iss and aud (SessionsConfig.Issuer/Audience) and no
 // other delegation claim; with neither configured it must carry no iss or aud.
 // Both profiles admit aal and methods under the same rules: an unknown value
-// refuses the token, an absent one reads AssuranceUnknown and no methods.
+// refuses the token, an absent one reads AssuranceUnknown and no methods. A
+// first-party token's mfa_enroll_by must be numeric and its mfa_enrolled true
+// or false, or the token is refused; a delegated token's are never read.
 func (s *Service) parseAccessClaims(claims map[string]any) (string, Credential, bool) {
 	userID, ok := claimString(claims[tokenClaimUserID])
 	if !ok {
@@ -141,6 +152,16 @@ func (s *Service) parseAccessClaims(claims map[string]any) (string, Credential, 
 		}
 		if !s.firstPartyIssuerMatches(claims) {
 			return "", Credential{}, false
+		}
+		if raw, present := claims[tokenClaimMFAEnrollBy]; present {
+			if cred.MFAEnrollBy, ok = claimExpiry(raw); !ok {
+				return "", Credential{}, false
+			}
+		}
+		if raw, present := claims[tokenClaimMFAEnrolled]; present {
+			if cred.MFAEnrolled, ok = raw.(bool); !ok {
+				return "", Credential{}, false
+			}
 		}
 		return userID, cred, true
 	}

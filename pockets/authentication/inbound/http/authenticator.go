@@ -13,6 +13,7 @@ import (
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
@@ -85,6 +86,18 @@ type Adapter struct {
 	// apiKeysExempt is MFAConfig.APIKeysExempt: an API key passes every MFA
 	// gate instead of the 403 mfa_credential_not_eligible.
 	apiKeysExempt bool
+	// enrollmentFloor runs native all's first-party enrollment floor in every
+	// RequirePrincipal without AllowMFAEnrollment().
+	enrollmentFloor bool
+	// mfaEnrollmentPath is where a Browser() floor denial of a cookie past its
+	// enrollment grace redirects: the TOTP enrollment page when TOTP pages are
+	// mounted and Methods admits totp, else the passkeys page under the same
+	// rule; empty answers JSON.
+	mfaEnrollmentPath string
+	// enrollmentDenials remembers the sessions that already recorded an
+	// enrollment-floor denial, per process, so a walled client retrying does
+	// not flood the audit rail.
+	enrollmentDenials *cacher.Memory
 }
 
 // authenticatorConfig holds the HTTP adapter's resolved policy and dependencies.

@@ -162,6 +162,9 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if err := validateRegistration(d); err != nil {
 		return nil, err
 	}
+	if !d.MFAEnrollment.Start.IsZero() && (d.MFAEnrollment.Grace <= 0 || (nilDependency(d.Passkey.RelyingParty) && nilDependency(d.TOTPConfig.Encrypter))) {
+		return nil, fmt.Errorf("authentication: MFAEnrollmentConfig needs a positive Grace and WithPasskeys or WithTOTP: %w", sdk.ErrInvalidInput)
+	}
 	if err := validateServiceAccountStatus(d); err != nil {
 		return nil, err
 	}

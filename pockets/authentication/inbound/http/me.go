@@ -2,6 +2,7 @@ package authenticationhttp
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -36,5 +37,34 @@ func (h *handlers) me(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONDomainError(w, err)
 		return
 	}
-	web.RespondJSONOK(w, newUserResponse(view.User, view.Email, view.EmailVerified))
+	out := meResponse{userResponse: newUserResponse(view.User, view.Email, view.EmailVerified)}
+	if cred, ok := h.svc.CurrentCredential(r.Context()); ok {
+		out.MFAEnrollment = newMFAEnrollmentResponse(cred)
+	}
+	web.RespondJSONOK(w, out)
+}
+
+// meResponse is the GET /auth/me body: the current-user contract plus, under
+// MFAConfig.Required all beside passkeys or TOTP, the caller's enrollment
+// window.
+type meResponse struct {
+	userResponse
+	MFAEnrollment *mfaEnrollmentResponse `json:"mfa_enrollment,omitempty"`
+}
+
+// mfaEnrollmentResponse is the caller's enrollment window in /auth/me and
+// /auth/methods: present only on a first-party session below AAL2 whose token
+// carries mfa_enroll_by, so an SPA can show the deadline before the 403.
+type mfaEnrollmentResponse struct {
+	Required bool   `json:"required"`
+	EnrollBy string `json:"enroll_by"`
+}
+
+// newMFAEnrollmentResponse renders cred's enrollment window, or nil when it
+// carries none.
+func newMFAEnrollmentResponse(cred Credential) *mfaEnrollmentResponse {
+	if cred.MFAEnrollBy.IsZero() {
+		return nil
+	}
+	return &mfaEnrollmentResponse{Required: true, EnrollBy: cred.MFAEnrollBy.UTC().Format(time.RFC3339)}
 }

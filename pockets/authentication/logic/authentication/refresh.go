@@ -121,13 +121,17 @@ func (s *Service) rotate(ctx context.Context, sess session.Session, currentHash 
 	if err != nil {
 		return TokenPair{}, err
 	}
+	enrollment, err := s.enrollmentDeadline(ctx, sess.UserID, sess.Authentication)
+	if err != nil {
+		return TokenPair{}, err
+	}
 	if err := s.rotateHash(ctx, sess.ID, currentHash, newHash); err != nil {
 		if errors.Is(err, session.ErrRotationConflict) {
 			return s.reResolve(ctx, sess, currentHash)
 		}
 		return TokenPair{}, err
 	}
-	access, expiresAt, err := s.signAccessToken(sess.UserID, sess.ID, sess.Authentication)
+	access, expiresAt, err := s.signAccessToken(sess.UserID, sess.ID, sess.Authentication, enrollment)
 	if err != nil {
 		return TokenPair{}, err
 	}
@@ -153,13 +157,17 @@ func (s *Service) grace(ctx context.Context, sess session.Session, previousHash 
 	if sess.PreviousUsed {
 		return s.reuse(ctx, sess) // branch 5
 	}
+	enrollment, err := s.enrollmentDeadline(ctx, sess.UserID, sess.Authentication)
+	if err != nil {
+		return TokenPair{}, err
+	}
 	if err := s.sessions.ConsumeGrace(ctx, sess.ID, previousHash); err != nil {
 		if errors.Is(err, session.ErrRotationConflict) {
 			return s.reuse(ctx, sess)
 		}
 		return TokenPair{}, err
 	}
-	access, expiresAt, err := s.signAccessToken(sess.UserID, sess.ID, sess.Authentication)
+	access, expiresAt, err := s.signAccessToken(sess.UserID, sess.ID, sess.Authentication, enrollment)
 	if err != nil {
 		return TokenPair{}, err
 	}

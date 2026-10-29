@@ -50,8 +50,11 @@ type handlers struct {
 	totp      totpService
 	totpViews TOTPViews
 	// machineMFA requires AAL2 on the machine lifecycle routes after the host's
-	// MachineGate (MFAConfig admins beside passkeys or TOTP).
+	// MachineGate (MFAConfig admins, or native all, beside passkeys or TOTP).
 	machineMFA bool
+	// oauth2MFA requires AAL2 on the OAuth2 authorize page (native all), so no
+	// session inside its enrollment grace approves a grant.
+	oauth2MFA bool
 	// globalRevoker drives the opt-in revoke-all route; nil leaves it unmounted.
 	globalRevoker globalSessionRevoker
 	// accountStatus is the service-account status, nil unless wired: the
@@ -112,6 +115,9 @@ type mountDeps struct {
 	// Live() to Stateless() (authentication.BrowserConfig.
 	// BundledRouteAuthLivenessFloorRelaxed).
 	LivenessFloorRelaxed bool
+	// EnrollmentFloor is native all: the OAuth2 authorize page and the machine
+	// lifecycle routes require AAL2 with no enrollment grace.
+	EnrollmentFloor bool
 	// Proxies logs the one production trusted-proxy warning; nil outside
 	// production.
 	Proxies *proxyPosture
@@ -215,19 +221,19 @@ type RouteAuthentication struct {
 // group when relaxed, keep the RequirePrincipal(Stateless()) floor.
 func (a RouteAuthentication) withDefaults(svc authService, relaxed bool) RouteAuthentication {
 	if a.OAuthLinkStart == nil {
-		a.OAuthLinkStart = svc.RequirePrincipal(Accept(CredentialAccessToken), FirstParty())
+		a.OAuthLinkStart = svc.RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), AllowMFAEnrollment())
 	}
 	if a.SessionSecurityReads == nil {
-		a.SessionSecurityReads = svc.RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Live())
+		a.SessionSecurityReads = svc.RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Live(), AllowMFAEnrollment())
 	}
 	if a.CSRFBootstrap == nil {
-		a.CSRFBootstrap = svc.RequirePrincipal(Live())
+		a.CSRFBootstrap = svc.RequirePrincipal(Live(), AllowMFAEnrollment())
 	}
 	if a.SessionHydration == nil {
-		a.SessionHydration = svc.RequirePrincipal(Live())
+		a.SessionHydration = svc.RequirePrincipal(Live(), AllowMFAEnrollment())
 	}
 	if a.CredentialManagement == nil {
-		a.CredentialManagement = svc.RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Live())
+		a.CredentialManagement = svc.RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Live(), AllowMFAEnrollment())
 	}
 	if a.MachineLifecycle == nil {
 		a.MachineLifecycle = svc.RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Live())
@@ -245,28 +251,34 @@ func (a RouteAuthentication) withDefaults(svc authService, relaxed bool) RouteAu
 			Transports(authlogic.TransportCookie),
 			Live(),
 			Browser(),
+			AllowMFAEnrollment(),
 		)
 	}
 	// Bundled authentication/account routes cannot become OAuth resource routes
 	// through a host override. Preserve the existing API-key policy seams while
 	// requiring verified first-party/key proof after every configured strategy.
+	// The enrollment surface's floors carry AllowMFAEnrollment() too: the
+	// floor runs in every RequirePrincipal, so the strategy's alone would not
+	// let an unenrolled session through.
 	stateless := svc.RequirePrincipal(Stateless())
-	live := stateless
+	statelessEnroll := svc.RequirePrincipal(Stateless(), AllowMFAEnrollment())
+	live, liveEnroll := stateless, statelessEnroll
 	if !relaxed {
 		live = svc.RequirePrincipal(Live())
+		liveEnroll = svc.RequirePrincipal(Live(), AllowMFAEnrollment())
 	}
 	protect := func(strategy, floor web.Middleware) web.Middleware {
 		return func(next http.Handler) http.Handler { return strategy(floor(next)) }
 	}
-	a.OAuthLinkStart = protect(a.OAuthLinkStart, stateless)
-	a.SessionSecurityReads = protect(a.SessionSecurityReads, live)
-	a.CSRFBootstrap = protect(a.CSRFBootstrap, stateless)
-	a.SessionHydration = protect(a.SessionHydration, live)
-	a.CredentialManagement = protect(a.CredentialManagement, live)
+	a.OAuthLinkStart = protect(a.OAuthLinkStart, statelessEnroll)
+	a.SessionSecurityReads = protect(a.SessionSecurityReads, liveEnroll)
+	a.CSRFBootstrap = protect(a.CSRFBootstrap, statelessEnroll)
+	a.SessionHydration = protect(a.SessionHydration, liveEnroll)
+	a.CredentialManagement = protect(a.CredentialManagement, liveEnroll)
 	a.MachineLifecycle = protect(a.MachineLifecycle, live)
 	a.UserAdministration = protect(a.UserAdministration, live)
 	a.Invitations = protect(a.Invitations, stateless)
-	a.BrowserAccount = protect(a.BrowserAccount, stateless)
+	a.BrowserAccount = protect(a.BrowserAccount, statelessEnroll)
 	return a
 }
 
@@ -296,7 +308,8 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	r = clientInfoRegistrar{inner: noStoreRegistrar{inner: r}, proxies: d.Proxies}
 	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, adminMFA: d.AdministrationMFA, eraser: d.Eraser, events: d.SecurityEvents, syncer: d.InvitationSync, claims: d.ClaimIdentifiers, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy,
 		passkeys: d.Passkeys, passkeyViews: d.PasskeyViews, totp: d.TOTP, totpViews: d.TOTPViews,
-		machineMFA:    d.AdministrationMFA && (d.Passkeys != nil || d.TOTP != nil),
+		machineMFA:    (d.AdministrationMFA || d.EnrollmentFloor) && (d.Passkeys != nil || d.TOTP != nil),
+		oauth2MFA:     d.EnrollmentFloor,
 		globalRevoker: d.GlobalRevoker, accountStatus: d.AccountStatus, keyFilter: d.KeyFilter, registration: d.Registration}
 	if d.OAuth2 != nil {
 		mountOAuth2(r, h)

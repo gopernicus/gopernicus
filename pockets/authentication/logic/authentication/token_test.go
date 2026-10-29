@@ -262,7 +262,7 @@ func TestIssueTokenRequireVerifiedEmailAllowsVerified(t *testing.T) {
 func TestAccessTokenAssuranceClaim(t *testing.T) {
 	h := newHarness(t, nil)
 	for level, want := range map[session.AssuranceLevel]bool{session.AssuranceAAL1: true, session.AssuranceAAL2: true, session.AssuranceUnknown: false} {
-		raw, _, err := h.svc.signAccessToken("u1", "s1", session.AuthenticationMetadata{Assurance: level})
+		raw, _, err := h.svc.signAccessToken("u1", "s1", session.AuthenticationMetadata{Assurance: level}, enrollmentSnapshot{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -334,7 +334,7 @@ func TestAccessTokenMethodsClaim(t *testing.T) {
 	code, _ := session.DescribeMethod(session.MethodTOTP)
 	raw, _, err := h.svc.signAccessToken("u1", "s1", session.AuthenticationMetadata{
 		Assurance: session.AssuranceAAL2, Methods: []session.AuthenticationMethod{pw, code, pw},
-	})
+	}, enrollmentSnapshot{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +348,7 @@ func TestAccessTokenMethodsClaim(t *testing.T) {
 	if _, cred, ok := (&Service{}).parseAccessClaims(claims); !ok || !slices.Equal(cred.Methods, []session.MethodKind{session.MethodPassword, session.MethodTOTP}) {
 		t.Fatalf("parsed methods = %v, %v", cred.Methods, ok)
 	}
-	bare, _, err := h.svc.signAccessToken("u1", "s1", session.AuthenticationMetadata{Assurance: session.AssuranceAAL1})
+	bare, _, err := h.svc.signAccessToken("u1", "s1", session.AuthenticationMetadata{Assurance: session.AssuranceAAL1}, enrollmentSnapshot{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,5 +390,62 @@ func TestAccessTokenMethodsClaim(t *testing.T) {
 		if _, cred, ok := h.svc.verifyAccessClaims(raw); !ok || !slices.Equal(cred.Methods, []session.MethodKind{session.MethodPassword}) {
 			t.Errorf("%s token methods = %v, want [password]", name, cred.Methods)
 		}
+	}
+}
+
+// TestAccessTokenEnrollmentClaims pins native all's two claims: signed from
+// the snapshot (mfa_enroll_by as unix seconds, mfa_enrolled true, at most one,
+// none for the zero snapshot), parsed on a first-party token into
+// Credential.MFAEnrollBy / MFAEnrolled, refused when malformed, and never read
+// on a delegated token.
+func TestAccessTokenEnrollmentClaims(t *testing.T) {
+	h := newHarness(t, nil)
+	aal1 := session.AuthenticationMetadata{Assurance: session.AssuranceAAL1}
+	by := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	for name, tc := range map[string]struct {
+		snapshot enrollmentSnapshot
+		enrollBy time.Time
+		enrolled bool
+	}{
+		"deadline": {enrollmentSnapshot{EnrollBy: by}, by, false},
+		"enrolled": {enrollmentSnapshot{Enrolled: true}, time.Time{}, true},
+		"none":     {enrollmentSnapshot{}, time.Time{}, false},
+	} {
+		raw, _, err := h.svc.signAccessToken("u1", "s1", aal1, tc.snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claims, err := h.signer.Verify(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, cred, ok := (&Service{}).parseAccessClaims(claims)
+		if !ok || !cred.MFAEnrollBy.Equal(tc.enrollBy) || cred.MFAEnrolled != tc.enrolled {
+			t.Errorf("%s: parsed enroll_by = %s enrolled = %v (%v), want %s %v", name, cred.MFAEnrollBy, cred.MFAEnrolled, ok, tc.enrollBy, tc.enrolled)
+		}
+		_, hasBy := claims[tokenClaimMFAEnrollBy]
+		_, hasEnrolled := claims[tokenClaimMFAEnrolled]
+		if hasBy && hasEnrolled {
+			t.Errorf("%s: both claims signed", name)
+		}
+	}
+	firstParty := func(name string, value any) map[string]any {
+		return map[string]any{"user_id": "u1", "session_id": "s1", "session_profile": "first_party", "aal": "aal1", name: value}
+	}
+	for _, bad := range []any{"1762344000", nil, true, []any{1}} {
+		if _, _, ok := (&Service{}).parseAccessClaims(firstParty(tokenClaimMFAEnrollBy, bad)); ok {
+			t.Errorf("first-party mfa_enroll_by %#v admitted", bad)
+		}
+	}
+	for _, bad := range []any{"true", 1, nil} {
+		if _, _, ok := (&Service{}).parseAccessClaims(firstParty(tokenClaimMFAEnrolled, bad)); ok {
+			t.Errorf("first-party mfa_enrolled %#v admitted", bad)
+		}
+	}
+	delegated := map[string]any{"user_id": "u1", "session_id": "s1", "session_profile": "delegated",
+		"exp": float64(time.Now().Add(time.Minute).Unix()), "iss": "https://as.example.test", "client_id": "client", "aud": "https://rs.example.test",
+		tokenClaimMFAEnrollBy: float64(by.Unix()), tokenClaimMFAEnrolled: true}
+	if _, cred, ok := (&Service{}).parseAccessClaims(delegated); !ok || !cred.MFAEnrollBy.IsZero() || cred.MFAEnrolled {
+		t.Errorf("a delegated token's enrollment claims were read: %s %v, %v", cred.MFAEnrollBy, cred.MFAEnrolled, ok)
 	}
 }

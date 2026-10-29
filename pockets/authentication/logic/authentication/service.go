@@ -285,6 +285,7 @@ type constructorConfig struct {
 	TOTP                    totp.Repository
 	TOTPConfig              TOTPConfig
 	MFAMethods              []MFAMethod
+	MFAEnrollment           MFAEnrollmentConfig
 	Registration            RegistrationMode
 	GlobalSessions          session.GlobalRevoker
 	ServiceAccountStatuses  serviceaccount.StatusRepository
@@ -459,6 +460,9 @@ type Service struct {
 	// mfaMethods is MFAConfig.Methods: the AAL2 sources the second-factor gate
 	// admits, empty for any.
 	mfaMethods []MFAMethod
+	// mfaEnrollment is native all's enrollment window; a zero Start signs no
+	// enrollment claim.
+	mfaEnrollment MFAEnrollmentConfig
 
 	// registration is IdentityConfig.Registration, normalized.
 	registration RegistrationMode
@@ -597,6 +601,7 @@ func newService(d constructorConfig) *Service {
 		totpEncrypter:      d.TOTPConfig.Encrypter,
 		totpIssuer:         d.TOTPConfig.Issuer,
 		mfaMethods:         slices.Clone(d.MFAMethods),
+		mfaEnrollment:      d.MFAEnrollment,
 		registration:       registration,
 		globalSessions:     d.GlobalSessions,
 		accountStatus:      serviceAccountStatus,
@@ -1223,11 +1228,15 @@ func (s *Service) mintSessionUntil(ctx context.Context, userID string, expectedA
 	}
 	sess.RefreshTokenHash = refreshHash
 	sess.Authentication = auth
+	enrollment, err := s.enrollmentDeadline(ctx, userID, auth)
+	if err != nil {
+		return TokenPair{}, session.Session{}, err
+	}
 	created, err := s.createSession(ctx, sess, expectedAuthRevision)
 	if err != nil {
 		return TokenPair{}, session.Session{}, err
 	}
-	access, accessExpiresAt, err := s.signAccessToken(userID, created.ID, created.Authentication)
+	access, accessExpiresAt, err := s.signAccessToken(userID, created.ID, created.Authentication, enrollment)
 	if err != nil {
 		return TokenPair{}, session.Session{}, err
 	}
@@ -1335,8 +1344,10 @@ func (s *Service) primaryAuthentication(kind session.MethodKind) session.Authent
 // the logout fallback. auth is the session row's authentication: its level is
 // signed as the aal claim and its method kinds as the methods claim; a row that
 // recorded none (a legacy empty assurance_level, no methods) signs neither, so
-// the token reads AssuranceUnknown and no methods.
-func (s *Service) signAccessToken(userID, sessionID string, auth session.AuthenticationMetadata) (string, time.Time, error) {
+// the token reads AssuranceUnknown and no methods. enrollment is the caller's
+// enrollmentDeadline snapshot, signed as mfa_enroll_by or mfa_enrolled; it
+// stays I/O-free.
+func (s *Service) signAccessToken(userID, sessionID string, auth session.AuthenticationMetadata, enrollment enrollmentSnapshot) (string, time.Time, error) {
 	expiresAt := s.now().Add(s.accessTTL)
 	claims := map[string]any{
 		tokenClaimUserID:    userID,
@@ -1355,11 +1366,65 @@ func (s *Service) signAccessToken(userID, sessionID string, auth session.Authent
 	if kinds := methodKinds(auth.Methods); len(kinds) > 0 {
 		claims[tokenClaimMethods] = kinds
 	}
+	switch {
+	case enrollment.Enrolled:
+		claims[tokenClaimMFAEnrolled] = true
+	case !enrollment.EnrollBy.IsZero():
+		claims[tokenClaimMFAEnrollBy] = enrollment.EnrollBy.Unix()
+	}
 	token, err := s.tokenSigner.Sign(claims, expiresAt)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("sign access token: %w", err)
 	}
 	return token, expiresAt, nil
+}
+
+// enrollmentSnapshot is what native all signs into a first-party access token
+// below AAL2: the instant the holder's enrollment grace closes (EnrollBy), or
+// Enrolled when the holder already holds an AAL2 factor. At most one is set;
+// the zero value signs neither.
+type enrollmentSnapshot struct {
+	EnrollBy time.Time
+	Enrolled bool
+}
+
+// enrollmentDeadline returns userID's enrollment snapshot under native all:
+// zero when the floor is off or auth is already AAL2; Enrolled when the user
+// holds an AAL2 factor (holdsAAL2Factor); otherwise EnrollBy =
+// max(Start, user.CreatedAt) + Grace, a zero CreatedAt counting from Start.
+// Callers run it BEFORE any session write, so a failure never strands a
+// consumed refresh slot; a factor or user read error is sdk.ErrUnavailable,
+// logged by error kind only, and a missing user is session.ErrUserNotActive.
+func (s *Service) enrollmentDeadline(ctx context.Context, userID string, auth session.AuthenticationMetadata) (enrollmentSnapshot, error) {
+	if s.mfaEnrollment.Start.IsZero() || auth.Assurance.AtLeast(session.AssuranceAAL2) {
+		return enrollmentSnapshot{}, nil
+	}
+	holds, err := s.holdsAAL2Factor(ctx, userID)
+	if err != nil {
+		return enrollmentSnapshot{}, s.enrollmentUnavailable(ctx, err)
+	}
+	if holds {
+		return enrollmentSnapshot{Enrolled: true}, nil
+	}
+	u, err := s.users.Get(ctx, userID)
+	if errors.Is(err, sdk.ErrNotFound) {
+		return enrollmentSnapshot{}, session.ErrUserNotActive
+	}
+	if err != nil {
+		return enrollmentSnapshot{}, s.enrollmentUnavailable(ctx, err)
+	}
+	from := s.mfaEnrollment.Start
+	if u.CreatedAt.After(from) {
+		from = u.CreatedAt
+	}
+	return enrollmentSnapshot{EnrollBy: from.Add(s.mfaEnrollment.Grace).UTC()}, nil
+}
+
+// enrollmentUnavailable logs a failed enrollment read by error kind only and
+// fails the mint closed.
+func (s *Service) enrollmentUnavailable(ctx context.Context, err error) error {
+	s.logger.WarnContext(ctx, "auth: reading the MFA enrollment state failed; the session was not minted", "warning", "mfa_enrollment_unavailable", "error_kind", ErrorKind(err))
+	return fmt.Errorf("authentication: MFA enrollment state: %w", sdk.ErrUnavailable)
 }
 
 // methodKinds lists the kinds of methods in order, each once.

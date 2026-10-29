@@ -1,6 +1,8 @@
 package authenticationhttp
 
 import (
+	"slices"
+
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
@@ -40,6 +42,13 @@ func PrincipalStrategy(opts ...PrincipalOption) RoutePrincipalStrategy {
 // which fails closed during a provider outage even under RevocationFailOpen).
 // OAuthLinkStart, CSRFBootstrap, Invitations and BrowserAccount keep a
 // Stateless() floor, so their override owns the tier.
+//
+// Under MFAConfig.Required all beside passkeys or TOTP, OAuthLinkStart,
+// SessionSecurityReads, CSRFBootstrap, SessionHydration, CredentialManagement
+// and BrowserAccount are the enrollment surface: their defaults, their floors
+// and any override carry AllowMFAEnrollment(), so a session past its enrollment
+// grace can still enrol. MachineLifecycle, UserAdministration and Invitations
+// do not.
 //
 // An override also owns the inbound context contract of its surface. Handlers
 // that read CurrentUser — and the session-bound credential/step-up handlers that
@@ -88,11 +97,17 @@ type BundledRouteAuthentication struct {
 // left the slot unset — which Mount reads as "keep this group's audited
 // default". An explicit PrincipalStrategy() with no options is CONFIGURED and
 // resolves to the primitive defaults, which is why the configured bit exists.
-func (r RoutePrincipalStrategy) middleware(svc *Adapter) web.Middleware {
+// enrollment appends AllowMFAEnrollment() for the enrollment surface's groups,
+// so an override there inherits it.
+func (r RoutePrincipalStrategy) middleware(svc *Adapter, enrollment bool) web.Middleware {
 	if !r.configured {
 		return nil
 	}
-	return svc.RequirePrincipal(r.opts...)
+	opts := r.opts
+	if enrollment {
+		opts = append(slices.Clip(opts), AllowMFAEnrollment())
+	}
+	return svc.RequirePrincipal(opts...)
 }
 
 // resolveBundledRouteAuth freezes WithRouteAuthentication into concrete
@@ -100,14 +115,14 @@ func (r RoutePrincipalStrategy) middleware(svc *Adapter) web.Middleware {
 // contract: a host names a posture through WithRouteAuthentication).
 func resolveBundledRouteAuth(cfg BundledRouteAuthentication, svc *Adapter) RouteAuthentication {
 	return RouteAuthentication{
-		OAuthLinkStart:       cfg.OAuthLinkStart.middleware(svc),
-		SessionSecurityReads: cfg.SessionSecurityReads.middleware(svc),
-		CSRFBootstrap:        cfg.CSRFBootstrap.middleware(svc),
-		SessionHydration:     cfg.SessionHydration.middleware(svc),
-		CredentialManagement: cfg.CredentialManagement.middleware(svc),
-		MachineLifecycle:     cfg.MachineLifecycle.middleware(svc),
-		UserAdministration:   cfg.UserAdministration.middleware(svc),
-		Invitations:          cfg.Invitations.middleware(svc),
-		BrowserAccount:       cfg.BrowserAccount.middleware(svc),
+		OAuthLinkStart:       cfg.OAuthLinkStart.middleware(svc, true),
+		SessionSecurityReads: cfg.SessionSecurityReads.middleware(svc, true),
+		CSRFBootstrap:        cfg.CSRFBootstrap.middleware(svc, true),
+		SessionHydration:     cfg.SessionHydration.middleware(svc, true),
+		CredentialManagement: cfg.CredentialManagement.middleware(svc, true),
+		MachineLifecycle:     cfg.MachineLifecycle.middleware(svc, false),
+		UserAdministration:   cfg.UserAdministration.middleware(svc, false),
+		Invitations:          cfg.Invitations.middleware(svc, false),
+		BrowserAccount:       cfg.BrowserAccount.middleware(svc, true),
 	}
 }

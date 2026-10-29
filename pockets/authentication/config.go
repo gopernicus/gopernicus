@@ -44,8 +44,12 @@ const (
 	// on the machine lifecycle routes after MachineRoutesGate; an API key is
 	// refused there unless MFAConfig.APIKeysExempt.
 	MFARequiredAdmins MFARequirement = "admins"
-	// MFARequiredAll requires AAL2 of every external-token user: New sets
-	// ExternalProvider.RequireMFA on a copy of every External provider.
+	// MFARequiredAll requires AAL2 of every user. New sets
+	// ExternalProvider.RequireMFA on a copy of every External provider; beside
+	// WithPasskeys or WithTOTP (native all) it also refuses every first-party
+	// session below AAL2 on every RequirePrincipal route but the enrollment
+	// surface once its holder's enrollment grace closes, and gates the admin,
+	// machine and OAuth2 authorize routes at AAL2 with no grace.
 	MFARequiredAll MFARequirement = "all"
 )
 
@@ -60,6 +64,14 @@ const (
 	// RegistrationClosed creates no account: the roster is frozen.
 	RegistrationClosed = authlogic.RegistrationClosed
 )
+
+// DefaultMFAEnrollmentGrace is the MFAConfig.EnrollmentGrace a zero value
+// resolves to: seven days.
+const DefaultMFAEnrollmentGrace = 7 * 24 * time.Hour
+
+// MaxMFAEnrollmentGrace is the longest MFAConfig.EnrollmentGrace New admits:
+// thirty days.
+const MaxMFAEnrollmentGrace = 30 * 24 * time.Hour
 
 // DefaultAPIKeyMaxTTL is the APIKeyMaxTTL production resolves a zero value to:
 // one year. Ninety days is the recommended setting for hosts that rotate.
@@ -176,6 +188,8 @@ type constructorConfig struct {
 	SecurityEventsRoute           bool
 	MFARequired                   MFARequirement
 	MFAMethods                    []MFAMethod
+	MFAEnrollmentStart            time.Time
+	MFAEnrollmentGrace            time.Duration
 	// mfaRequiredSource records whether MFARequired came from configuration or
 	// the zero value's resolution; New sets it.
 	mfaRequiredSource string
@@ -1182,10 +1196,14 @@ type MFAMethod = authlogic.MFAMethod
 // Admins also needs AdministrationConfig.UserAdminCheck and gates
 // /auth/admin/users* — plus the machine lifecycle routes beside passkeys or
 // TOTP — only: it does NOT gate role routes, cms admin routes or host admin
-// pages, which add RequireMFA() themselves. All needs WithExternal and refuses
-// native password, passwordless, OAuth and passkey login, and is refused beside
-// WithPasskeys or WithTOTP: native all is a follow-on (s4c2-native-all). The
-// zero Required resolves as MFARequiredDefault documents; an unknown one is
+// pages, which add RequireMFA() themselves. All without WithPasskeys or WithTOTP
+// needs WithExternal and refuses native password, passwordless and OAuth login.
+// All beside WithPasskeys or WithTOTP (native all) admits native login: every
+// first-party session below AAL2 may use the app until its holder's enrollment
+// grace closes — max(EnrollmentStart, the user's creation) + EnrollmentGrace —
+// and is then refused (403 mfa_enrollment_required) on every RequirePrincipal
+// route but the enrollment surface; a user who holds a second factor is asked
+// to step up at once. The zero Required resolves as MFARequiredDefault documents; an unknown one is
 // sdk.ErrInvalidInput. It is a wiring literal, not an env knob.
 type MFAConfig struct {
 	Required MFARequirement
@@ -1197,6 +1215,17 @@ type MFAConfig struct {
 	// minted before the methods claim existed has no source and is denied under
 	// a non-empty Methods until it refreshes.
 	Methods []MFAMethod
+	// EnrollmentStart is when native all took effect: no user's enrollment
+	// grace closes before EnrollmentStart + EnrollmentGrace. It is required
+	// (ErrMFAEnrollmentStartRequired) under native all and read nowhere else.
+	// Keep it a code literal: moving it later reopens the window for every
+	// unenrolled user, moving it earlier closes it.
+	EnrollmentStart time.Time
+	// EnrollmentGrace is how long a user without a second factor may use the
+	// app at AAL1 under native all, counted from the later of EnrollmentStart
+	// and the user's creation. Zero selects DefaultMFAEnrollmentGrace; negative
+	// or above MaxMFAEnrollmentGrace is ErrMFAEnrollmentGraceInvalid.
+	EnrollmentGrace time.Duration
 	// APIKeysExempt lets an API key pass every MFA gate — RequireMFA(), the
 	// admin and the machine gates — as it did before S4d. By default a key at
 	// one is refused with a 403 mfa_credential_not_eligible and no challenge
@@ -1252,6 +1281,8 @@ func WithMFA(value MFAConfig) Option {
 		c.MFARequired = value.Required
 		c.MFAMethods = slices.Clone(methods)
 		c.MFAAPIKeysExempt = value.APIKeysExempt
+		c.MFAEnrollmentStart = value.EnrollmentStart
+		c.MFAEnrollmentGrace = value.EnrollmentGrace
 	}
 }
 

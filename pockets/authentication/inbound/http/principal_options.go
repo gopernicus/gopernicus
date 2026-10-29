@@ -44,6 +44,7 @@ type principalSet struct {
 	audiences          []string
 	delegatedAudiences []string
 	assurances         []assurance
+	allowUnenrolled    bool
 }
 
 // assurance is one assurance option. RequireMFA (mfa) runs the adapter's one
@@ -314,6 +315,17 @@ func withAssurance(check func(context.Context, Credential) error) PrincipalOptio
 // service outage still answers the JSON 503, never the redirect.
 func Browser() PrincipalOption {
 	return func(set *principalSet) { set.browser = true }
+}
+
+// AllowMFAEnrollment marks a route a user may reach while enrolling a second
+// factor under MFAConfig.Required all beside passkeys or TOTP: the first-party
+// enrollment floor does not run on it. The bundled enrollment surface carries
+// it — credential management, the session-security reads, /auth/me, /auth/csrf,
+// the browser account pages, the OAuth link start and /auth/sessions; a host
+// adds it to its own enrollment or SPA-shell routes. It never relaxes
+// RequireMFA, the admin, machine or OAuth2 authorize gates.
+func AllowMFAEnrollment() PrincipalOption {
+	return func(set *principalSet) { set.allowUnenrolled = true }
 }
 
 // Optional switches the OUTERMOST authenticator from deny-by-absence to

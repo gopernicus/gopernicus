@@ -28,6 +28,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/authentication/webauthn"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/authentication/webauthn/webauthntest"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -192,6 +193,10 @@ type passkeyOptions struct {
 	totpViews  *captureTOTPViews
 	mfaMethods []authlogic.MFAMethod
 	limitsAuth authlogic.AuthenticationLimits
+	// enrollment turns on native all's enrollment floor with this window, the
+	// way New wires it; routeAuth is a host BundledRouteAuth override.
+	enrollment *authlogic.MFAEnrollmentConfig
+	routeAuth  BundledRouteAuthentication
 }
 
 type passkeyFixture struct {
@@ -261,10 +266,25 @@ func newPasskeyFixture(t *testing.T, o passkeyOptions) *passkeyFixture {
 	}
 	fixture.AuthenticationLimits = o.limitsAuth
 	fixture.MFAMethods = o.mfaMethods
+	if o.enrollment != nil {
+		fixture.MFAEnrollment = *o.enrollment
+	}
 	svc := newServiceWithFakes(fixture)
 	svc.Adapter.mfaMethods = o.mfaMethods
 	deps := mountDeps{Auth: svc, RouteLimits: o.limits, UserAdminCheck: o.adminCheck, AdministrationMFA: o.adminMFA,
-		Mutation: MutationSecurity{AllowedOrigins: []string{pkOrigin}, SessionCookieName: svc.SessionCookieName()}}
+		Mutation:  MutationSecurity{AllowedOrigins: []string{pkOrigin}, SessionCookieName: svc.SessionCookieName()},
+		RouteAuth: resolveBundledRouteAuth(o.routeAuth, svc.Adapter)}
+	if o.enrollment != nil {
+		svc.Adapter.enrollmentFloor = true
+		svc.Adapter.enrollmentDenials = cacher.NewMemory()
+		deps.EnrollmentFloor = true
+		switch {
+		case o.totpViews != nil:
+			svc.Adapter.mfaEnrollmentPath = svc.Adapter.pagePath(totpEnrollPagePath)
+		case o.views != nil:
+			svc.Adapter.mfaEnrollmentPath = svc.Adapter.pagePath(passkeysPagePath)
+		}
+	}
 	if svc.Service.PasskeysEnabled() {
 		deps.Passkeys = svc.Service
 	}

@@ -108,6 +108,16 @@ type Credential struct {
 	// Assurance; an external token carries session.MethodExternal. API keys
 	// leave it empty.
 	Methods []session.MethodKind
+	// MFAEnrollBy is when the holder's enrollment grace closes under
+	// MFAConfig.Required all beside passkeys or TOTP: a first-party access
+	// token below AAL2 whose holder holds no AAL2 factor carries it from the
+	// signed mfa_enroll_by claim. Every other credential — AAL2, enrolled,
+	// delegated, an API key, an external token, the floor off — leaves it zero.
+	MFAEnrollBy time.Time
+	// MFAEnrolled reports, under the same policy, a first-party access token
+	// below AAL2 whose holder holds an AAL2 factor (the signed mfa_enrolled
+	// claim): the enrollment floor asks it to step up.
+	MFAEnrolled bool
 }
 
 // The named helpers below are one-line pre-compositions of RequirePrincipal, so

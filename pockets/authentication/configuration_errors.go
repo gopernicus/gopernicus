@@ -282,3 +282,15 @@ var (
 	// is never probed.
 	ErrDelegatedAssuranceSchemaMissing = oauth2.ErrDelegatedAssuranceSchemaMissing
 )
+
+// The S4c part 2 native-all sentinels: MFAConfig.Required all beside
+// WithPasskeys or WithTOTP. They are refused in every mode.
+var (
+	// ErrMFAEnrollmentStartRequired is returned by New when MFAConfig.Required
+	// is all beside WithPasskeys or WithTOTP and MFAConfig.EnrollmentStart is
+	// zero: the enrollment grace has no start.
+	ErrMFAEnrollmentStartRequired = errors.New("auth: MFAConfig.EnrollmentStart is required when Required is all beside WithPasskeys or WithTOTP")
+	// ErrMFAEnrollmentGraceInvalid is returned by New when
+	// MFAConfig.EnrollmentGrace is negative or above MaxMFAEnrollmentGrace.
+	ErrMFAEnrollmentGraceInvalid = errors.New("auth: MFAConfig.EnrollmentGrace must be between zero (DefaultMFAEnrollmentGrace) and MaxMFAEnrollmentGrace")
+)
