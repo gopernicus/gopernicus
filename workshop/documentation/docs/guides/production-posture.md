@@ -334,6 +334,38 @@ default cost; a host that sets only the single key variables sees one new INFO l
   example 20 an hour on a shared limiter). `guard --posture` gains
   no rule.
 
+**Added by S4d part 4** (authentication v0.37.0, sdk v0.24.0, firebase v0.3.0, stores pgx
+v0.19.0 / Turso v0.18.0; SOC 2 slice S4d part 4). Delegated assurance and asserted
+authentication time. Both flags are host opt-in and default off; the one unconditional change
+is that v0.37.0 verifiers admit `aal`/`methods` on delegated tokens.
+
+| Module | Refuses | Sentinel | Acknowledgement |
+|---|---|---|---|
+| authentication (all modes) | `OAuth2Config.DelegatedAssurance` on a `Repositories.OAuth2` without `oauth2.CodeAuthenticationRepository`; set with migration 0030 absent (bounded probe) | `ErrDelegatedAssuranceRequires`; `ErrDelegatedAssuranceSchemaMissing`, naming `0030_oauth_code_authentication.sql`; any other probe failure `sdk.ErrUnavailable` | none — repin the store (pgx v0.19.0 / Turso v0.18.0) and apply 0030 pre-boot, or leave it unset (the columns are then never read) |
+| authentication (all modes) | `ExternalProvider.RequireAuthenticationTime` with a zero `MaxAuthenticationAge` | `sdk.ErrInvalidInput` | none — set a bound, or leave the flag off |
+
+- **Delegated assurance.** With `DelegatedAssurance` an MCP grant carries the approving
+  session's `aal`/`methods`, so a grant approved at AAL2 passes `RequireMFA()` on a route that
+  admits its audience; the bundled admin and machine groups still refuse every delegated token
+  at admission. Boot logs `auth: oauth2 delegated_assurance=on|off`. Turn it on only in the
+  order of *Operations runbooks*, "Enable delegated assurance": every process that verifies
+  delegated tokens on v0.37.0 or later first, or a flag-on issuer beside an older verifier 401s
+  delegated routes.
+- **A delegated AAL2 is fixed at approval.** Refresh never re-reads it and exchange never
+  raises it, so it lives as long as the grant, `OAuth2Config.Server.SessionTTL` (thirty days by
+  default). There is no separate age bound yet; shorten `SessionTTL` if thirty days of AAL2
+  from one consent is too long.
+- **Asserted authentication time.** `RequireAuthenticationTime` (production-baseline:
+  `IDP_REQUIRE_AUTHENTICATION_TIME`) makes `MaxAuthenticationAge` a sign-in bound: a token
+  whose time is only the `iat` fallback is 401, one `external_subject_denied
+  reason=authenticated_at_unasserted provider=<name>` row per token. The provider lifetime
+  line gains `authentication_time=asserted_required|any`. Firebase always asserts `auth_time`;
+  an OIDC issuer that does not (a Google ID token without `max_age`) denies every token under
+  the flag. `FreshAuth` still accepts the `iat` fallback.
+- **Migration 0030 and P9.** A `--posture` host that bumps the pgx pin to v0.19.0 copies 0030
+  into its ledger even with the flag off (production-baseline: `0036`). `guard --posture`
+  gains no rule.
+
 ## Retention (S3)
 
 Every row class the pockets write has an owner-set lifetime, each disposal is bounded, and the
@@ -562,12 +594,13 @@ the zero value: safe methods skip the session read for first-party tokens.
 | Password change, reset, set or remove (revokes every session and grant) | immediate | up to `AccessTokenTTL` | immediate |
 | Refresh-token reuse detected | the session is burned at once; unconditional WARN even with no audit rail | — | — |
 | API key revoked | immediate (every API-key authentication reads the row) | immediate | immediate |
-| External identity provider revokes or disables the user | mutations re-check per the provider's revocation checker; providers without one are not re-checked | up to the token's `exp`, or `MaxAuthenticationAge` past the holder's `auth_time` when the provider sets one | per route |
+| External identity provider revokes or disables the user | mutations re-check per the provider's revocation checker; providers without one are not re-checked | up to the token's `exp`, or `MaxAuthenticationAge` past the holder's `auth_time` when the provider sets one (an `iat`-only token is refused outright under `RequireAuthenticationTime`, v0.37.0) | per route |
 | Local deactivation of an external-provider user | immediate on every request (`users.Get` is never cached) | immediate | immediate |
 | Idle expiry (`SessionsConfig.IdleTimeout`, first-party sessions; authentication v0.32.0) | the refresh token is dead at its next refresh (row deleted, `session_idle_expired`); a session rotated before idle was wired is not judged until its first wired refresh stamps it | up to `AccessTokenTTL` for an outstanding access JWT | immediate (the floored sensitive groups included) |
 | Access-token window (`AccessTokenTTL`) | bounded by `RefreshTTL` (a longer value refuses boot); production WARNs above 1 h | — | — |
 | A `BundledRouteAuth` override lowered to `Stateless()` / `LiveOnMutation()` on a sensitive group | — | — | the `Live()` floor holds: immediate, unless `BundledRouteAuthLivenessFloorRelaxed` |
 | External token past `ExternalProvider.MaxAuthenticationAge` | denied on every request (+ 60 s leeway) | denied | denied |
+| Delegated grant approved at AAL2 (`OAuth2Config.DelegatedAssurance`, v0.37.0) | the level is fixed at approval and never re-read; revoking the grant ends it | AAL2 lives up to `OAuth2Config.Server.SessionTTL` (thirty days by default) | the same; liveness ends it at revoke |
 
 `RevokeAllSessions` (authentication v0.31.0) ends every session for every user at once: refresh,
 `Live()` routes, step-up grants and pending links are dead immediately, an outstanding access JWT

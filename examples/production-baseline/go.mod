@@ -7,11 +7,11 @@ require (
 	github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt v0.4.0
 	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.17.0
 	github.com/gopernicus/gopernicus/pockets v0.1.0
-	github.com/gopernicus/gopernicus/pockets/authentication v0.36.0
-	github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx v0.18.0
+	github.com/gopernicus/gopernicus/pockets/authentication v0.37.0
+	github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx v0.19.0
 	github.com/gopernicus/gopernicus/pockets/authorization v0.34.0
 	github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx v0.24.0
-	github.com/gopernicus/gopernicus/sdk v0.23.0
+	github.com/gopernicus/gopernicus/sdk v0.24.0
 )
 
 require (

@@ -58,6 +58,17 @@ func registerMFADemoRoutes(router *web.WebHandler, authentication *authenticatio
 		authenticationhttp.Live(), authenticationhttp.Browser(), authenticationhttp.RequireMFA()))
 }
 
+// registerOAuth2MFADemoRoute mounts GET /demo/oauth2/mfa, the delegated
+// assurance probe: only an access token issued for the MCP demo resource, over
+// the Authorization header, at AAL2. A grant approved from an AAL2 session
+// carries aal2 (OAuth2Config.DelegatedAssurance) and passes; an AAL1 grant
+// gets the RFC 9470 401.
+func registerOAuth2MFADemoRoute(router *web.WebHandler, authentication *authenticationhttp.Adapter, credentials *authlogic.Service, mcpResource string) {
+	router.Handle("GET", "/demo/oauth2/mfa", demoAssurance(credentials), authentication.RequirePrincipal(
+		authenticationhttp.Accept(authenticationhttp.CredentialAccessToken), authenticationhttp.Audience(mcpResource),
+		authenticationhttp.Transports(authenticationhttp.TransportHeader), authenticationhttp.RequireMFA()))
+}
+
 // demoAssurance echoes the admitted credential's kind and assurance.
 func demoAssurance(credentials *authlogic.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

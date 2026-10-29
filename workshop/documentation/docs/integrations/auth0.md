@@ -29,6 +29,9 @@ provider := sdkauth.NewOIDC(issuer, verifier, auth0.Profile(domain))
   otherwise they are opaque and cannot be verified.
 - Access tokens carry email and name only when an Auth0 Action adds them
   (usually a namespaced claim the host maps by copying the `Profile`).
+- **`auth_time` is not guaranteed.** Under `ExternalProvider.RequireAuthenticationTime`
+  (authentication v0.37.0) a token without it is denied `authenticated_at_unasserted`;
+  request it with `max_age` on the sign-in before setting the flag.
 - **Header-only** and **no revocation facts**: Auth0 has no API for an
   application session cookie or for revoking access tokens.
 

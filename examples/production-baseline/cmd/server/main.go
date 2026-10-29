@@ -104,8 +104,13 @@ type sessionRevocationConfig struct {
 // signed in at the provider (ExternalProvider.MaxAuthenticationAge, checked on
 // every request): the provider's own session survives a local revoke, so this
 // is the cap on it. Zero is unbounded (production then WARNs).
+// RequireAuthenticationTime (ExternalProvider.RequireAuthenticationTime) makes
+// that bound a sign-in bound: a token without auth_time is 401
+// authenticated_at_unasserted instead of being aged by its iat. True with a zero
+// bound refuses boot.
 type authenticationAgeConfig struct {
-	MaxAuthenticationAge time.Duration `env:"IDP_MAX_AUTHENTICATION_AGE" default:"12h"`
+	MaxAuthenticationAge      time.Duration `env:"IDP_MAX_AUTHENTICATION_AGE" default:"12h"`
+	RequireAuthenticationTime bool          `env:"IDP_REQUIRE_AUTHENTICATION_TIME" default:"false"`
 }
 
 // composition is what the pockets are built from once the keys, the server
@@ -124,6 +129,8 @@ type composition struct {
 	provider             sdkauth.Provider
 	globalRevokeRoute    bool
 	maxAuthenticationAge time.Duration
+	// requireAuthenticationTime is IDP_REQUIRE_AUTHENTICATION_TIME.
+	requireAuthenticationTime bool
 }
 
 // auditArchive is the sink the maintenance pass archives each security-event
@@ -225,18 +232,19 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 		return err
 	}
 	hosted, err := mount(router, composition{
-		mode:                 mode,
-		log:                  log,
-		origin:               srv.Origin(),
-		keys:                 keys,
-		sessionCookie:        authenticationhttp.CookieConfig{Secure: true},
-		limiter:              limiter,
-		archive:              archive,
-		authenticationRepos:  authenticationRepos,
-		authorizationRepos:   authorizationRepos,
-		provider:             provider,
-		globalRevokeRoute:    revocation.Route,
-		maxAuthenticationAge: age.MaxAuthenticationAge,
+		mode:                      mode,
+		log:                       log,
+		origin:                    srv.Origin(),
+		keys:                      keys,
+		sessionCookie:             authenticationhttp.CookieConfig{Secure: true},
+		limiter:                   limiter,
+		archive:                   archive,
+		authenticationRepos:       authenticationRepos,
+		authorizationRepos:        authorizationRepos,
+		provider:                  provider,
+		globalRevokeRoute:         revocation.Route,
+		maxAuthenticationAge:      age.MaxAuthenticationAge,
+		requireAuthenticationTime: age.RequireAuthenticationTime,
 	})
 	if err != nil {
 		return err
@@ -407,6 +415,7 @@ func mount(router *web.WebHandler, c composition) (mounted, error) {
 			ProvisionOnFirstVerification: true,
 			RequireVerifiedEmail:         true,
 			MaxAuthenticationAge:         c.maxAuthenticationAge,
+			RequireAuthenticationTime:    c.requireAuthenticationTime,
 		}}}),
 		authentication.WithAdministration(authentication.AdministrationConfig{UserAdminCheck: admins.check, UserErasureRoute: true, BeforeErase: admins.beforeErase, SecurityEventsRoute: true, GlobalSessionRevocationRoute: c.globalRevokeRoute}),
 		authentication.WithMFA(authentication.MFAConfig{Required: authentication.MFARequiredAdmins}),

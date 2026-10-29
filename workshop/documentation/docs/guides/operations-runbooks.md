@@ -139,6 +139,51 @@ pgx opens with `SET LOCAL lock_timeout = '5s'`. Behind a long reader it fails af
 Turso the `ALTER` briefly holds the database write lock. The only supported manual write to
 the new column is the NULL reset above.
 
+## Enable delegated assurance
+
+Authentication v0.37.0, stores pgx v0.19.0 / Turso v0.18.0 (SOC 2 S4d part 4). With
+`OAuth2Config.DelegatedAssurance` an MCP grant carries the approving session's `aal`/`methods`,
+so a grant approved at AAL2 passes `RequireMFA()` on a route that admits its audience. The order
+matters: a flag-on issuer beside an older verifier 401s delegated routes.
+
+1. **Every verifier on v0.37.0 or later.** Every process that verifies delegated tokens runs
+   authentication v0.37.0 or later before the flag moves: the issuing binary, and any separate
+   resource server or sidecar that parses those tokens rather than introspecting them. An older
+   verifier refuses a delegated token carrying `aal`. Confirm there is no such process before
+   treating this step as one deploy.
+2. **Apply migration 0030** (`0030_oauth_code_authentication.sql`: three nullable columns on
+   `oauth_authorization_codes`, NULL on every existing row; the baseline ledger copy is 0036)
+   with `make migrate`, pre-boot. On pgx it opens with `SET LOCAL lock_timeout = '5s'`; on a
+   lock timeout re-run `make migrate` (the file is idempotent). A store that does not implement
+   `oauth2.CodeAuthenticationRepository` cannot take the flag.
+3. **Set the flag** (`OAuth2Config{DelegatedAssurance: true}`, a literal in `cmd`) and roll the
+   fleet. Boot refuses without the interface (`ErrDelegatedAssuranceRequires`) or without 0030
+   (`ErrDelegatedAssuranceSchemaMissing`, naming the file), and logs
+   `auth: oauth2 delegated_assurance=on`. During the roll a code approved on a flag-on instance
+   and redeemed on a flag-off one (or the reverse) carries no level: it reads
+   `AssuranceUnknown` and fails closed.
+4. **Re-consent.** Grants approved before the flag carry no level until the user connects
+   again from a session at the level the route needs. There is no bulk tool; a user who must
+   reach an AAL2 route disconnects and reconnects after stepping up.
+
+- **Verify:** introspect a new grant's access token (`POST /auth/oauth2/introspect`, the
+  confidential client): it reports `aal` and `methods`. A token from an AAL2 approval passes
+  the `RequireMFA()` route; one from an AAL1 approval gets 401 with the RFC 9470
+  `insufficient_user_authentication` challenge and one `mfa_required_denied reason=assurance`
+  row.
+- **What it does not change:** the bundled admin and machine groups name no audience, so they
+  refuse every delegated token at admission, AAL2 or not.
+- **A delegated AAL2 is fixed at approval.** Refresh never re-reads the level and exchange never
+  raises it, so AAL2 lives as long as the grant, `OAuth2Config.Server.SessionTTL` (thirty days by
+  default), however long ago the person stepped up. There is no separate age bound yet; to
+  shorten the window, shorten `SessionTTL` or revoke the grant (`/auth/sessions`).
+
+**Rollback.** Turn the flag off and roll the fleet; signing is gated on the flag, so no new
+token carries a level. Wait one `AccessTTL` (five minutes by default) so every token that
+carries one has expired, then downgrade below v0.37.0. Downgrading with the flag still on, or
+before the wait, 401s delegated routes for up to `AccessTTL`, because an older verifier refuses
+the `aal` claim. Migration 0030 stays: its columns are never read with the flag off.
+
 ## Move a PostgreSQL server from 17 to 18
 
 pgxdb v0.17.0 and the pgx store tags that pin it require PostgreSQL 18: `RunMigrations`
