@@ -25,7 +25,12 @@ migrate:
 
 # bootstrap grants the global admin role to SUBJECT_ID, the local user id
 # provisioned at that person's first provider login (README, "The first admin").
-# Rerunning it is safe.
+# Rerunning it is safe. Run it as the runtime role, never the owner: in
+# production the authorization store refuses a role that owns its audit tables
+# (README, "Two roles"). It reads DB_* like the server; with two roles, pass the
+# runtime role's credential in the process environment, which .env never
+# overrides:
+#   DB_USER=baseline_app DB_PASSWORD=… make bootstrap SUBJECT_ID=<user_id>
 bootstrap:
 	APP_RUNTIME_MODE=development go run ./cmd/bootstrap -subject-type user -subject-id "$(SUBJECT_ID)"
 

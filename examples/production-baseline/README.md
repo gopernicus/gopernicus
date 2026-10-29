@@ -234,6 +234,12 @@ make bootstrap SUBJECT_ID=<user_id>
 #   audit event <event_id> at <time>
 ```
 
+`make bootstrap` connects with the `DB_*` settings in `.env`, which in this
+single-role walk-through are the docker superuser's. With [two
+roles](#two-roles), give it the runtime role's credential in the process
+environment, which `.env` never overrides:
+`DB_USER=baseline_app DB_PASSWORD=… make bootstrap SUBJECT_ID=<user_id>`.
+
 The command writes through the authorization pocket over the same recording
 store, under the same runtime mode as the server, so the grant is in the
 change history (`iam_audit`, `system_source = bootstrap`, reason `first platform
@@ -278,14 +284,17 @@ acknowledgement.
 ## Two roles
 
 The runner and the server connect as different roles. The runner (`make
-migrate`, `cmd/bootstrap`) is the **owner**: it owns the schema, every table and
-sequence, the trigger functions and the rail's definer function. Make it
-`NOSUPERUSER` — the docker image's `postgres` is a superuser, and the boot
-probe reports a superuser-owned definer function inoperative (a production
-WARN, `definer_function=inoperative`). The server connects as
-**`baseline_app`**, a runtime role with data access only. Create both with SQL,
-never a provider console, and **before** the first migration, so the default
-privileges cover every table the ledger creates:
+migrate`) is the **owner**: it owns the schema, every table and sequence, the
+trigger functions and the rail's definer function. Make it `NOSUPERUSER` — the
+docker image's `postgres` is a superuser, and the boot probe reports a
+superuser-owned definer function inoperative (a production WARN,
+`definer_function=inoperative`). The server and `cmd/bootstrap` connect as
+**`baseline_app`**, a runtime role with data access only: bootstrap opens the
+same authorization pgx store as the server, whose boot probe refuses in
+production a role that owns `iam_audit` or `iam_operations`. Only the runner
+holds the owner credential. Create both with SQL, never a provider console, and
+**before** the first migration, so the default privileges cover every table the
+ledger creates:
 
 ```sql
 -- as the cluster's superuser (postgres in docker), once
@@ -542,13 +551,16 @@ the boot before anything is served, in this order:
    `IDP_JWKS_URL` (empty runs OIDC discovery) for the real provider.
 
 After the first person signs in at the provider, grant them the global `admin`
-role with the same environment, as the owner:
+role with the same environment, as the runtime role:
 
 ```sh
-APP_RUNTIME_MODE=production go run ./cmd/bootstrap -subject-type user -subject-id <user_id>
+DB_USER=baseline_app APP_RUNTIME_MODE=production go run ./cmd/bootstrap -subject-type user -subject-id <user_id>
 ```
 
 It exits non-zero on any error, including the same TLS refusal as the server.
+Run as the owner, it stops at the authorization store's boot probe with
+`pgxdb.ErrAppendOnlyTableWritable` for `iam_audit` and `iam_operations`, before
+any grant is written.
 
 The pockets refuse the rest at construction — a missing security-event rail
 (`authentication.ErrAuditRequired`), an authorization store that does not

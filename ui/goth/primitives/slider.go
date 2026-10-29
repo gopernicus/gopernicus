@@ -34,7 +34,7 @@ type SliderProps struct {
 	// Step is the increment; a zero Step is treated as 1 (the native default).
 	Step int
 	// Value is the current thumb value (submitted). It is clamped natively.
-	Value int
+	Value    int
 	Disabled bool
 	// Invalid marks the control invalid (data-invalid + aria-invalid="true").
 	Invalid bool

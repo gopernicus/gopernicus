@@ -11,6 +11,8 @@ worked example `examples/cms`.
   go.work                                # ties the modules together for local dev (dev-only)
   sdk/                    module github.com/gopernicus/gopernicus/sdk                         — stdlib-only, LAYERED (sdk-layering 2026-07-10): the root package holds common vocabulary and primitives (errors/faults, context, identity, IDs, pointers, slugs); pkg/ = agnostic mechanism/vocabulary (imports the root only, flat); capabilities/ = behavioral ports + policy, defaults optional (import root+pkg, never each other)
   integrations/
+    authentication/auth0/ module …/integrations/authentication/auth0    — a connector (Auth0's issuer format and claim names for sdk/capabilities/authentication; zero external libs)
+    authentication/firebase/ module …/integrations/authentication/firebase — a connector (firebase.google.com/go/v4; the Firebase Authentication preset for sdk/capabilities/authentication)
     cryptids/bcrypt/      module …/integrations/cryptids/bcrypt         — a connector (x/crypto bcrypt)
     cryptids/go-oidc/     module …/integrations/cryptids/go-oidc        — a connector (coreos/go-oidc v3; bearer-JWT verification for an external OIDC issuer, the cryptids.JWTVerifier port)
     cryptids/go-webauthn/ module …/integrations/cryptids/go-webauthn    — a connector (go-webauthn/webauthn; the WebAuthn relying-party port)
@@ -32,6 +34,7 @@ worked example `examples/cms`.
     authentication/       module github.com/gopernicus/gopernicus/pockets/authentication               — session-auth hexagon (datastore-free)
       stores/pgx/         module …/pockets/authentication/stores/pgx             — auth's pgx store adapter
       stores/turso/       module …/pockets/authentication/stores/turso           — auth's Turso store adapter
+      views/goth/         module …/pockets/authentication/views/goth             — auth's bundled default views (ui/goth)
     authorization/        module github.com/gopernicus/gopernicus/pockets/authorization              — IAM hexagon: canonical tuple authority, exact roles and optional graph permissions (datastore-free; public stores/memory)
       stores/pgx/         module …/pockets/authorization/stores/pgx            — authorization's pgx store adapter
       stores/turso/       module …/pockets/authorization/stores/turso          — authorization's Turso store adapter
@@ -48,6 +51,8 @@ worked example `examples/cms`.
       stores/turso/       module …/pockets/jobs/stores/turso           — jobs' Turso store adapter
     secrets/              module github.com/gopernicus/gopernicus/pockets/secrets            — owner-scoped encrypted secrets, rotation, audit (datastore-free)
       stores/pgx/         module …/pockets/secrets/stores/pgx          — secrets' pgx store adapter
+  ui/
+    goth/                 module github.com/gopernicus/gopernicus/ui/goth                    — reusable templ + plain-CSS presentation system (UI implementation; guard G17)
   workshop/
     gopernicus/           module github.com/gopernicus/gopernicus/workshop/gopernicus       — the scaffolding CLI (init / new pocket / db / guard verbs; stdlib-only; emits the anatomies below, never links them — guard G11)
   examples/
@@ -59,6 +64,8 @@ worked example `examples/cms`.
       cmd/  internal/{logic,inbound,outbound}/domains/documents  pockets/{access,authentication,cms,events}
     jobs-minimal/          module github.com/gopernicus/gopernicus/examples/jobs-minimal      — a host app: pockets/jobs on stores/memory, zero drivers
       cmd/
+    goth-showcase/         module github.com/gopernicus/gopernicus/examples/goth-showcase     — a zero-datastore browser and accessibility proof for ui/goth
+    external-identity/     module github.com/gopernicus/gopernicus/examples/external-identity — the zero-infrastructure external identity provider proof host (development issuer, in-memory)
     production-baseline/   module github.com/gopernicus/gopernicus/examples/production-baseline — the auditable reference host: external OIDC identity + authorization on pgx, the production posture with no acknowledgement
       cmd/  integrations/authentication/devissuer  workshop/migrations
 ```
