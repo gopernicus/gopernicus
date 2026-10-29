@@ -9,8 +9,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-// Status is the account lifecycle posture (coordination-hub-auth-upstream
-// CHAU-1.1, SOC 2 S3). The vocabulary is CLOSED to exactly three values:
+// Status is the account lifecycle posture (SOC 2
+// S3). The vocabulary is CLOSED to exactly three values:
 //
 //   - StatusActive — the default posture. Every existing row and every newly
 //     constructed user is active.
@@ -104,8 +104,8 @@ func NormalizeStatus(s Status) Status {
 	return s
 }
 
-// Summary is the persistence-free operator-directory projection of a user
-// (CHAU-1.1). It is what an administrative console lists, and it deliberately
+// Summary is the persistence-free operator-directory projection of a user.
+// It is what an administrative console lists, and it deliberately
 // carries NO credential material: no password hash, OAuth token, session, API-key
 // material, challenge state, recovery inventory, or auth revision appears here.
 //

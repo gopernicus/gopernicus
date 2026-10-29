@@ -704,7 +704,7 @@ type PasswordlessConfig struct {
 	Passwordless []string `env:"AUTH_PASSWORDLESS"`
 	// PasswordlessProvisionOnRedeem enables account creation from an EMAIL MAGIC
 	// LINK sent to an address with no account — created only when the link is
-	// successfully CONSUMED, never when it is sent (CHAU-6.1).
+	// successfully CONSUMED, never when it is sent.
 	//
 	// The zero value is the historical login-only behavior: a link to an unknown
 	// address delivers nothing, and nothing is created. Turning it on is a real
@@ -750,7 +750,7 @@ type LinksConfig struct {
 	// Host/forwarded headers never participate.
 	PublicAuthBaseURL string `env:"AUTH_PUBLIC_BASE_URL"`
 	// PasswordResetURL is the absolute public landing route a password-reset email
-	// links to, BEFORE the token query parameter is appended (CHAU-5.1). It is
+	// links to, BEFORE the token query parameter is appended. It is
 	// deliberately a SEPARATE field from PublicAuthBaseURL: that one is the full
 	// passwordless landing URL (e.g. ".../login/link"), not an application origin,
 	// so a reset route cannot be derived from it without guessing.
@@ -763,7 +763,7 @@ type LinksConfig struct {
 	// is rejected so the builder never overwrites ambiguous host input. Other
 	// non-secret query parameters are preserved.
 	//
-	// Compatibility posture (ratified CHAU-5.1):
+	// Compatibility posture:
 	//
 	//   - PRODUCTION: this field is REQUIRED whenever the challenge-backed
 	//     forgot/reset rail is wired — raw-token-only reset mail is no longer an
@@ -1062,8 +1062,8 @@ type AdministrationConfig struct {
 	// non-nil slice would mean "mounted, ungated", the very bug this field closes.
 	// Typical: authorizer.Require(authorizationhttp.Can("steward", authorizationhttp.Fixed("platform", "global"))).
 	MachineRoutesGate web.Middleware
-	// UserAdminCheck is the host authorization seam for user administration
-	// (CHAU-1.1), and the switch that MOUNTS the bundled admin routes.
+	// UserAdminCheck is the host authorization seam for user administration,
+	// and the switch that MOUNTS the bundled admin routes.
 	//
 	// Nil (default) → the bundled admin routes are NOT registered, even when
 	// Repositories.UserAdmin is wired. This is deliberate: a store adapter returns

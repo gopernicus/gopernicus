@@ -6,7 +6,7 @@ them: **stdlib-only** (`flag` + `embed` + `text/template` +
 both directions by guard G11 (nothing imports `workshop/`; workshop
 imports no pocket core and no example). Milestone of record:
 `workshop-v2-scaffolding` (2026-07-09), the scaffold-once slice of the
-workshop-v2 scope brief (`.claude/plans/restructure/workshop-v2-brief.md`).
+workshop-v2 scope brief.
 
 ```sh
 go install github.com/gopernicus/gopernicus/workshop/gopernicus@v0.10.3

@@ -24,7 +24,7 @@ const fixtureRolePassword = "secrets_pgx_fixture_pw"
 // legacyAuditInsert is an insert shaped like a binary built before 0002: it
 // names only 0001's columns.
 const legacyAuditInsert = ` (id, occurred_at, action, owner_type, owner_id, name, version, key_id, actor_type, actor_id, system, reason)
-	VALUES ($1, now(), 'secret_read', 'tenant', 'gps', 'a', 1, 'k1', '', '', 'old-binary', '')`
+	VALUES ($1, now(), 'secret_read', 'tenant', 'globex', 'a', 1, 'k1', '', '', 'old-binary', '')`
 
 // runID makes cluster-wide fixture names unique to this run.
 func runID() string { return fmt.Sprintf("%d", time.Now().UnixNano()%10_000_000_000) }
@@ -86,7 +86,7 @@ func openAs(t *testing.T, dsn, role string, mode environment.Mode) *pgxdb.DB {
 
 func appendRecord(t *testing.T, repo vault.Repository, name string) vault.AuditRecord {
 	t.Helper()
-	rec, err := vault.NewAuditRecord(time.Now(), vault.ActionSecretRead, vault.Owner{Type: "tenant", ID: "gps"}, name, 1, "k1", vault.Source{System: "live"})
+	rec, err := vault.NewAuditRecord(time.Now(), vault.ActionSecretRead, vault.Owner{Type: "tenant", ID: "globex"}, name, 1, "k1", vault.Source{System: "live"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestLive_OpenRequiresIntegrityMigration(t *testing.T) {
 		t.Fatalf("migrate 0001: %v", err)
 	}
 	audit := schema.Table("secrets_audit")
-	mustExec(t, db, `INSERT INTO `+audit+` (id, occurred_at, action, owner_type, owner_id) VALUES ('pre-0002', now(), 'secret_put', 'tenant', 'gps')`)
+	mustExec(t, db, `INSERT INTO `+audit+` (id, occurred_at, action, owner_type, owner_id) VALUES ('pre-0002', now(), 'secret_put', 'tenant', 'globex')`)
 
 	_, err = Open(ctx, db, WithSchema(schema))
 	if !errors.Is(err, sdk.ErrNotFound) || !strings.Contains(err.Error(), "0002_secrets_audit_integrity.sql") {

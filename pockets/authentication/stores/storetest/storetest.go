@@ -99,7 +99,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 	})
 
 	// The user-administration directory, the atomic lifecycle transition, and the
-	// fenced session mint (CHAU-1.3/1.4). All three ports are OPTIONAL, so each
+	// fenced session mint. All three ports are OPTIONAL, so each
 	// group skips LOUDLY when unwired rather than claiming a conformance nothing
 	// verified. See useradmin.go.
 	runUserAdmin(t, newRepos)
@@ -114,7 +114,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 	// the predicate to the COUNT fails here rather than in production.
 	runSearch(t, newRepos)
 
-	// The atomic magic-link redemption (CHAU-6.2/6.3): the adversarial suite for
+	// The atomic magic-link redemption: the adversarial suite for
 	// provision-on-consumption. It skips LOUDLY when the port is unwired.
 	runPasswordless(t, newRepos)
 

@@ -57,7 +57,7 @@ That decision is behaviour, so it belongs in host logic, not in `cmd/`. H10's ma
 would let it pass, but its rule is that cmd wires. It names the authentication pocket's
 invitation types, so its home is a **host pocket**, for example `pockets/auth/logic/bootstrap`.
 H6 lets host pocket logic import framework pocket rims, and H1 keeps them out of
-`internal/logic`. Battleboard's `cmd/bootstrap` currently carries this logic in `cmd/`. Do not
+`internal/logic`. A host's `cmd/bootstrap` may carry this logic in `cmd/`. Do not
 copy that placement.
 
 ```go

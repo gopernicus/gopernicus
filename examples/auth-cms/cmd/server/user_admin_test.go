@@ -17,7 +17,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 
-	// CHAU-1.7 — the account-lifecycle proof, driven through EXPORTED host seams over
+	// The account-lifecycle proof, driven through EXPORTED host seams over
 	// real HTTP. It is a HOST test in a separate module, so nothing here reaches a
 	// pocket-internal package: a reader can copy the wiring and the request sequence
 	// into an admin console directly.

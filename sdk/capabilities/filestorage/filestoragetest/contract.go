@@ -15,7 +15,7 @@ import (
 
 func testPortableKeys(t *testing.T, s filestorage.Storer) {
 	ctx := context.Background()
-	for _, key := range []string{".segovia/boot-probe", "space and café/名字..txt"} {
+	for _, key := range []string{".app/boot-probe", "space and café/名字..txt"} {
 		if err := s.Upload(ctx, key, strings.NewReader(key)); err != nil {
 			t.Fatalf("Upload(%q): %v", key, err)
 		}
@@ -54,7 +54,7 @@ func testPortableKeys(t *testing.T, s filestorage.Storer) {
 
 func testLiteralPrefixes(t *testing.T, s filestorage.Storer) {
 	ctx := context.Background()
-	keys := []string{"img/a.txt", "image.txt", "images/b.txt", "other.txt", ".segovia/boot-probe", "two..dots"}
+	keys := []string{"img/a.txt", "image.txt", "images/b.txt", "other.txt", ".app/boot-probe", "two..dots"}
 	for _, key := range keys {
 		if err := s.Upload(ctx, key, strings.NewReader("x")); err != nil {
 			t.Fatal(err)

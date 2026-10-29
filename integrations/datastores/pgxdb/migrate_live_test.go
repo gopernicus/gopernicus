@@ -269,7 +269,7 @@ func TestLive_RunMigrations_PerSchemaTransactions(t *testing.T) {
 }
 
 // pinnedSearchPathDB opens a second pool whose DSN pins search_path to
-// "<schema>,public" — gps-360-go's wrapper, reproduced so the adoption legs
+// "<schema>,public" — a host's wrapper, reproduced so the adoption legs
 // start from the real pre-adoption state (tables in the schema, ledger rows in
 // public).
 func pinnedSearchPathDB(t *testing.T, dsn, schema string) *DB {

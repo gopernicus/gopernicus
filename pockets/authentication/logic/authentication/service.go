@@ -408,7 +408,7 @@ type Service struct {
 	// design §6.4). Empty unless passwordless is enabled; package auth validates it.
 	publicBaseURL string
 	// passwordResetURL is the absolute reset landing route the reset mail links to
-	// (LinksConfig.PasswordResetURL, CHAU-5.1). Empty → the legacy raw-token template.
+	// (LinksConfig.PasswordResetURL). Empty → the legacy raw-token template.
 	// Validated by package auth at construction; never derived from a request.
 	passwordResetURL string
 	// oauthLinkBase is the absolute SPA landing URL the OAuth pending-link email
@@ -417,7 +417,7 @@ type Service struct {
 	// derived from a request.
 	oauthLinkBase string
 
-	// User-administration state (CHAU-1.1). userAdmin is the optional directory +
+	// User-administration state. userAdmin is the optional directory +
 	// Both nil → the subsystem is off. The repository alone enables the TRUSTED
 	// service methods; the bundled admin ROUTES additionally require the check.
 	userAdmin user.AdminRepository
@@ -427,7 +427,7 @@ type Service struct {
 	// beforeErase is the host's optional pre-erase hook (WithErasure). Nil →
 	// EraseUser runs none.
 	beforeErase EraseHook
-	// activeSessions is the optional fenced session-minting capability (CHAU-1.1):
+	// activeSessions is the optional fenced session-minting capability:
 	// it inserts a session only while the owning user is atomically proven active.
 	// Nil → mintSession falls back to the ordinary sessions.Create, which cannot
 	// fence a concurrent deactivation; package auth refuses to enable the admin
@@ -435,7 +435,7 @@ type Service struct {
 	activeSessions session.ActiveUserRepository
 
 	// passwordlessRedeem is the optional atomic magic-link redemption repository
-	// and provisionOnRedeem the host switch (CHAU-6.1). Both nil/false → the
+	// and provisionOnRedeem the host switch. Both nil/false → the
 	// historical login-only redemption path.
 	passwordlessRedeem passwordless.Repository
 	provisionOnRedeem  bool
@@ -896,7 +896,7 @@ func (s *Service) Login(ctx context.Context, emailAddr, password string) (TokenP
 
 	pair, err := s.mintSession(ctx, u.ID, u.AuthRevision, s.primaryAuthentication(session.MethodPassword))
 	if err != nil {
-		// A deactivated account is denied as ordinary bad credentials (CHAU-1.5):
+		// A deactivated account is denied as ordinary bad credentials:
 		// the admin lifecycle must not become an enumeration oracle.
 		if errors.Is(err, session.ErrUserNotActive) {
 			s.recordLogin(ctx, u.ID, normalized, err)
@@ -1475,7 +1475,7 @@ func invalidCredentials() error {
 }
 
 // genericIfNotActive collapses a lifecycle refusal from the fenced session mint
-// into the calling flow's OWN generic public failure (CHAU-1.5). A deactivated
+// into the calling flow's OWN generic public failure. A deactivated
 // account must be indistinguishable from a wrong password, an unknown address, or
 // a stale magic link on every PUBLIC credential endpoint: returning
 // session.ErrUserNotActive verbatim would map to a distinctive 403 and turn the

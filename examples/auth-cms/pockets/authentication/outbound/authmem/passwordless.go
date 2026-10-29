@@ -16,14 +16,14 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// The atomic magic-link redemption (CHAU-6.2). It is the host-store twin of the
+// The atomic magic-link redemption. It is the host-store twin of the
 // storetest reference implementation, held to the same shared conformance suite:
 // one critical section, a snapshot before any mutation, and an explicit restore on
 // every rejection so a refused redemption leaves the store byte-identical.
 
 // --- passwordless.Repository ---
 
-// passwordlessRepo is this host store's atomic magic-link redemption (CHAU-6.2),
+// passwordlessRepo is this host store's atomic magic-link redemption,
 // held to the SAME shared conformance suite as the two SQL implementations: one
 // critical section, a snapshot taken before
 // any mutation, and an explicit restore on every rejection path so a refused

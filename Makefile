@@ -473,7 +473,7 @@ guard-ui-require-whitelist:
 # dependency trees (node_modules/, emitted scaffolds, build output) are never
 # walked and never false-positive.
 #
-# Excluded, and ONLY these: ratified/executed history — plans/, .claude/plans/,
+# Excluded, and ONLY these: ratified/executed history — .claude/plans/,
 # .claude/past/ — all of RELEASING.md, whose release chronicle intentionally
 # names immutable old tags at their old module paths; the dated decision logs
 # NOTES.md and examples/cms/NOTES.md (every entry is an as-executed record);
@@ -501,7 +501,7 @@ guard-no-legacy-features-path:
 	@echo "== guard: the retired features/ tier vocabulary never returns (G20) =="
 	@fail=0; \
 	hits=$$(git grep -nE '$(LEGACY_TIER_RE)' -- \
-		':(exclude)plans' ':(exclude).claude/plans' ':(exclude).claude/past' \
+		':(exclude).claude/plans' ':(exclude).claude/past' \
 		':(exclude)RELEASING.md' ':(exclude)NOTES.md' ':(exclude)examples/cms/NOTES.md' \
 		':(exclude)pockets/*/stores/*/migrations/*.sql' ':(exclude)Makefile' || true); \
 	self=$$(sed '/^# >>> LEGACY-PATTERNS/,/^# <<< LEGACY-PATTERNS/s/.*//' Makefile \
@@ -761,10 +761,10 @@ guard-store-uuidv7-sites:
 G39_PATTERN = /Users/[A-Za-z0-9._-]+/|/private/tmp/clau[d]e
 guard-no-local-paths:
 	@echo "== guard: no tracked text file names a local machine path (G39) =="
-	@test "$$(printf '%s\n' '/Users/''alice/code/x' '/private/tmp/''claude-502/s' '~/code/segovia' '<scratchpad>/review' '/Users/' | grep -cE '$(G39_PATTERN)')" = 2 || { echo "ERROR (G39): the pattern no longer matches exactly the two canonical local-path samples — the guard would check nothing"; exit 1; }
+	@test "$$(printf '%s\n' '/Users/''alice/code/x' '/private/tmp/''claude-502/s' '~/code/sibling' '<scratchpad>/review' '/Users/' | grep -cE '$(G39_PATTERN)')" = 2 || { echo "ERROR (G39): the pattern no longer matches exactly the two canonical local-path samples — the guard would check nothing"; exit 1; }
 	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		hits=$$(git grep -nIE '$(G39_PATTERN)' -- ':!*.sum' || true); \
 	else \
 		hits=$$(grep -rnIE --exclude='*.sum' --exclude-dir=.git --exclude-dir=node_modules '$(G39_PATTERN)' . || true); \
 	fi; \
-	if [ -n "$$hits" ]; then echo "ERROR (G39): a tracked file names a local machine path — name a sibling repo by its repo name, make an in-repo path repo-relative, write a scratchpad path as <scratchpad>:"; echo "$$hits"; exit 1; fi
+	if [ -n "$$hits" ]; then echo "ERROR (G39): a tracked file names a local machine path — make an in-repo path repo-relative, write a scratchpad path as <scratchpad>:"; echo "$$hits"; exit 1; fi

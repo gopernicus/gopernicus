@@ -17,7 +17,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 )
 
-// CHAU-2.1 / CHAU-2.2 — registration-verification resend.
+// Registration-verification resend.
 //
 // The tests are split the way the design is: everything the PUBLIC request path
 // does (or refuses to do) is asserted against the request path, and every

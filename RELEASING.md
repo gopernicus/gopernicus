@@ -1,5 +1,22 @@
 # Releasing gopernicus modules
 
+## Neutral authorization fixtures (sdk v0.26.0 — UNRELEASED)
+
+**MINOR (breaking in the test-helper package only).** `sdk/capabilities/authorization/authorizationtest`
+renames the two fixtures that were named after hosts:
+
+- The role-heavy model with global roles is now `GlobalRoles()` (fixture name `global-roles`).
+- The tenant/space/item hierarchy is now `TenantChain()` (`tenant-chain`).
+
+Inside the fixtures, the team relation is now `staff_team` and the link permission is now
+`manage_partner_link`. The ledger fixture ID is now `main`. Fixture behaviour is otherwise
+unchanged. No production package changes.
+
+**Migration:** a host that calls these constructors or looks fixtures up by name renames
+those calls. Release order: tag `sdk/v0.26.0`, then repin `pockets/authorization` and its
+`stores/*` modules. Their tests look the fixtures up by the new names, so their next tags
+must require `sdk >= v0.26.0`.
+
 ## Cleanup sweep: escaped-redaction refusal and the sprint's residual inventory (SOC 2 slice S9 — published 2026-10-29)
 
 Four annotated tags (not signed) on four modules, in three trains (sdk, then the connectors,
@@ -8,8 +25,8 @@ dispatch on `main`. Each was then pushed, confirmed on origin, polled on the pro
 cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache,
 `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build ./...`, `go 1.26.10`). Claude
 cuts and pushes the tags; the owner merges. No migration, no pocket tag, no store tag. Design
-and rulings: `plans/s9-cleanup-sweep.md` (ratified 2026-10-29, "good with your recs": R-1..R-8
-all at the recommendations; executed copy in `plans/`). The audit entry is **AUDIT-063**. This
+and rulings: the plan (ratified 2026-10-29, "good with your recs": R-1..R-8
+all at the recommendations). The audit entry is **AUDIT-063**. This
 section is the whole record: there is no handoff file and no manifest. The operator surface
 is the docs site's *Production posture* ("Added by S6" table and "A composed secret fails
 loudly") and *Database posture*. The reference is `sdk/README.md` and the pgxdb and turso
@@ -58,7 +75,7 @@ here, filed as an issue, or dropped with a reason (the inventory below).
 |---|---|---|---|---|---|
 | — | none | `d4981c02` | #291 (PR-3, hygiene; closes #226) | — | — |
 | 1 | `sdk/v0.25.0` | `684f7d47` → `950e175e` | #290 (PR-1) | 40930336355 @ `d4981c02` (contains `950e175e`) | OK: sdk alone |
-| 2 | `integrations/datastores/pgxdb/v0.18.0` | `48a34aa4` → `8bc9404e` | #292 (PR-2) | 40934968698 @ `8bc9404e` | OK: the pgx store set, the gps-three-sixty shape |
+| 2 | `integrations/datastores/pgxdb/v0.18.0` | `48a34aa4` → `8bc9404e` | #292 (PR-2) | 40934968698 @ `8bc9404e` | OK: the pgx store set, the pgx host shape |
 | 2 | `integrations/datastores/turso/v0.11.0` | `7a17d63e` → `8bc9404e` | #292 (PR-2) | 40934968698 @ `8bc9404e` | OK: the turso store set |
 | 3 | `workshop/gopernicus/v0.10.3` | `6bdca30b` → `236141c6` | #293 (PR-4) | 40939306973 @ `236141c6` | OK: cold `go install` + `init --db pgx` / `--db turso` |
 
@@ -75,7 +92,7 @@ modules verified` and built.
 - **Step 2, turso:** turso v0.11.0 beside authentication stores/turso v0.18.0, authorization
   turso v0.23.0, cms turso v0.4.0, events turso v0.3.0 and jobs turso v0.8.0. MVS selects sdk
   v0.25.0.
-- **Step 2, gps-three-sixty shape:** authentication core, stores/pgx, authorization goredis
+- **Step 2, pgx host shape:** authentication core, stores/pgx, authorization goredis
   v0.6.0 and pgxdb v0.18.0 (sdk v0.25.0).
 - **Step 3:** cold `go install …/workshop/gopernicus@v0.10.3`, then `init --db pgx` and `init
   --db turso`. Each passed `go mod verify`, `go build ./...`, `go vet ./...` and `guard
@@ -104,11 +121,11 @@ are transformed further (double percent-encoding, base64, JSON `\u` escapes) can
 by inspection. They still fail at the wire, on authentication.
 
 **Upgrade notes by host shape.**
-- **gps-three-sixty / battleboardhq** (pgx): row 1 at the pgxdb repin; row 4 only if their
+- **Native-OAuth and magic-link pgx hosts** (pgx): row 1 at the pgxdb repin; row 4 only if their
   DSN `options` name a `*timezone` parameter. No code change. Their hand-offs are the next
   planning item (L26).
-- **gps-360-go:** the same as gps-three-sixty at its next repin.
-- **segovia/v2:** deferred (owner).
+- **OAuth2 host:** the same as the pgx hosts at its next repin.
+- **Tenancy v2 host:** deferred (owner).
 - **A freshly scaffolded host** (`init` from `@v0.10.3`) carries all four rows.
 - **Examples (this PR).** Every example moved by explicit `GOWORK=off go get`, then `GOWORK=off
   go mod tidy`; only the go.mod/go.sum lines below changed:
@@ -252,8 +269,7 @@ plan's "Design §3").
 - **Out of scope by plan:** extending the refusal to goredis and the other eight integrations
   (R-2); double-encoded or otherwise transformed values; any pocket or store tag.
 - **Pre-existing, still open:** #271, #273 (via #276), #274, #275, #286, #288.
-- gps-360-go's, gps-three-sixty's, battleboardhq's and segovia's repins happen in their own
-  repositories.
+- Host repins happen in the hosts' own repositories.
 
 ## Native `all` and the enrollment grace (SOC 2 slice S4c-2 — published 2026-10-29)
 
@@ -262,9 +278,9 @@ One annotated tag (not signed) on one module. It was cut at PR-2's squash-merge 
 cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache,
 `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build ./...`, `go 1.26.10`). Claude
 cuts and pushes the tag; the owner merges. No migration, no store tag, no sdk, views or
-workshop tag. Design and rulings: `plans/s4c2-native-all-enrollment-grace.md` (ratified
+workshop tag. Design and rulings: the plan (ratified
 2026-10-28, "all recs", R-1..R-5 all (a); amended 2026-10-29 with the build-time rulings R-6
-(a) and R-7; executed copy in `plans/`). The audit entry is **AUDIT-062**. This section is the
+(a) and R-7). The audit entry is **AUDIT-062**. This section is the
 whole record: there is no handoff file and no manifest. The operator surface is the docs site:
 *Operations runbooks* "Turn on MFA for everyone", *Production posture* ("Added by S4c-2") and
 the authentication pocket page ("Added by S4c-2"). Those shipped in #287 (PR-4, examples and
@@ -359,10 +375,10 @@ builds).
 - **Set C** (#287, from the tag): auth-cms, production-baseline and external-identity at
   `GOWORK=off` build and test.
 - **Host shapes (this PR, at the final versions):**
-  - **gps-three-sixty:** authentication v0.38.0 + authentication pgx v0.19.0 + authorization
+  - **Native-OAuth pgx host:** authentication v0.38.0 + authentication pgx v0.19.0 + authorization
     v0.34.0 + authorization pgx v0.24.0 + goredis v0.6.0 + golang-jwt v0.4.0 + bcrypt v0.3.0 +
     pgxdb v0.17.0 (MVS selects sdk v0.24.0);
-  - **battleboardhq:** authentication v0.38.0 + authentication pgx v0.19.0 + authorization
+  - **Magic-link pgx host:** authentication v0.38.0 + authentication pgx v0.19.0 + authorization
     v0.34.0 + authorization pgx v0.24.0 + jobs v0.8.0 + jobs pgx v0.9.0 + golang-jwt v0.4.0 +
     google-uuid v0.2.0 + sendgrid v0.5.0 + oauth/google v0.3.0 + pgxdb v0.17.0;
   - **views:** authentication v0.38.0 + views/goth v0.9.0 + pgx v0.19.0 + turso v0.18.0.
@@ -412,16 +428,16 @@ enrollment surface at once and can enrol there.
 itself is outside it (Risk 2).
 
 **Upgrade notes by host shape.**
-- **gps-three-sixty / battleboardhq** (native Google OAuth sign-in → first-party AAL1 sessions;
+- **Native-OAuth and magic-link pgx hosts** (native Google OAuth sign-in → first-party AAL1 sessions;
   pgx; React SPAs; no external IdP, no OAuth2 server): rows 1, 2 and 4 at repin change nothing
   on the wire. To adopt native `all` they wire a native factor first (passkeys and/or TOTP and
   their migrations), then rows 3 and 5; the SPA work in row 5 is the real cost, and the shell
   route needs `AllowMFAEnrollment()` or anonymous serving. Not in this slice. The cold shapes
   above build. Open question for their hand-off: whether their SPAs already branch on 401 +
   `WWW-Authenticate` for step-up.
-- **gps-360-go** (`WithOAuth2`, no `WithExternal`; old pins): row 1 is inert for it; under native
+- **OAuth2 host** (`WithOAuth2`, no `WithExternal`; old pins): row 1 is inert for it; under native
   `all` its authorize page would require AAL2. Repin only.
-- **segovia/v2:** deferred (owner).
+- **Tenancy v2 host:** deferred (owner).
 - **External-IdP hosts** (the production-baseline shape): nothing; external-only `all` is
   unchanged and the baseline stays `admins`.
 - **Examples (#287).** Every example builds and tests at `GOWORK=off` on the tag. Pins moved by
@@ -532,7 +548,7 @@ claim after the commit.
   methods=[password totp]` with neither claim, `/demo/floor`, `/demo/floor/page`, `/demo/mfa`
   **200**; neither the TOTP secret nor a JWT appears in the log. The once-per-session event
   count was not re-read here (no admin wired in this run; #287 showed one row). The
-  gps-three-sixty, battleboardhq and views cold shapes above build from empty caches; `pnpm
+  pgx-host, magic-link-host and views cold shapes above build from empty caches; `pnpm
   build` in `workshop/documentation` succeeds; the tag table matches `git ls-remote --tags
   origin`.
 - **This PR:** docs only (plus two one-sentence fixes, below); `make guard` and `make check`
@@ -555,8 +571,7 @@ claim after the commit.
   marker (R-1 (b)) if a host asks, 0028 reserved.
 - **Out of scope by plan:** any views, sdk or workshop change; revoking API keys or grants minted before the flip; host wiring.
 - **Pre-existing, still open:** #271, #272, #273, #274, #275.
-- gps-360-go's, gps-three-sixty's, battleboardhq's and segovia's repins happen in their own
-  repositories.
+- Host repins happen in the hosts' own repositories.
 
 ## Delegated assurance and asserted authentication time (SOC 2 slice S4d part 4 — published 2026-10-28)
 
@@ -566,8 +581,8 @@ confirmed on origin, then cold-verified from a scratch consumer (`GOWORK=off`, a
 cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build ./...`, `go 1.26.10`).
 Claude cuts and pushes the tags; the owner merges. One additive migration (0030, on
 `oauth_authorization_codes`); no views tag, no workshop tag. Design and rulings:
-`plans/s4d4-delegated-assurance-auth-time.md` (ratified 2026-10-28, "all recs", R-1..R-6 all
-(a); executed copy in `plans/`). The audit entry is **AUDIT-061**. This section is the whole
+the plan (ratified 2026-10-28, "all recs", R-1..R-6 all
+(a)). The audit entry is **AUDIT-061**. This section is the whole
 record: there is no handoff file and no manifest. The operator surface is the docs site:
 *Operations runbooks* "Enable delegated assurance", *Production posture* (the refusals table
 and two revocation-SLA rows) and the authentication pocket page ("Added by S4d part 4"). Those
@@ -664,10 +679,10 @@ examples, and every other module. Nothing retracts.
   `GOWORK=off` from an EMPTY module cache over `proxy.golang.org` + `sum.golang.org`: each
   reports `all modules verified`, builds, vets and tests.
 - **Host shapes (this PR, at the final versions, each from its own empty module cache):**
-  - **gps-three-sixty:** authentication v0.37.0 + authentication pgx v0.19.0 + authorization
+  - **Native-OAuth pgx host:** authentication v0.37.0 + authentication pgx v0.19.0 + authorization
     v0.34.0 + authorization pgx v0.24.0 + goredis v0.6.0 + golang-jwt v0.4.0 + bcrypt v0.3.0 +
     pgxdb v0.17.0 (MVS selects sdk v0.24.0);
-  - **battleboardhq:** authentication v0.37.0 + authentication pgx v0.19.0 + authorization
+  - **Magic-link pgx host:** authentication v0.37.0 + authentication pgx v0.19.0 + authorization
     v0.34.0 + authorization pgx v0.24.0 + jobs v0.8.0 + jobs pgx v0.9.0 + golang-jwt v0.4.0 +
     google-uuid v0.2.0 + sendgrid v0.5.0 + oauth/google v0.3.0 + pgxdb v0.17.0;
   - **views:** authentication v0.37.0 + views/goth v0.9.0 + pgx v0.19.0 + turso v0.18.0;
@@ -735,17 +750,17 @@ grant, bounded by `OAuth2Config.SessionTTL` (30 days by default); refresh keeps 
 never raises it. Revoking the grant is the way to end it early.
 
 **Upgrade notes by host shape.**
-- **gps-360-go** (the only host with `WithOAuth2`; no `RequireMFA` on delegated routes today;
+- **OAuth2 host** (the only host with `WithOAuth2`; no `RequireMFA` on delegated routes today;
   old pins): rows 3–5 and 7 when it repins. It is the one host for which the rollout order
   matters. The owner expects no process other than the issuing binary to verify delegated
   tokens, so step 1 is one deploy; **confirm that before setting the flag** (an MCP resource
   server that parses tokens rather than introspecting is a verifier). Until it flips the flag,
   nothing changes on its wire.
-- **gps-three-sixty / battleboardhq** (native Google OAuth sign-in → first-party sessions; no
+- **Native-OAuth and magic-link pgx hosts** (native Google OAuth sign-in → first-party sessions; no
   external IdP, no OAuth2 server; pgx): rows 1, 3, 7 and 8 at repin. Nothing changes on the wire
   and no flag applies. When the store pin moves to pgx v0.19.0, **copy 0030 into the ledger**
   (guard P9 is red until it is there). The cold shapes above build.
-- **segovia/v2** (sdk v0.15.0, authentication v0.19.1): defer to its repin milestone (owner).
+- **Tenancy v2 host** (sdk v0.15.0, authentication v0.19.1): defer to its repin milestone (owner).
 - **Generic hosts.** Run the Read-first grep. A host with unkeyed `Identity{…}` literals keys
   them (row 1). A host-written `Provider` sets `AuthTimeAsserted` when it has a sign-in instant,
   or stays off row 6. An external-IdP host (the production-baseline shape) takes rows 1–2 and
@@ -831,7 +846,7 @@ never raises it. Revoking the grant is the way to end it early.
 `DelegatedAssurance` flag, boot-probed; **R-2 (a)** stamping gated on the flag; **R-3 (a)**
 introspection reports `aal`/`methods`; **R-4 (a)** document the fixed-at-approval level, follow-up
 `DelegatedAssuranceMaxAge`; **R-5 (a)** `RequireAuthenticationTime` off by default; **R-6 (a)**
-document the `FreshAuth` gap. Open questions: gps-360-go probably has no other verifier process
+document the `FreshAuth` gap. Open questions: the OAuth2 host probably has no other verifier process
 ("i don't think so"); the auth-cms demo flag rides `AUTH_OAUTH2_DEMO` ("ride is fine"). During
 the build: **ruling (a)**, the `RunProvider` Garbage case accepts an `iat` fallback OR
 `ErrInvalidCredential` (the firebase Admin SDK refuses a non-integer `auth_time`); **ruling
@@ -885,19 +900,18 @@ and tag.
   a level; any views, workshop-module or scaffold change; host wiring.
 - **Pre-existing, still open:** #271 (auth-cms passkey-test race), #272 (above), #273 (an auth-cms
   naming-rule rename), #274 (erase-hook observability), #275 (turso CI legs skip).
-- gps-360-go's, gps-three-sixty's, battleboardhq's and segovia's repins happen in their own
-  repositories.
+- Host repins happen in the hosts' own repositories.
 
 ## Host asks #224/#225/#256: tuple-cache identity error, model-scoped integrity default, a server-side erase hook (published 2026-10-28)
 
-Five annotated tags (not signed) on four modules, for three issues filed by gps-three-sixty.
+Five annotated tags (not signed) on four modules, for three issues filed by a host.
 Each tag was cut at its PR's squash-merge commit on `main` after a green `live-stores`
 dispatch on `main`, pushed one at a time, confirmed on origin, then cold-verified from a
 scratch consumer (`GOWORK=off`, an empty module cache, `proxy.golang.org`,
 `sum.golang.org`, `go mod verify`, `go build ./...`, `go 1.26.10`). Claude cuts and pushes
 the tags; the owner merges. No migration, no sdk tag, no views tag, no workshop tag. Design
-and rulings: `plans/host-asks-224-225-256.md` (ratified 2026-10-28, "good with your recs on
-R-1 to R-8"; executed copy in `plans/`). The audit entry is **AUDIT-060**. This section is
+and rulings: the plan (ratified 2026-10-28, "good with your recs on
+R-1 to R-8"). The audit entry is **AUDIT-060**. This section is
 the whole record: there is no handoff file and no manifest. The operator surface is the docs
 site: *Operations runbooks* "Erase a person" (step 3 now names `BeforeErase`), the
 authorization pocket page (the integrity default, the refusal, the recreated-database
@@ -978,7 +992,7 @@ Closes **#225** (#264), **#224** (#263 core, #267 stores) and **#256** (#269).
 | 2 | `pockets/authorization/v0.34.0` | `fa288060` | #263 (PR-2, #224 core) | 40737808090 @ `fa288060` | OK; set 2 |
 | 3 | `pockets/authorization/stores/pgx/v0.24.0` | `a7ba8afd` | #267 (PR-3, #224 stores) | 40748982044 @ `a7ba8afd` | OK; set 3 |
 | 3 | `pockets/authorization/stores/turso/v0.23.0` | `a7ba8afd` | #267 (PR-3, #224 stores) | 40748982044 @ `a7ba8afd` | OK; set 3 |
-| 4 | `pockets/authentication/v0.36.0` | `ed810dda` | #269 (PR-4, #256) | 40774649712 @ `ed810dda` | OK; the gps-three-sixty shape |
+| 4 | `pockets/authentication/v0.36.0` | `ed810dda` | #269 (PR-4, #256) | 40774649712 @ `ed810dda` | OK; the pgx host shape |
 | — | none | this PR | PR-5 (record, repins) | — | set C |
 
 PR-1 and PR-2 merged in that order, so they took two core tags (R-3 (a)). PR-4 took
@@ -995,7 +1009,7 @@ retracts.
   The old stores still return the bare `ErrUnavailable`, so nothing detaches on this set.
 - **Set 3** (step 3): authorization v0.34.0 + pgx v0.24.0 + turso v0.23.0 + goredis v0.6.0:
   verified, builds.
-- **The gps-three-sixty shape** (step 4): authentication v0.36.0 + authentication pgx
+- **The pgx host shape** (step 4): authentication v0.36.0 + authentication pgx
   v0.18.0 / turso v0.17.0 + authorization v0.34.0 + authorization pgx v0.24.0 + goredis
   v0.6.0 + golang-jwt v0.4.0 + bcrypt v0.3.0 + pgxdb v0.17.0: verified, builds; MVS selects
   sdk v0.23.0.
@@ -1023,12 +1037,12 @@ host observes after a database recreate; everything else is opt-in or additive.
 | 7 | production-baseline / auth-cms hooks; production-baseline `DefaultIntegrityPolicyFor(accessModel())` (R-7) | example behaviour; docs | — | examples (untagged), docs |
 
 **Upgrade notes by host shape.**
-- **gps-three-sixty** (from authentication v0.33.1 / authentication pgx v0.17.0 /
+- **Native-OAuth pgx host** (from authentication v0.33.1 / authentication pgx v0.17.0 /
   authorization v0.32.0 / authorization pgx v0.23.0 / goredis v0.6.0 / sdk v0.21.0): repin to
   the cold-verified shape above (authentication v0.36.0, authentication pgx v0.18.0,
   authorization v0.34.0, authorization pgx v0.24.0, goredis v0.6.0; S4d part 3's notes apply
   to the authentication and golang-jwt moves). The store tags carry #264's boot refusal; it is
-  inert for gps (its rule is explicit). Then three host edits:
+  inert for that host (its rule is explicit). Then three host edits:
   1. **Integrity:** `pockets/authorization/logic/access/access.go` `IntegrityPolicy()` becomes
      `DefaultIntegrityPolicyFor(Model())` plus `append` of `{platform, admin, 1}`, and the
      comment explaining why the default was left out goes. Today's explicit policy keeps
@@ -1054,12 +1068,12 @@ host observes after a database recreate; everything else is opt-in or additive.
      `eraseUser` directly; CLI and script callers of the erase route get the cleanup too.
      Both pockets run on the iam database there, so "two databases" means two stores and two
      transactions on one database; the story is the same.
-- **battleboardhq** (authentication v0.33.1, authorization v0.32.0, authorization pgx
+- **Magic-link pgx host** (authentication v0.33.1, authorization v0.32.0, authorization pgx
   v0.23.0 at the time of writing): its integrity rule is explicit (`{tenant, owner, 1}`), so
   the refusal is inert; it wires no TupleCache, so #224 changes nothing it sees; it wires no
   erase route, so `BeforeErase` waits until it adopts erasure. Repin authorization v0.34.0 /
   pgx v0.24.0 on the path S4d part 3 names; no code change for this train.
-- **segovia/v2** (sdk v0.15.0, authentication v0.19.1): defer to its repin milestone.
+- **Tenancy v2 host** (sdk v0.15.0, authentication v0.19.1): defer to its repin milestone.
 - **Generic hosts.** Run the Read-first grep and **boot staging first**. A host passing
   `DefaultIntegrityPolicy()` with a model that has a type without `owner` now fails at boot
   with `ErrIntegrityRuleUnscoped`, which names the type and both fixes. If the type is one
@@ -1080,7 +1094,7 @@ host observes after a database recreate; everything else is opt-in or additive.
 - **#264 (PostgreSQL 18):** production-baseline booted with no integrity WARN
   (`integrity_rules=1`); a viewer as the first grant on `project:p1` → **409**
   `invariant_conflict`, an owner first → **200**, a viewer after it → **200**. The
-  gps-three-sixty shape (platform{admin, developer}, project{owner, viewer}) with
+  pgx host shape (platform{admin, developer}, project{owner, viewer}) with
   `DefaultIntegrityPolicy()` is refused at `New`; with `DefaultIntegrityPolicyFor(model)` +
   `{platform, admin, 1}` the first `platform:global#admin` grant is `applied`.
 - **#263 (a real `workers.Pool`, text logger):** one ERROR naming the fix, then `worker pool
@@ -1153,7 +1167,7 @@ a relation no type declares.
   `ErrConflict`.
 - **#269: the example hooks take concrete types.** Guard H10 forbids an interface type in a
   composition root under `cmd/`, so production-baseline and auth-cms pass `*roles.Service` and
-  `*mutations.Service`; a host whose hook lives in its own pocket (gps-three-sixty) declares
+  `*mutations.Service`; a host whose hook lives in its own pocket declares
   narrow interfaces there.
 - **#269: a no-progress guard** the plan did not have. When a page of assignments does not
   shrink, the example hook returns `sdk.ErrUnavailable` (**503**) instead of looping.
@@ -1162,7 +1176,7 @@ a relation no type declares.
   became the second owner.
 - **The audit entry is AUDIT-060**; the plan named AUDIT-059, which S4d part 3 took.
 - **The plan's PR-5 cold consumer named authentication pgx v0.17.0**; it was verified with
-  v0.18.0 (S4d part 3's store tag), which the gps-three-sixty shape now selects.
+  v0.18.0 (S4d part 3's store tag), which the pgx host shape now selects.
 - **production-baseline already pinned authorization v0.34.0** (#266), so this PR moves only
   authentication and authorization pgx there.
 - **auth-cms and production-baseline did not build at `GOWORK=off` on `main` between #269 and
@@ -1203,7 +1217,7 @@ a relation no type declares.
   without a restart; a `PurgeSubjectAuthorization` command across scopes; a read-only claim
   pre-check before the hook; a boot WARN for `UserErasureRoute` without a hook; a post-erase
   hook; `IntegrityPolicy.Resolve` / `With`.
-- gps-three-sixty's, battleboardhq's and segovia's repins happen in their own repositories.
+- Host repins happen in the hosts' own repositories.
 
 ## Key management and password policy (SOC 2 slice S4d part 3 — published 2026-10-28)
 
@@ -1213,8 +1227,7 @@ after a green `live-stores` dispatch on `main`, pushed one at a time, confirmed 
 then cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache,
 `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build ./...`, `go 1.26.10`).
 Claude cuts and pushes the tags; the owner merges. No migration, no views tag, no workshop
-tag. Design and rulings: `plans/s4d3-keys-passwords.md` (ratified 2026-10-28, "all recs";
-executed copy in `plans/`). The audit entry is **AUDIT-059**. This section is the whole
+tag. Design and rulings: the plan (ratified 2026-10-28, "all recs"). The audit entry is **AUDIT-059**. This section is the whole
 record: there is no handoff file and no manifest. The operator surface is the docs site:
 *Operations runbooks* ("Rotate a key", one subsection per key, and "Raise the password hash
 cost (rehash on login)"), *Keys and rotation* (the inventory table), *Production posture* and
@@ -1399,7 +1412,7 @@ lossy. On a compromise, rotate with no legacy id and accept the cost; the
 `legacy_key_read_enabled` WARN is never acceptable then.
 
 **Upgrade notes by host shape.**
-- **battleboardhq** (magic link + Google, `invitation_only`, pooled PostgreSQL under RLS, SPA;
+- **Magic-link pgx host** (magic link + Google, `invitation_only`, pooled PostgreSQL under RLS, SPA;
   no passwords; no `TokenEncrypter`): first the path the "Multi-tenant host asks" section
   below names, then authentication v0.35.0 (+ golang-jwt v0.4.0, sdk v0.23.0 for the ring
   forms; stores pgx v0.18.0 when it repins the store). Rows 3–5 in the three phases on the JWT
@@ -1408,15 +1421,15 @@ lossy. On a compromise, rotate with no legacy id and accept the cost; the
   `AUTH_CHALLENGE_PEPPERS="primary:<current hex>,<new id>:<new hex>"` with
   `AUTH_CHALLENGE_ACTIVE_PEPPER=primary` first — or every outstanding challenge and recovery
   code stops verifying. Rows 6–10, 12–14 do not apply (no password flows).
-- **gps-three-sixty** (native Google OAuth → first-party sessions, bearer SPA, pgx + goredis;
+- **Native-OAuth pgx host** (native Google OAuth → first-party sessions, bearer SPA, pgx + goredis;
   no `TokenEncrypter`, no challenge pepper): the JWT ring is the one key it adopts. (a) repin,
   set `AUTH_JWT_KEYS="k1:<new hex>"` and `AUTH_JWT_ACTIVE_KEY=legacy`, KEEP `AUTH_JWT_SECRET`
   → boot line `jwt_active_key_id=legacy … jwt_legacy=yes`, nothing changes on the wire; (b)
   with the fleet on (a), `AUTH_JWT_ACTIVE_KEY=k1`; (c) after the JWT window, unset
   `AUTH_JWT_SECRET` → `jwt_legacy=no`. `AUTH_TOKEN_ISSUER` / `AUTH_TOKEN_AUDIENCE` are
   optional (row 5). The delivery, provider-token and pepper rows and rows 6–10, 12–14 do not
-  apply. gps-360-go: nothing until it repins, then as gps-three-sixty.
-- **segovia/v2** (sdk v0.15.0, authentication v0.19.1): defer to its repin milestone. Its
+  apply. The OAuth2 host: nothing until it repins, then as the pgx host.
+- **Tenancy v2 host** (sdk v0.15.0, authentication v0.19.1): defer to its repin milestone. Its
   pepper ring keeps whatever id it builds the protector with today.
 - **Generic hosts.** Run the Read-first grep. A host that sets only the single variables
   repins with no change except the boot line (and row 9 if it hashes passwords). To adopt a
@@ -1534,10 +1547,10 @@ store `UpgradeHash`); **HIBP is not wired into any example**; CodeQL #18 dismiss
   v0.32.0. #266 repinned authorization v0.34.0 and authentication pgx v0.18.0, which fixed it.
 - **The plan's step-3 host shapes were cold-verified after the last tag**, not at step 3,
   against the final versions:
-  - **gps-three-sixty shape:** authentication v0.35.0 + authentication pgx v0.18.0 +
+  - **pgx host shape:** authentication v0.35.0 + authentication pgx v0.18.0 +
     authorization v0.34.0 + authorization pgx v0.24.0 + goredis v0.6.0 + golang-jwt v0.4.0 +
     bcrypt v0.3.0 + pgxdb v0.17.0 + sdk v0.23.0.
-  - **battleboardhq shape:** authentication v0.35.0 + authentication pgx v0.18.0 +
+  - **Magic-link host shape:** authentication v0.35.0 + authentication pgx v0.18.0 +
     authorization v0.34.0 + authorization pgx v0.24.0 + jobs v0.8.0 + jobs pgx v0.9.0 +
     golang-jwt v0.4.0 + google-uuid v0.2.0 + sendgrid v0.5.0 + oauth/google v0.3.0 +
     pgxdb v0.17.0 + sdk v0.23.0.
@@ -1581,7 +1594,7 @@ store `UpgradeHash`); **HIBP is not wired into any example**; CodeQL #18 dismiss
   `TestInvitationAcceptanceUpgrade` and `TestOAuth2SessionUpgradePreservesBrowserSession` fail
   with "oauth_clients table missing". They fail the same way on unchanged `main` and pass under
   `POSTGRES_TEST_SCHEMA`. Follow-up.
-- battleboardhq's, gps-three-sixty's and segovia's repins happen in their own repositories.
+- Host repins happen in the hosts' own repositories.
 
 ## Multi-tenant host asks: route listing, H10 shape, fenced jobs default, invitation actor and decline by token (published 2026-10-28)
 
@@ -1592,8 +1605,7 @@ dispatch on `main`, pushed one at a time, confirmed on origin, then cold-verifie
 scratch consumer (`GOWORK=off`, an empty module cache, `proxy.golang.org`, `sum.golang.org`,
 `go mod verify`, `go build ./...`, `go 1.26.10`). Workshop tags are verified by a cold `init`
 instead of a dispatch. Claude cuts and pushes the tags; the owner merges. Design and rulings:
-`plans/multi-tenant-host-asks.md` (ratified 2026-10-27, "all recs", R-4 = ship PR-O1; executed
-copy in `plans/`). The audit entry is **AUDIT-058**. This section is the whole record: there
+the plan (ratified 2026-10-27, "all recs", R-4 = ship PR-O1). The audit entry is **AUDIT-058**. This section is the whole record: there
 is no handoff file and no manifest. The operator surface is the docs site: *Row-level
 security* (catalog posture, roles and the read-only preflight, policies on your own tables,
 pocket tables and the jobs `tenant_id`, the endpoint matrix, scaffolding), *First admin*
@@ -1642,7 +1654,7 @@ inventory recipe), the jobs pocket page and the sdk *web* page. Those guides shi
 | 2 | `workshop/gopernicus/v0.10.1` | `14b59468` | #251 (PR-1) | 40702865522 @ `0850deff` | OK; cold `init --db pgx` from `@v0.10.1`, README cites `@v0.10.1`, `guard --posture` clean (H10 ok) |
 | 3 | `pockets/jobs/stores/pgx/v0.9.0` | `eaf1af26` | #252 (PR-2) | 40702865522 @ `0850deff` | OK; train set |
 | 3 | `pockets/jobs/stores/turso/v0.8.0` | `eaf1af26` | #252 (PR-2) | 40702865522 @ `0850deff` | OK; train set |
-| 4 | `pockets/authentication/v0.34.0` | `0850deff` | #253 (PR-3) | 40702865522 @ `0850deff` | OK; train set, battleboardhq shape |
+| 4 | `pockets/authentication/v0.34.0` | `0850deff` | #253 (PR-3) | 40702865522 @ `0850deff` | OK; train set, magic-link host shape |
 | 5 | `workshop/gopernicus/v0.10.2` | this PR's squash commit | this PR (PR-5) | — | after the tag: a cold `init --db pgx` from `@v0.10.2` |
 
 One run (40702865522 on `0850deff`) covered every tag commit at or before it on `main`; no
@@ -1657,7 +1669,7 @@ require sdk v0.22.0, so the authentication tag never waited on PR-O1.
 - **Train set:** sdk v0.22.0 + authentication v0.34.0 + authentication pgx v0.17.0 / turso
   v0.16.0 + jobs v0.8.0 + jobs pgx v0.9.0 / turso v0.8.0 + pgxdb v0.17.0 +
   datastores/turso v0.10.0: `all modules verified`, builds.
-- **battleboardhq shape:** golang-jwt v0.3.0, google-uuid v0.2.0, sendgrid v0.5.0,
+- **Magic-link host shape:** golang-jwt v0.3.0, google-uuid v0.2.0, sendgrid v0.5.0,
   oauth/google v0.3.0 + authentication v0.34.0 + authentication pgx v0.17.0 + authorization
   v0.32.0 + authorization pgx v0.23.0 + jobs v0.8.0 + jobs pgx v0.9.0 + pgxdb v0.17.0 + sdk
   v0.22.0: `all modules verified`, builds.
@@ -1701,11 +1713,11 @@ require sdk v0.22.0, so the authentication tag never waited on PR-O1.
 - **jobs boot line:** a host on `jobspgx.Repositories` / `jobsturso.Repositories` now logs
   `fenced_queue=true`. Alerting or log assertions keyed on `fenced_queue=false` must change.
   Call `StatusCheck` at boot on both drivers so a ledger missing `0003` fails there.
-- **battleboardhq** (pgxdb v0.14.0, authentication v0.31.0, jobs v0.7.0, guard `@v0.9.1`; no
+- **Magic-link pgx host** (pgxdb v0.14.0, authentication v0.31.0, jobs v0.7.0, guard `@v0.9.1`; no
   data): first take the PostgreSQL 18 + recreate path its `HANDOFF.md` already plans (the
   "Default ids by entity class; PostgreSQL 18 floor" section below: bump to pgxdb v0.17.0 and
   the PG18 store tags, re-export `iam/` + `jobs/`, recreate), then these tags (the
-  battleboardhq MVS shape above):
+  magic-link-host MVS shape above):
   - guard: bump `GOPERNICUS` to `@v0.10.1` or later; the original
     `fmt.Errorf("create invitation: %w")` wording may be restored;
   - jobs: drop the manual `NewFencedQueueStore` in its jobs outbound adapter and return
@@ -1723,10 +1735,10 @@ require sdk v0.22.0, so the authentication tag never waited on PR-O1.
   Its acceptance drive (Decline works in a browser, `make bootstrap`'s `invitation_created`
   shows a system actor, `make check` green with `guard --posture @v0.10.1`) happens in its own
   repository.
-- **segovia/v2** (sdk v0.15.0, pgxdb v0.9.0, authentication v0.19.1, jobs v0.6.0): defer until
+- **Tenancy v2 host** (sdk v0.15.0, pgxdb v0.9.0, authentication v0.19.1, jobs v0.6.0): defer until
   its repin milestone. The RLS and *First admin* guides are the inputs for its RLS plan; its
   catalog test becomes the second data point for the probe follow-up.
-- **gps-360-go and turso hosts:** jobs/turso only. A host on `jobsturso.Repositories` gets
+- **The OAuth2 host and turso hosts:** jobs/turso only. A host on `jobsturso.Repositories` gets
   `FencedQueue` and should call the new `StatusCheck` at boot (rows 6 and 7). Nothing else in
   this train needs a change.
 - **Examples (this PR).** Every example builds, vets and tests at `GOWORK=off` on these tags.
@@ -1798,11 +1810,11 @@ server log only on the console mailer's own line.
   domain commit, survives a rollback, and can starve a tight pool. Enqueue after commit; the
   gap is an open framework item for its own plan.
 - **Deferred to their own plans:** the JSON session arm (R-5; the recipe ships today), the
-  pgxdb row-security / role posture probe (after segovia's catalog test exists), and
+  pgxdb row-security / role posture probe (after a host's catalog test exists), and
   `init --tenancy=rls` (R-2).
 - **No turso jobs README** (owner rec: none); the turso store is documented on the jobs pocket
   page.
-- Battleboard's and segovia's repins happen in their own repositories.
+- Host repins happen in the hosts' own repositories.
 
 ## Default ids by entity class; PostgreSQL 18 floor (published 2026-10-27)
 
@@ -1812,8 +1824,8 @@ commit on `main` after a green `live-stores` dispatch on `main`, pushed one at a
 confirmed on origin and the proxy, then cold-verified from a scratch consumer (`GOWORK=off`, an
 empty module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build ./...`, a
 consumer pinning `go 1.26.10`). Under the 2026-10-27 owner ruling, Claude cuts and pushes the
-tags and the owner merges. Design and rulings: `plans/database-default-ids.md` (ratified rev 4,
-2026-10-27; executed copy in `plans/`). The audit entry is **AUDIT-057**. Under the owner's
+tags and the owner merges. Design and rulings: the plan (ratified rev 4,
+2026-10-27). The audit entry is **AUDIT-057**. Under the owner's
 2026-10-23 process ruling this section is the whole record: there is no handoff file and no
 manifest. The operator surface is the docs site: *Database posture* ("Generated id columns"),
 *Operations runbooks* ("Move a PostgreSQL server from 17 to 18"), the sdk overview's *Entity
@@ -1858,8 +1870,8 @@ integrations catalog. The reference is the pgxdb README's floor paragraph, `pock
 >   database that applied the old files fails `RunMigrations` and P9. Recreate it and
 >   re-export; there is no in-place path in this release.
 > - **By host shape:** greenfield → nothing but PostgreSQL 18; old files applied, no data →
->   recreate and re-export; old files applied and you cannot recreate → defer; gps-three-sixty
->   and battleboardhq have their own rows; turso hosts → no DDL change.
+>   recreate and re-export; old files applied and you cannot recreate → defer; the pgx hosts
+>   have their own rows; turso hosts → no DDL change.
 
 | Step | Tag | Commit | PR | `live-stores` on `main` | Cold verification |
 |---|---|---|---|---|---|
@@ -1872,7 +1884,7 @@ integrations catalog. The reference is the pgxdb README's floor paragraph, `pock
 | 4 | `pockets/authorization/stores/pgx/v0.23.0` | `627bc8c3` | #244 (PR-5b) | 40617383182 @ `efeae231` | OK; set B |
 | 4 | `pockets/authorization/stores/turso/v0.22.0` | `627bc8c3` | #244 (PR-5b) | 40617383182 @ `efeae231` | OK; set B |
 | 4 | `pockets/authentication/v0.33.1` (storetest only) | `efeae231` | #245 (PR-2b part 1) | 40617383182 @ `efeae231` | OK |
-| 5 | `pockets/authentication/stores/pgx/v0.17.0` | `181472d6` | #246 (PR-2b part 2) | 40622425163 @ `d5af245f` | OK; set B, gps-three-sixty and battleboardhq shapes |
+| 5 | `pockets/authentication/stores/pgx/v0.17.0` | `181472d6` | #246 (PR-2b part 2) | 40622425163 @ `d5af245f` | OK; set B, pgx host and magic-link host shapes |
 | 5 | `pockets/authentication/stores/turso/v0.16.0` | `181472d6` | #246 (PR-2b part 2) | 40622425163 @ `d5af245f` | OK; set B |
 | 5 | `pockets/cms/stores/pgx/v0.6.0` | `d350f081` | #247 (PR-3b) | 40622425163 @ `d5af245f` | OK; set B |
 | 5 | `pockets/jobs/stores/pgx/v0.8.0` | `d5af245f` | #248 (PR-4b) | 40622425163 @ `d5af245f` | OK; set B |
@@ -1905,10 +1917,10 @@ v0.33.0. So PR-2b split: the storetest additions shipped as v0.33.1 (#245), and 
   stores pgx v0.16.0 / turso v0.15.0 / views v0.9.0. The compile-level change is additive.
 - **Set B** (steps 4–5): every new core + every new store + pgxdb v0.17.0 + datastores/turso
   v0.10.0 built.
-- **gps-three-sixty shape:** authentication v0.33.1 + authentication pgx v0.17.0 +
+- **pgx host shape:** authentication v0.33.1 + authentication pgx v0.17.0 +
   authorization v0.32.0 + authorization pgx v0.23.0 + jobs pgx v0.8.0 + pgxdb v0.17.0 +
   authorization goredis v0.6.0 built.
-- **battleboardhq shape:** its own module list (golang-jwt v0.3.0, google-uuid v0.2.0, sendgrid
+- **Magic-link host shape:** its own module list (golang-jwt v0.3.0, google-uuid v0.2.0, sendgrid
   v0.5.0, oauth/google v0.3.0) + authentication v0.33.1 + authentication pgx v0.17.0 +
   authorization v0.32.0 + authorization pgx v0.23.0 + jobs v0.8.0 + jobs pgx v0.8.0 + pgxdb
   v0.17.0 built.
@@ -1964,22 +1976,22 @@ integrations. Nothing retracts.
   newer pgxdb refuses to migrate on PostgreSQL 17, and the new store tags' files would mismatch
   your ledger. A live-data upgrade path ships when a host needs it (see "Deferred: live-host
   upgrade protocol").
-- **gps-three-sixty** (authentication v0.31.0 / pgx v0.15.0, authorization v0.31.0 / pgx
+- **Native-OAuth pgx host** (authentication v0.31.0 / pgx v0.15.0, authorization v0.31.0 / pgx
   v0.21.0, jobs v0.7.0 / pgx v0.7.0, pgxdb v0.14.0; ledgers `workshop/migrations/{iam,jobs,primary}`
   over `db` + `iamDB`; no `WithIDs`; no real data): the "old files applied" row, for both
   databases. The pgxdb bump drags in the authorization floor (pgxdb ≥ v0.15.0 ⇒ authorization
   pgx ≥ v0.22.0), which v0.23.0 meets. The new defaults apply with no code change: NanoID users,
   UUIDv7 records, no `job_` prefixes. Its goredis v0.6.0 still drags in authorization stores/turso
   v0.17.0 + datastores/turso v0.9.0 for tests only; harmless while no turso package is imported.
-- **battleboardhq** (bootstrapping, no data; `authentication.WithIDs(sdk.NewIDGenerator(googleuuid.V7()))`;
+- **Magic-link pgx host** (bootstrapping, no data; `authentication.WithIDs(sdk.NewIDGenerator(googleuuid.V7()))`;
   its own tables already `COLLATE "C" DEFAULT uuidv7()::text`; `postgres:18-alpine`; ledgers
-  `iam/`, `jobs/`, `battleboard/`): bump the pins, re-export `iam/` + `jobs/`, `make dev-reset`.
+  `iam/`, `jobs/`, `app/`): bump the pins, re-export `iam/` + `jobs/`, `make dev-reset`.
   **No id change for this host:** it already mints v7 everywhere through `cfg.IDs`, so the
   collation and the re-export are its whole upgrade. Dropping the option would switch users,
   service accounts and invitations to NanoIDs. `jobs.WithIDs` and
   `authorization/stores/pgx.WithIDs` exist if it wants its generator there too — never
   `sdk.DatabaseID` on those two (rows 7 and 8).
-- **gps-360-go / segovia:** a rough draft and a from-scratch rebuild respectively — greenfield.
+- **The OAuth2 host and the tenancy v2 host:** a rough draft and a from-scratch rebuild respectively — greenfield.
 - **Hosts on turso:** no DDL change; new ids arrive from Go. Take authentication turso v0.16.0
   for rows 3 and 4.
 - **Examples (this PR).** Every example builds, vets and tests at `GOWORK=off` on these tags.
@@ -2072,7 +2084,7 @@ started by the first host with data that needs the new store tags, begins from i
   per file, in sorted order, inside one transaction). The edited canonical `CREATE` files fail
   both checks on a host that applied the old bytes.
 - **The shape that works** (reviewed by platform-sre and data-integration on rev 3): one
-  idempotent deploy per `RunMigrations` stream (one per schema or database; gps-three-sixty's
+  idempotent deploy per `RunMigrations` stream (one per schema or database; the pgx host's
   `iam/` and `jobs/` are two):
   1. `0000_gopernicus_ids_restamp.sql`, containing ONLY scoped
      `UPDATE schema_migrations SET checksum = '<new>' WHERE source = 'default' AND version = '<file>' AND checksum = '<old>';`
@@ -2228,7 +2240,7 @@ trains.
   pocket grows an allow-list; a shared storetest id-shape case.
 - **pgxdb `live_test.go:68`** still counts every `default`-source ledger row; run the pgxdb live
   suite on a fresh database.
-- Battleboard's and gps-three-sixty's repins happen in their own repositories.
+- Host repins happen in the hosts' own repositories.
 
 ## Transaction-local settings for row-level security (pgxdb v0.16.0)
 
@@ -2236,7 +2248,7 @@ One annotated tag (not signed) on one module: `integrations/datastores/pgxdb/v0.
 squash-merge commit `8c66ea16` (#237) after a green `live-stores` dispatch on `main` (run
 40598995641), confirmed on origin, polled on the proxy and cold-verified from a scratch consumer
 (published 2026-10-27). No other module is tagged, no repins are required, and there is no migration. Design
-and rulings: `plans/pgxdb-local-settings.md` (ratified 2026-10-27). Under the owner's 2026-10-23
+and rulings: the plan (ratified 2026-10-27). Under the owner's 2026-10-23
 process ruling this section is the whole record: there is no handoff file and no manifest. The
 operator surface is the docs site's new *Row-level security with pgxdb* guide, linked from
 *Persistence* and *Database posture*; the reference is the pgxdb README's "Transaction-local
@@ -2258,9 +2270,9 @@ generation, nothing tenant-named in sdk or pgxdb.
 
 The sdk `Transactor`, turso, and every store and pocket are unchanged.
 
-**Upgrade note.** Additive; nothing to do unless you adopt it. A host adopting it (battleboard,
-then Segovia) replaces its own `set_config` first statement with `TransactWithSettings` and its
-own context marker with `d.TxFrom(ctx)` + `tx.Setting(name)`; the guide shows battleboard's
+**Upgrade note.** Additive; nothing to do unless you adopt it. A host adopting it
+replaces its own `set_config` first statement with `TransactWithSettings` and its
+own context marker with `d.TxFrom(ctx)` + `tx.Setting(name)`; the guide shows a host's
 `Scope` against v0.16.0. That port happens in the host's repo.
 
 **The review record.** The plan passed a two-reviewer gate before ratification; both returned
@@ -2284,7 +2296,7 @@ ratify-with-edits, and every finding was folded ("Decided by gate").
   tables" and PgBouncer.
 - **DI LOW-1:** the "bound" wording, and simple protocol tested. **DI LOW-2:** the
   `pg_backend_pid` check and the deadlock comment. **LB LOW-1:** the `Example` uses
-  `app.actor_id`. **LB LOW-2 / DI LOW-4:** battleboard's shape against v0.16.0. **LB LOW-3:**
+  `app.actor_id`. **LB LOW-2 / DI LOW-4:** a host's shape against v0.16.0. **LB LOW-3:**
   the statement shape is one multi-column `SELECT set_config(…)`. **LB LOW-4:** the guide's note
   on translating a missing tenant before the call.
 
@@ -2323,7 +2335,7 @@ with why the helper binds through `set_config` rather than `SET LOCAL`.
 **Known and deferred.**
 - **pgxdb `live_test.go:68`** (`TestLive_OpenAndMigrate`) still counts every `default`-source
   ledger row; run the pgxdb live suite on a fresh database.
-- Battleboard's and Segovia's ports are in their own repos.
+- Hosts' ports are in their own repos.
 
 ## Ambient transactions per datastore instance (published 2026-10-27)
 
@@ -2333,8 +2345,7 @@ squash-merge commit on `main` after a green `live-stores` dispatch there, pushed
 the proxy, and cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache,
 `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build ./...`, a consumer pinning
 `go 1.26.10`). No sdk tag (the `transaction.Transactor` change is comment-only), no migration.
-Design and rulings: `plans/querierfrom-instance-scope.md` (ratified 2026-10-27; executed copy in
-`plans/`). The audit entry is **AUDIT-056**. Under the owner's 2026-10-23 process ruling this
+Design and rulings: the plan (ratified 2026-10-27). The audit entry is **AUDIT-056**. Under the owner's 2026-10-23 process ruling this
 section is the whole record: there is no handoff file and no manifest. The operator surface is
 the docs site: *Persistence* ("Two databases never share a transaction"), *Database posture*
 ("Two roles"), *Operations runbooks* ("Tenants and offboarding"), the sdk *Capabilities* page,
@@ -2357,7 +2368,7 @@ the host's job.
 |---|---|---|---|---|
 | 1 | `integrations/datastores/pgxdb/v0.15.0` | `d5c9f213` | #233 (PR-1) | OK; set A, including the negative |
 | 1 | `integrations/datastores/turso/v0.10.0` | `d5c9f213` | #233 (PR-1) | OK; set A, including the negative |
-| 2 | `pockets/authorization/stores/pgx/v0.22.0` | `18bb3f57` | #234 (PR-2) | OK; set B, gps-three-sixty shape |
+| 2 | `pockets/authorization/stores/pgx/v0.22.0` | `18bb3f57` | #234 (PR-2) | OK; set B, pgx host shape |
 | 2 | `pockets/authorization/stores/turso/v0.21.0` | `18bb3f57` | #234 (PR-2) | OK; set B |
 | 3 | `workshop/gopernicus/v0.9.2` | this PR's squash commit | this PR (PR-3) | owner: a cold `init --db pgx` / `--db turso` from `@v0.9.2` (task-12) |
 
@@ -2391,7 +2402,7 @@ it.
   github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx@v0.22.0` (turso: `…/stores/turso@v0.21.0`).
 - **Set B** (step 2): authorization v0.31.0 + stores pgx v0.22.0 / turso v0.21.0 + pgxdb v0.15.0 /
   turso v0.10.0 built.
-- **gps-three-sixty shape** (step 2): authentication v0.32.0 + authentication pgx v0.16.0 +
+- **pgx host shape** (step 2): authentication v0.32.0 + authentication pgx v0.16.0 +
   authorization v0.31.0 + authorization pgx v0.22.0 + jobs pgx v0.7.0 + pgxdb v0.15.0 +
   authorization goredis v0.6.0 built; `go mod verify` passed. goredis v0.6.0 transitively requires
   authorization stores/turso v0.17.0 and datastores/turso v0.9.0 (its test-only requires). That is
@@ -2428,7 +2439,7 @@ first" box and the rows are the plan's, verbatim.
 > **Read first:** `grep -rnE 'TxFromContext|QuerierFrom\(|\.Transact\(|TransactSnapshot\(|ErrNestedTransact|(pgxdb|tursodb|turso)\.Open\(' --include='*.go'` — count your `Open` calls.
 > **By host shape:** every host → rows 1, 2, 9; ONE `Open` per process → row 3 (no behaviour
 > change); two `Open`s over two DATABASES → rows 4, 5; two `Open`s over ONE database → row 6 (read
-> it first); hosts with their own `TxFromContext` caller (battleboard) → row 7; gps-three-sixty →
+> it first); hosts with their own `TxFromContext` caller (the magic-link host) → row 7; the pgx host →
 > row 8.
 > - **Pins (lockstep, transitive):** pgxdb **v0.15.0** WITH authorization stores pgx **v0.22.0**;
 >   turso **v0.10.0** WITH authorization stores turso **v0.21.0** — whether you bump the connector
@@ -2443,8 +2454,8 @@ first" box and the rows are the plan's, verbatim.
 | 4 | **Two `*DB` over two databases:** a store over B called inside `A.Transact` now runs on B's pool (was: on A's transaction — the wrong database) | a workflow that "worked" because table names collided now writes to the right database; a "relation does not exist" error goes away | — | pgxdb@v0.15.0, turso@v0.10.0 |
 | 5 | **Two `*DB` over two databases:** `B.Transact` inside `A.Transact` is allowed (was: false `ErrNestedTransact`); `A.Transact` inside `A.Transact` still refuses; a nested request holds one connection from each pool | the inner commits on its own when its callback returns; the outer may still roll back — no cross-database atomicity; order non-retractable writes last or use `pockets/events`' outbox; nest instances in one fixed order, give requests a deadline, size `DB_MAX_CONNS` on the inner pool for the outer's concurrency | — | pgxdb@v0.15.0, turso@v0.10.0 |
 | 6 | **Two `*DB` over ONE database (two roles, a duplicate `Open`):** a store over B inside `A.Transact` WAS on A's transaction (atomic by accident) and is NOW on B's pool | no longer atomic with A; it lock-waits on rows or tables A holds — on PostgreSQL unbounded unless `DB_LOCK_TIMEOUT`/`DB_STATEMENT_TIMEOUT` are set (the server's deadlock detector cannot see a client-side wait; the request pins two connections); on a SQLite file every inner write fails `SQLITE_BUSY` after `busy_timeout`; symptom: requests stall in pool acquire / `idle in transaction` on A while B saturates | build those stores over A (one `*DB`, one transaction); otherwise set `DB_LOCK_TIMEOUT` and never nest the pair | pgxdb@v0.15.0, turso@v0.10.0 |
-| 7 | **Battleboard** `internal/outbound/domains/tenancy/scope.go:62`: `tx, inTx := pgxdb.TxFromContext(ctx)` → `tx, inTx := s.db.TxFrom(ctx)`; the `Run` doc comment's "or inside any other pgxdb transaction, is refused" becomes "or inside another transaction of the same `*DB`" | one line; `Scope.Querier` keeps returning the scope's own transaction so `set_config('app.tenant_id', …, true)` stays transaction-local and FORCE RLS keeps answering tenant-owned stores; `organizations.go` (`QuerierFrom`) unchanged; one pool, so rows 3 and 7 are its whole upgrade; pins per row 2 (it pins authorization pgx v0.21.0 today) | — | host |
-| 8 | **gps-three-sixty:** no code change (no `Transact`, no `TxFromContext`); two databases, so row 6 does not apply. After row 2, a future business `db.Transact` around authorization/authentication calls over `iamDB` runs them on `iamDB`, and `iamDB.Transact` may nest inside it. Two flips WITHOUT a signal under R-1 (a): `Apply`/`Fence`/`Expire` over `iamDB` inside `db.Transact` used to refuse (`ErrMutationInsideTransaction`, for the wrong reason) and now commit on their own — a grant applied inside a business transaction that later rolls back STAYS applied (a dangling permission on a resource never created); and `CacheableContext` is now true there, so checks inside a business transaction may be served from the goredis tuple cache | write grants after the business commit, or compensate on rollback with `OperationID` + `Fence`; pins only | — | host |
+| 7 | **Magic-link pgx host** `internal/outbound/domains/tenancy/scope.go:62`: `tx, inTx := pgxdb.TxFromContext(ctx)` → `tx, inTx := s.db.TxFrom(ctx)`; the `Run` doc comment's "or inside any other pgxdb transaction, is refused" becomes "or inside another transaction of the same `*DB`" | one line; `Scope.Querier` keeps returning the scope's own transaction so `set_config('app.tenant_id', …, true)` stays transaction-local and FORCE RLS keeps answering tenant-owned stores; `organizations.go` (`QuerierFrom`) unchanged; one pool, so rows 3 and 7 are its whole upgrade; pins per row 2 (it pins authorization pgx v0.21.0 today) | — | host |
+| 8 | **Native-OAuth pgx host:** no code change (no `Transact`, no `TxFromContext`); two databases, so row 6 does not apply. After row 2, a future business `db.Transact` around authorization/authentication calls over `iamDB` runs them on `iamDB`, and `iamDB.Transact` may nest inside it. Two flips WITHOUT a signal under R-1 (a): `Apply`/`Fence`/`Expire` over `iamDB` inside `db.Transact` used to refuse (`ErrMutationInsideTransaction`, for the wrong reason) and now commit on their own — a grant applied inside a business transaction that later rolls back STAYS applied (a dangling permission on a resource never created); and `CacheableContext` is now true there, so checks inside a business transaction may be served from the goredis tuple cache | write grants after the business commit, or compensate on rollback with `OperationID` + `Fence`; pins only | — | host |
 | 9 | `ErrNestedTransact` message text: "this database instance already holds a transaction; pass the ambient ctx to this instance's repositories instead" | a log alert keyed on the old string stops matching | alert on `errors.Is(err, pgxdb.ErrNestedTransact)` / `tursodb.ErrNestedTransact`, not the message | pgxdb@v0.15.0, turso@v0.10.0 |
 | 10 | sdk `transaction.Transactor` contract clause: an implementation neither joins nor refuses another instance's transaction; nesting is per instance | none | — | sdk (untagged) |
 | 11 | scaffold pins pgxdb v0.15.0 / turso v0.10.0; emitted README runs the guard `@v0.9.2` | a cold `init` lands on the fixed connector; hosts pinning the guard at v0.9.1 need not bump (no rule-set change) | — | workshop@v0.9.2 (R-4) |
@@ -2464,10 +2475,10 @@ store in the same commit (row 2).
 - **Two `Open`s over ONE database** (row 6, read it first): hold one `*DB` for stores you want in
   one transaction. Otherwise set `DB_LOCK_TIMEOUT` (and `DB_STATEMENT_TIMEOUT`) and never nest
   the pair.
-- **battleboard** (rows 3, 7): one line in `Scope.Querier`, `pgxdb.TxFromContext(ctx)` →
+- **Magic-link pgx host** (rows 3, 7): one line in `Scope.Querier`, `pgxdb.TxFromContext(ctx)` →
   `s.db.TxFrom(ctx)`, plus the `Run` comment and the row-2 pins (authorization pgx v0.21.0 →
   v0.22.0 with pgxdb v0.15.0).
-- **gps-three-sixty** (row 8): pins only (pgxdb v0.15.0 + authorization pgx v0.22.0; the shape
+- **Native-OAuth pgx host** (row 8): pins only (pgxdb v0.15.0 + authorization pgx v0.22.0; the shape
   built in step 2). Under R-1 (a), a grant applied inside a business `db.Transact` that rolls
   back STAYS applied: write grants after the business commit, or compensate with `OperationID` +
   `Fence`. Checks inside a business transaction may be served from the goredis tuple cache. Its
@@ -2525,7 +2536,7 @@ follow-up commits on the PR.
   9/0, the foreign-instance tests 13/0 on pgx and 13/0 on turso.
 - **PR-2 (#234), `GOWORK=off` against the connector tags.** authorization pgx live **797/0/1**,
   bare and schema-scoped; turso store `-tags=integration` **1020/0/0**.
-- **Cold verification:** every tag above; sets A (with the negative), B, the gps-three-sixty
+- **Cold verification:** every tag above; sets A (with the negative), B, the pgx host
   shape and C as listed.
 - **This PR (PR-3).** Every example builds, vets and tests at `GOWORK=off`; set C from an empty
   module cache. A cold `init --db pgx` and `init --db turso` from THIS tree (built binary, empty
@@ -2572,8 +2583,8 @@ nesting on its own instance, never because another instance holds one"; **AUDIT-
 
 ## Guard P9 reads every host ledger (workshop/gopernicus v0.9.1 — published 2026-10-26)
 
-**PATCH.** Plan: [plans/guard-p9-ledgers.md](plans/guard-p9-ledgers.md) (ratified 2026-10-26).
-The consumer is gps-three-sixty, which keeps authentication and authorization in their own
+**PATCH.** Ratified 2026-10-26.
+The consumer is a host that keeps authentication and authorization in their own
 `iam` database.
 
 - **P9 reads every ledger:** each directory under `workshop/migrations/` (`_`/`.`-prefixed
@@ -2608,7 +2619,7 @@ on `main` after a green `live-stores` dispatch there, pushed, THEN polled on the
 cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache, `proxy.golang.org`,
 `sum.golang.org`, `go mod verify`, `go build <module>/...`, a consumer pinning `go 1.26.10`). No
 sdk tag and no views tag; one migration (0029, conditional). Design and rulings:
-`plans/s4d2-session-lifetime.md` (ratified 2026-10-26; executed copy in `plans/`). Under the
+the plan (ratified 2026-10-26). Under the
 owner's 2026-10-23 process ruling this section is the whole record: there is no handoff file and
 no manifest. The operator surface is the docs site: the authentication page's *Added by S4d part
 2*, *Production posture* ("Added by S4d part 2" and the Revocation SLA rows), *Keys and rotation*
@@ -2620,7 +2631,7 @@ the two store READMEs' 0029 sections.
 | Step | Tag | Commit | PR | Cold verification |
 |---|---|---|---|---|
 | 1 | `pockets/authentication/v0.32.0` | `345ef68d` | #221 + #222 (PR-1) | OK; set A |
-| 2 | `pockets/authentication/stores/pgx/v0.16.0` | `1b56c5c4` | #223 (PR-2) | OK; set B, gps-three-sixty shape, set C |
+| 2 | `pockets/authentication/stores/pgx/v0.16.0` | `1b56c5c4` | #223 (PR-2) | OK; set B, pgx host shape, set C |
 | 2 | `pockets/authentication/stores/turso/v0.15.0` | `1b56c5c4` | #223 (PR-2) | OK; set B, set C |
 
 Order: #221 merged at `fb659449` without the M2 dedupe, which followed as #222 (`345ef68d`) BEFORE
@@ -2637,7 +2648,7 @@ rows 2, 4, 8 and 9 (below).
   implement `session.ActivityRepository`, so `IdleTimeout` on it refuses with `ErrIdleTimeoutRequires`.
 - **Set B** (step 2): authentication v0.32.0 + pgx v0.16.0 + turso v0.15.0 + pgxdb v0.14.0 + datastores/turso v0.9.0
   built.
-- **gps-three-sixty shape** (step 2): authentication v0.32.0 + pgx v0.16.0 + the authorization goredis store v0.6.0
+- **pgx host shape** (step 2): authentication v0.32.0 + pgx v0.16.0 + the authorization goredis store v0.6.0
   built.
 - **Set C** (step 2): views/goth v0.9.0 + ui/goth v0.2.1 + rsc-qr v0.1.0 + go-webauthn v0.1.0 + set B (an
   auth-cms-shaped consumer) built.
@@ -2747,10 +2758,10 @@ Pins: sdk v0.20.0 (unchanged); authentication **v0.32.0**; stores pgx **v0.16.0*
 - **Store hosts wanting idle** (rows 1, 8, 9, 11). Repin the store (MVS lifts core), apply 0029
   pre-boot, then set `AUTH_IDLE_TIMEOUT` above `AccessTokenTTL`; the expected logout wave is zero.
   Refresh on demand (on a 401), not on a timer: a timer-driven SPA is never idle.
-- **gps-three-sixty** (native Google OAuth, bearer SPA, pgx + goredis): rows 2, 3, 8, 9 at repin;
+- **Native-OAuth pgx host** (native Google OAuth, bearer SPA, pgx + goredis): rows 2, 3, 8, 9 at repin;
   recommended `AUTH_IDLE_TIMEOUT` between 1 h and 12 h with `AUTH_REFRESH_TTL` 24 h (apply 0029
   first); the shape built in step 2. Rows 4–6 do not apply.
-- **battleboard**: as gps-three-sixty; `RotateAt`/`DeleteIfIdle` run on the pool path exactly as
+- **Magic-link pgx host**: as the pgx host; `RotateAt`/`DeleteIfIdle` run on the pool path exactly as
   `Rotate` does today (its RLS scope is an open question, `NEXT.md`).
 - **Hosts with their own `SessionRepository`** (row 1): implement `session.ActivityRepository` and
   run `storetest` (the `SessionActivity` sub-suite skips when the interface is absent), or leave
@@ -2783,7 +2794,7 @@ follow-up commits on the PR.
 **Verification record.**
 - `make guard` and `make check` pass on this PR's repinned tree. S4d part 2 adds no guard and no
   P-rule. `live-stores` green on `main` before each tag (runs 40540225155 and 40554986831).
-- **Cold verification:** every tag above; sets A, B, the gps-three-sixty shape and C as listed.
+- **Cold verification:** every tag above; sets A, B, the pgx host shape and C as listed.
 - **§1, the real auth-cms binary over HTTP** (#221, development, access 1 m, idle 90 s):
   `AUTH_IDLE_TIMEOUT=30s` and `AUTH_ACCESS_TOKEN_TTL=200h` both refuse boot; the boot line appears with the `idle_granularity` WARN; a
   session refreshed every 50 s stays **200**; an idle session gets **401** at 100 s with the same
@@ -2872,7 +2883,7 @@ defaults — `ADD COLUMN` is fine for opt-in features, never destructive — and
   `Identity.AuthTimeAsserted` (R-5, an sdk minor). **S4c-2** takes migration 0028.
 - **Follow-ups** (the plan's Notes): bounded deadlines and `ErrNotFound`-only mapping for the
   EXISTING 0025/0026 probes; an `/auth/sessions` idle marker; a distinct idle refresh code; a
-  pre-expiry idle signal. The battleboard RLS question stays open.
+  pre-expiry idle signal. The magic-link host's RLS question stays open.
 - **Residuals.** After idle expiry an issued access JWT passes `Stateless()` routes and
   `LiveOnMutation` safe reads for at most `AccessTokenTTL`; a client that refreshes on a timer is
   never idle; `GET /auth/sessions` may list idle-dead rows; logout by refresh token of an idle
@@ -2886,7 +2897,7 @@ Four annotated tags (not signed) on four modules. Each was cut at its PR's squas
 on `main`, pushed, THEN polled on the proxy, and cold-verified from a scratch consumer
 (`GOWORK=off`, an empty module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`,
 `go build <module>/...`). No sdk tag; one migration (0027, conditional). Design and rulings:
-`plans/s4d-session-machine-governance.md` (ratified 2026-10-26; executed copy in `plans/`). Under the owner's 2026-10-23 process ruling this section is the whole
+the plan (ratified 2026-10-26). Under the owner's 2026-10-23 process ruling this section is the whole
 record: there is no handoff file and no manifest. The handoff notes below say what a host does
 on upgrade, and hosts adopt them once, at the roadmap's end. The operator surface is the docs
 site: the authentication page's *Added by S4d*, *Production posture* ("Added by S4d" and the
@@ -2898,7 +2909,7 @@ S4d)" and the two store READMEs' 0027 and global-revocation sections.
 | Step | Tag | Commit | PR | Cold verification |
 |---|---|---|---|---|
 | 1 | `pockets/authentication/v0.31.0` | `dfe104b6` | #214 (PR-1) | OK; set A |
-| 2 | `pockets/authentication/stores/pgx/v0.15.0` | `b90a4eee` | #216 (PR-2) | OK; set B, gps-360-go shape |
+| 2 | `pockets/authentication/stores/pgx/v0.15.0` | `b90a4eee` | #216 (PR-2) | OK; set B, OAuth-only host shape |
 | 2 | `pockets/authentication/stores/turso/v0.14.0` | `b90a4eee` | #216 (PR-2) | OK; set B |
 | 3 | `pockets/authentication/views/goth/v0.9.0` | `b10c1df8` | #215 (PR-3) | OK; set C (full, after step 2) |
 
@@ -2915,7 +2926,7 @@ rows 3, 4, 6 and 8 (below), the conditional 0027 and each module's requirements.
   v0.8.1 selected sdk v0.20.0 and built. No lockstep: no existing port gained or changed a method, so the new slots
   stay nil under the released stores.
 - **Set B** (step 2): both stores + authentication v0.31.0 + pgxdb v0.14.0 + datastores/turso v0.9.0 selected sdk
-  v0.20.0 and built. A gps-360-go-shaped consumer (authentication v0.31.0 + the pgx store v0.15.0 + the authorization
+  v0.20.0 and built. An OAuth-only-host-shaped consumer (authentication v0.31.0 + the pgx store v0.15.0 + the authorization
   goredis store v0.6.0) built.
 - **Set C** (step 3, full after step 2): views/goth v0.9.0 + ui/goth v0.2.1 + rsc-qr v0.1.0 + go-webauthn v0.1.0 +
   set B (an auth-cms-shaped consumer) built.
@@ -2936,7 +2947,7 @@ under the table). The pin bullet in the box is appended.
 > **Read first:** `grep -rnE 'RequireMFA\(|Accept\(.*CredentialAPIKey|UserAdminCheck|AdministrationConfig\{|MFAConfig\{|
 > IdentityConfig\{|apikey\.APIKeyRepository|session\.ManagementRepository' --include='*.go'`. **By host shape:** every host →
 > rows 1, 2; hosts admitting API keys on `RequireMFA()` routes or through `UserAdminCheck` → row 3 (the break); machine hosts in
-> production → rows 4–6; store hosts → rows 7–8; goth hosts → row 9; OAuth-only hosts (gps-360-go) → rows 1, 2 only.
+> production → rows 4–6; store hosts → rows 7–8; goth hosts → row 9; OAuth-only hosts → rows 1, 2 only.
 > - **Pins (appended):** pin **authentication v0.31.0**; a store host pins **stores pgx v0.15.0** or **turso v0.14.0**
 >   (both require core v0.31.0 and sdk v0.20.0); a goth host pins **views/goth v0.9.0** (requires core v0.31.0). sdk,
 >   ui/goth and every other module are unchanged. turso v0.14.0 and go-webauthn v0.1.0 declare `go 1.26.10`: a consumer
@@ -3040,7 +3051,7 @@ v0.20.0 (unchanged); authentication **v0.31.0**; stores pgx **v0.15.0** / turso 
   `session.ManagementRepository` or `apikey.APIKeyRepository` itself changes nothing (no port method changed) and gains
   the features only by implementing the new ports; run `storetest` (the three sub-suites skip when a port is nil).
 - **Goth hosts** (row 9). Repin views/goth v0.9.0.
-- **OAuth-only hosts (gps-360-go): rows 1, 2 only.** Repin authentication v0.31.0 and the pgx store v0.15.0 (the gps-360-go
+- **OAuth-only hosts: rows 1, 2 only.** Repin authentication v0.31.0 and the pgx store v0.15.0 (the OAuth-only host
   shape built in set B). The registration mode governs its first Google sign-in; whether it is `open`,
   `invitation_only` (onboarding by invitation to the Google-verified address) or `closed` (a frozen roster) is decided at
   its adoption. Nothing else in this slice touches it unless it wires machine repositories.
@@ -3094,7 +3105,7 @@ commits on the PR.
   `go/clear-text-logging` alerts on #214 (the MFA posture line's `api_keys=` value and the API-key lifetime boot
   line's duration and source, none of them a credential) were dismissed as false positives. `make guard` and `make check` pass on this PR's repinned tree. S4d adds no guard and no
   P-rule.
-- **Cold verification:** every tag above; sets A, B (and the gps-360-go shape) and C as listed; this PR's empty-cache
+- **Cold verification:** every tag above; sets A, B (and the OAuth-only host shape) and C as listed; this PR's empty-cache
   from-the-tags builds.
 - **§1, the real auth-cms binary over HTTP** (#214, development): **48/48** — revoke-all gated (non-admin 403, AAL1
   admin 401 + challenge, after a TOTP step-up 200 with counts and both cookies cleared), every session, the bearer
@@ -3141,14 +3152,14 @@ commits on the PR.
   - Every example builds, vets and tests at `GOWORK=off` (the auth-cms server package three runs, all green);
     `pnpm build` in `workshop/documentation` succeeds.
 
-**Owner drill: WAIVED 2026-10-26** by the owner. The owner booted the auth-cms build from `main` (development, port 8094, `AUTH_SERVICE_ACCOUNT_STATUS=1`) and the boot posture lines held (`mfa_required=admins … api_keys=denied`, `registration=open source=default`, `api_key_max_ttl=unlimited source=default`); no drill requests were run. Verification §3 from the tags (auth-cms 13/13; production-baseline on PostgreSQL 17 with ledger 0034) is the acceptance evidence. Executed plan: `plans/s4d-session-machine-governance.md`.
+**Owner drill: WAIVED 2026-10-26** by the owner. The owner booted the auth-cms build from `main` (development, port 8094, `AUTH_SERVICE_ACCOUNT_STATUS=1`) and the boot posture lines held (`mfa_required=admins … api_keys=denied`, `registration=open source=default`, `api_key_max_ttl=unlimited source=default`); no drill requests were run. Verification §3 from the tags (auth-cms 13/13; production-baseline on PostgreSQL 17 with ledger 0034) is the acceptance evidence.
 
 **Owner rulings.** Ratified 2026-10-26 ("ratified"): **R-1 (a)** chunked keyset batches of 500 users per transaction,
 active users only, re-runnable, `started`/`success`/`failure` rows with partial counts; **R-2 (a)** API keys denied at
 every MFA gate (`RequireMFA()`, admin, machine) with 403 `mfa_credential_not_eligible` and the `MFAConfig.APIKeysExempt`
 hatch; **R-3 (a)** `APIKeyMaxTTL` production default 365 days, docs recommend 90; **R-4 (a)** an omitted `expires_at`
 in production is filled with now + max, echoed in the 201, `expires_at_defaulted: true` on the event; **R-5 (a)** the
-service method plus the opt-in route. gps-360-go's registration mode is decided at its adoption. **H1, owner ruling
+service method plus the opt-in route. An OAuth-only host's registration mode is decided at its adoption. **H1, owner ruling
 2026-10-26 after the #214 review:** the revoke-all route admits external tokens (`Accept(AccessToken, ExternalToken),
 Live()`); delegated tokens are still refused. **The Turso libSQL-server leg, owner ruling 2026-10-26:** waived for this
 release (below).
@@ -3188,7 +3199,7 @@ Three annotated tags (not signed) on three modules. Each was cut at its PR's squ
 on `main`, pushed, THEN polled on the proxy, and cold-verified from a scratch consumer
 (`GOWORK=off`, an empty module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`,
 `go build <module>/...`). No sdk, no pgx/turso store, no views tag and no migration. Design and
-rulings: [plans/s7-authorization-governance.md](plans/s7-authorization-governance.md) (rev 1, ratified 2026-10-26, EXECUTED 2026-10-26). One further PR,
+rulings: the plan (rev 1, ratified 2026-10-26, EXECUTED 2026-10-26). One further PR,
 #212, is example-only and untagged: auth-cms's development-only `AUTH_DEMO_ADMIN_EMAIL`, which
 lets the owner run the drill as a real signed-in platform admin. Under the owner's 2026-10-23
 process ruling this section is the whole record: there is no handoff file and no manifest. The
@@ -3223,7 +3234,7 @@ cache (`coldverify`: proxy poll, `GOWORK=off`, `go mod verify`, `go build`), all
   store v0.5.0 (authorization v0.27.0 pin): MVS selected core v0.31.0 and the set built (`all modules verified`). No
   lockstep: v0.31.0 is additive for every released store.
 - **Set B** (step 2): goredis v0.6.0 + authorization v0.31.0 + the authorization pgx store v0.21.0 + pgxdb v0.14.0 (a
-  gps-360-go-shaped consumer) selected sdk v0.20.0 and go-redis v9.18.0 and built.
+  OAuth-only-host-shaped consumer) selected sdk v0.20.0 and go-redis v9.18.0 and built.
 - **Set C** (step 3): authentication v0.30.0 beside the RELEASED stores pgx v0.14.0 / turso v0.13.0 and views/goth v0.8.1
   selected sdk v0.20.0 and built (no store or views lockstep).
 - **This PR (from the tags):** auth-cms and production-baseline at `GOWORK=off` from an EMPTY module cache over
@@ -3245,7 +3256,7 @@ text is quoted under the table) and rows 12–16 are appended (the PR-1 and PR-2
 #212). The pin bullet in the box is appended.
 
 > **Read first:** `grep -rnE 'tuplecache\.Policy\{|goredis\.NewTupleCache|RoleRoutes\{|InvitationsConfig\{|LinksConfig\{'
-> --include='*.go'`. **By host shape:** goredis TupleCache hosts (gps-360-go) → rows 1–3; every authorization host → rows
+> --include='*.go'`. **By host shape:** goredis TupleCache hosts → rows 1–3; every authorization host → rows
 > 4–6; every invitation host → rows 8–10 (row 8 is the break); IdP-only hosts without invitations → row 7 only.
 > - **Pins (appended):** pin **authorization v0.31.0** and **authentication v0.30.0**; a TupleCache host pins the goredis
 >   store **v0.6.0** (it requires authorization v0.31.0 and sdk v0.20.0). sdk stays v0.20.0; stores pgx/turso, views/goth
@@ -3296,7 +3307,7 @@ R-7 was ruled (a), so `InvitationURL` is folded into amended row 8 (auth-cms set
 
 Build-time deviations a host can see, folded here (rows 1–6 and 11 stay verbatim):
 - **Row 9, the resolver port.** `authlogic`'s `invitationResolver` port stays one method; `SyncInvitations` type-asserts an
-  unexported pending-only resolver and resolves nothing without it. No outside caller exists in this repo; gps-360-go
+  unexported pending-only resolver and resolves nothing without it. No outside caller exists in this repo; the OAuth2 host
   carries only a vendored copy and never calls `ResolveInvitations` directly.
 - **Row 9, `mine`.** It lists the invitations addressed to ONE claim-holding verified identifier of the kind (the primary
   first); none of that kind → 404. A merged listing across identifiers is deferred (below).
@@ -3324,7 +3335,7 @@ host; every other module unchanged. Repin with explicit `GOWORK=off go get <modu
      `GET /authorization/audit` passes a global-history gate (platform admin or auditor) as `AuditGate` and bridges
      `WithAuditReadObserver` into its security-event rail as `audit_read` with `rail: authorization`. Role writes can
      refuse self-grants with `WritePolicy: AllOf(RefuseSelfTarget, hostPolicy)`.
-- **IdP/OAuth-only hosts (gps-360-go): authorization + the goredis store** (rows 1–3, 12, 13, 15).
+- **IdP/OAuth-only hosts: authorization + the goredis store** (rows 1–3, 12, 13, 15).
   1. Repin authorization v0.31.0 and the goredis store v0.6.0 together (MVS lifts the core from v0.27.0; set B built this
      exact shape). Authentication v0.30.0 matters only if the host wires invitations or the security-events route.
   2. The hardening recipe matches its `AUTH_CACHE_REDIS_URL` (`rediss://<acl-user>:<password>@<host>:<port>/<db>`, an ACL
@@ -3445,8 +3456,8 @@ latency in auth-cms (deferred below); auth-cms now sets the delivery runtime's i
 
 **Owner rulings.** Ratified 2026-10-26 ("ratified"): **R-1 (a)** per-fact HMAC tags + the Go-computed header MAC + epoch;
 **R-4 (a)** the audit routes are JSON only; **R-5 (a)** the invitation landing page is a README checklist, no bundled page;
-**R-6 (a)** the drill on the auth-cms build (console mailer + browser JSON), the Redis drill optional, a gps-360-go goredis
-run at adoption; **R-7 (a)** `LinksConfig.InvitationURL`, required in production beside a Granter; **R-8 (a)** the current
+**R-6 (a)** the drill on the auth-cms build (console mailer + browser JSON), the Redis drill optional, a goredis
+run at the OAuth2 host's adoption; **R-7 (a)** `LinksConfig.InvitationURL`, required in production beside a Granter; **R-8 (a)** the current
 verified holder resolves. **R-2** (a typed `WithAuditReadObserver`, never deduplicated) and **R-3** (`RefuseSelfTarget` +
 `AllOf`; two-person approval is a README recipe) were decided by the two-reviewer gate (BE6, BE11). **Rev 1** (owner
 direction 2026-10-26): an invitation is addressed to `(kind, identifier)`, and every verification of that identifier
@@ -3479,7 +3490,7 @@ invitations. **MEDIUM-3, lead ruling:** passwordless adoption resolves too. Lead
 - **Follow-ups** (the plan's Notes): the reverse listing ("who can `manage` R") and an effective-access listing; removing
   `InvitationTokenInQuery` in the next authentication minor; a goth admin page for both rails (R-4 (b)); retiring
   auth-cms `/debug/security-events` now that the bundled route exists; an actor filter on `securityevent.ListFilter` and
-  an open-kind `Mine` (store changes); gps-360-go's adoption of `WithIntegrityKeys` + `FullRebuildEvery` at the roadmap's
+  an open-kind `Mine` (store changes); the OAuth2 host's adoption of `WithIntegrityKeys` + `FullRebuildEvery` at the roadmap's
   end.
 - **Owed legs.** Docker Desktop hung on the host, so the baseline legs ran on a native PostgreSQL 17 instead of a
   container; no Linux-container `make test-stores` ran (no pgx/turso store changed; `live-stores` covered `main`).
@@ -3497,7 +3508,7 @@ Each was cut at its PR's squash-merge commit on `main`, pushed, THEN polled on t
 cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache, `proxy.golang.org`,
 `sum.golang.org`, `go mod verify`, `go build <module>/...`). No sdk tag (BE8: TOTP is an algorithm
 with one consumer and lives in the pocket). Design and rulings:
-[plans/s4c-totp.md](plans/s4c-totp.md) (rev 1, ratified 2026-10-25, EXECUTED 2026-10-26). Two
+the plan (rev 1, ratified 2026-10-25, EXECUTED 2026-10-26). Two
 owner rulings during the build made both factor schemas conditional (0026, then S4b's 0025),
 which added a second core train (PR-2d, v0.29.0) and a second store repin (PR-2e) before this
 record, so the examples repin once. Under the owner's 2026-10-23 process ruling this section is
@@ -3645,7 +3656,7 @@ for a host that renders the QR through views/goth. Repin with explicit `GOWORK=o
   4. Row 14: a host-implemented `MutationRepository` may add `SnapshotScoped`; without it the
      pocket drops `Passkeys` from `Snapshot` when passkeys are unwired. No compile break.
 - **IdP-only and OAuth-only hosts** (the production-baseline shape, and the owner's
-  gps-360-go). **Nothing to wire.** Neither 0025 nor 0026 is required: with neither factor wired
+  OAuth2 host). **Nothing to wire.** Neither 0025 nor 0026 is required: with neither factor wired
   the pocket never probes, reads or erases those tables. A host may apply them ahead of time so a
   factor can be turned on later (production-baseline does). Proven from the tags below: the
   baseline binary boots on a ledger through 0031 with neither table present. Row 2 only if the
@@ -3770,7 +3781,7 @@ split — native `all` and the enrollment grace go to `s4c2-native-all`; **R-2 (
 adapter behind a views/goth `WithQR` hook; **R-3 (a)** a TOTP or recovery-code step-up is AAL2
 on any live first-party session, one predicate for every gate, the residual excludable with
 `Methods`; **R-4 (a)** stdlib RFC 6238 in the pocket; **R-5 (a)** disabling TOTP revokes every
-session. Owner note: every factor is host opt-in (an OAuth-only host like gps-360-go wires
+session. Owner note: every factor is host opt-in (an OAuth-only host wires
 none). **2026-10-25, first conditional-schema ruling** (amends BE12 / row 10): 0026 still ships,
 but is required only when TOTP is wired; the pocket probes through an optional interface only
 under `WithTOTP`; erasure and the admin reset skip TOTP when it is not wired. **2026-10-25,
@@ -3816,8 +3827,8 @@ Eight annotated tags (not signed) on seven modules, one of them NEW. Each was cu
 squash-merge commit on `main`, pushed, THEN polled on the proxy, and cold-verified from a
 scratch consumer (`GOWORK=off`, an empty module cache, `proxy.golang.org`, `sum.golang.org`, `go
 mod verify`, `go build <module>/...`). Every tag resolved on the first poll it was checked on. Design and rulings:
-[plans/s4b-passkeys.md](plans/s4b-passkeys.md) (rev 2, ratified 2026-10-24) and its addendum
-[plans/s4b-device-check-fixes.md](plans/s4b-device-check-fixes.md) (ratified 2026-10-25), which
+the plan (rev 2, ratified 2026-10-24) and its addendum
+the plan (ratified 2026-10-25), which
 inserted two core patches (v0.27.0, v0.27.1) before the views tag after the owner's device check
 failed. Under the owner's 2026-10-23 process ruling this section is the whole record: there is
 no handoff file and no manifest. The handoff notes below say what a host does on upgrade, and
@@ -4170,7 +4181,7 @@ Two annotated tags (not signed), each cut at its PR's squash-merge commit on `ma
 THEN polled on the proxy, and cold-verified from a scratch consumer (`GOWORK=off`, an empty
 module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build <module>/...`).
 Both resolved on the first poll. Design and rulings:
-[plans/s4a-mfa-posture.md](plans/s4a-mfa-posture.md) (rev 2, ratified 2026-10-24; its
+the plan (rev 2, ratified 2026-10-24; its
 "Build-time deviations" section records the lead rulings taken during the build). Under the
 owner's 2026-10-23 process ruling this section is the whole record: there is no handoff file and
 no manifest. The handoff notes below say what a host does on upgrade, and hosts adopt them once,
@@ -4437,7 +4448,7 @@ Twelve annotated tags (not signed), each cut at its PR's squash-merge commit on 
 THEN polled on the proxy, and cold-verified from a scratch consumer (`GOWORK=off`, an empty
 module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build <module>/...`).
 Every one resolved on the first poll. Design and rulings:
-[plans/s6-secrets-logging.md](plans/s6-secrets-logging.md) (rev 2, ratified 2026-10-24; its
+the plan (rev 2, ratified 2026-10-24; its
 "Build-time deviations" section records the lead rulings taken during the build). Under the
 owner's 2026-10-23 process ruling this section is the whole record: there is no handoff file and
 no manifest. The handoff notes below say what a host does on upgrade; hosts adopt them once, at
@@ -4731,7 +4742,7 @@ Six annotated tags (not signed), each cut at its PR's squash-merge commit on `ma
 THEN polled on the proxy, and cold-verified from a scratch consumer (`GOWORK=off`, an empty
 module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build <module>/...`).
 Every one resolved on the first poll. Design and rulings:
-[plans/s5-transport-abuse-hardening.md](plans/s5-transport-abuse-hardening.md) (rev 2, ratified
+the plan (rev 2, ratified
 2026-10-23; its "Build-time deviations" section records the lead rulings taken during the
 build). Under the owner's 2026-10-23 process ruling this section is the whole record: there is
 no handoff file and no manifest. The handoff notes below say what a host does on upgrade; hosts
@@ -4958,12 +4969,8 @@ Fourteen annotated tags (not signed), each cut at its PR's squash-merge commit o
 pushed, THEN polled on the proxy, and cold-verified from a scratch consumer (`GOWORK=off`, an
 empty module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build
 <module>/...`). Every one resolved on the first poll. Design and rulings:
-[plans/s3-retention-erasure.md](plans/s3-retention-erasure.md) (rev 2, ratified 2026-10-23;
-its "Build-time deviations" section records the lead rulings taken during the build). Host
-handoff: [plans/soc2-s3-retention-erasure-handoff.md](plans/soc2-s3-retention-erasure-handoff.md),
-written now and applied at the roadmap's end. Manifest:
-`plans/s3-retention-erasure-release-manifest.json` (from `go mod download -json` of the fourteen
-tags). The operator surface is in the docs site's guides: *Production posture* "Retention (S3)"
+the plan (rev 2, ratified 2026-10-23;
+its "Build-time deviations" section records the lead rulings taken during the build). The host handoff was written now and is applied at the roadmap's end. The operator surface is in the docs site's guides: *Production posture* "Retention (S3)"
 (the retention table and the S3 refusals and WARNs), *Production database posture* "Two roles",
 "Definer functions" and "Migrations", and *Operations runbooks* "Retention" and "Erase a person".
 
@@ -5317,10 +5324,8 @@ module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build <
 Every one resolved on the first poll. They close the **Known** list of
 [Audit completeness and integrity](#audit-completeness-and-integrity-soc-2-slice-s2--published-2026-10-23)
 below, except `external_login`'s per-cache dedupe, a design property that stays Known. Design
-and rulings: [plans/s2-follow-ups.md](plans/s2-follow-ups.md) (rev 2, ratified 2026-10-23).
-Host handoff: [plans/soc2-s2-audit-completeness-handoff.md](plans/soc2-s2-audit-completeness-handoff.md),
-updated under the maintenance rule (below). Manifest: `plans/s2-follow-ups-release-manifest.json`
-(from `go mod download -json` of the four tags).
+and rulings: the plan (rev 2, ratified 2026-10-23).
+The host handoff is updated under the maintenance rule (below).
 
 | Step | Tag | Commit | PR | Cold verification |
 |---|---|---|---|---|
@@ -5522,7 +5527,7 @@ still cites — and BENCHMARKS' recipe now calls the script a historical, owned 
 (a): no adoption exception.** The maintenance rule (owner, 2026-10-23): host handoffs are
 written and updated per slice but are NOT applied to the hosts until the SOC 2 roadmap is
 complete; the hosts adopt once, at the end. The risk, named: the pgx row-loss fix (v0.22.0) and
-the secrets race fix (v0.2.1) do not reach gps-360-go, which mounts OAuth2, until the roadmap
+the secrets race fix (v0.2.1) do not reach the OAuth2 host, which mounts OAuth2, until the roadmap
 ends, and the eventual adoption stacks the S1, S2 and follow-up runtime refusals and migrations
 into one deploy. The flood posture in (f) is acceptable in part BECAUSE hosts adopt after S3
 retention.
@@ -5592,11 +5597,8 @@ Fourteen annotated tags (not signed), each cut at its PR's squash-merge commit o
 pushed, THEN polled on the proxy, and cold-verified from a scratch consumer (`GOWORK=off`, an
 empty module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build
 <module>/...`). Every one resolved on the first poll. Design and rulings:
-[plans/s2-audit-completeness.md](plans/s2-audit-completeness.md) (rev 3, ratified
-2026-10-22). Host handoff:
-[plans/soc2-s2-audit-completeness-handoff.md](plans/soc2-s2-audit-completeness-handoff.md).
-Manifest: `plans/s2-audit-completeness-release-manifest.json` (from `go mod download -json`
-of the published tags; `pockets/authorization` appears twice, v0.29.0 and v0.29.1). The
+the plan (rev 3, ratified
+2026-10-22). The host handoff is updated per slice. `pockets/authorization` appears twice, v0.29.0 and v0.29.1. The
 Details flip is recorded as
 [AUDIT-054](AUDIT.md#audit-054-audit-details-carry-identifier-digests-not-addresses).
 
@@ -5925,11 +5927,8 @@ Ten annotated tags in seven steps, each cut at its PR's squash-merge commit, pus
 polled on the proxy, and cold-verified from a scratch consumer (`GOWORK=off`, an empty module
 cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build <module>/...`). Every
 one resolved on the first poll. Design and rulings:
-[plans/s1-production-posture.md](plans/s1-production-posture.md) (rev 2, ratified
-2026-10-22). Host handoff:
-[plans/soc2-s1-production-posture-handoff.md](plans/soc2-s1-production-posture-handoff.md).
-Manifest: `plans/s1-production-posture-release-manifest.json` (from `go mod download -json`
-of the published tags). The cms flip is recorded as
+the plan (rev 2, ratified
+2026-10-22). The cms flip is recorded as
 [AUDIT-053](AUDIT.md#audit-053-cms-admin-routes-are-deny-by-absence).
 
 | Step | Tag | Commit | PR | Cold verification |
@@ -6087,11 +6086,8 @@ Two tags, in order, both cold-verified through the proxy on the first poll:
   which says grammar belongs to the implementation, before the tag.
 - `pockets/authorization/v0.27.0` @ `f5eda0a4` (#118).
 
-The store modules were repinned in #119, with no tags. Design and rulings:
-[plans/authorization-provider-port.md](plans/authorization-provider-port.md)
-(rev 4.2, slice A; slices B–E still open). Host handoffs:
-`plans/segovia-v2-authorization-v0.27-repin-handoff.md` and
-`plans/gps-360-go-authorization-v0.27-repin-handoff.md`. Host guidance:
+The store modules were repinned in #119, with no tags. Design: rev 4.2, slice A (slices B–E still open). Host handoffs
+were written for each host. Host guidance:
 "The authorization protocol" in `pockets/authorization/README.md` and the v0.27.0
 section of `pockets/authorization/stores/UPGRADE.md`.
 
@@ -6102,7 +6098,7 @@ section of `pockets/authorization/stores/UPGRADE.md`.
   `Allowed` only. Reasons stay in `CheckExplain` and the decision log.
   **Host retypes** (mechanical): every narrow interface typed
   `Check(...) (model.CheckResult, error)` or `CheckBatch(...) ([]model.CheckResult, error)`
-  — gps-360-go `ask/allowed.go:18` and `access.go:38`; Segovia's `CheckBatch`
+  — an OAuth2 host's `ask/allowed.go:18` and `access.go:38`; a tenancy host's `CheckBatch`
   ports. Code that read `ReasonCode`/`Reason` from a check calls `CheckExplain`.
 - **`model.PrincipalRef` is `sdk.Principal`** and has no `Validate` method; call
   `model.ValidatePrincipal`. `model.Resource`, `model.CheckRequest` and
@@ -6155,8 +6151,6 @@ new pins; cold-verify each tag.
 One train, eight tags, in dependency order. A host can now admit tokens from an
 external identity provider (Firebase Auth, Auth0, or any OIDC issuer) as
 ordinary `sdk.Principal`s, with the authentication pocket as the identity home.
-Design, rulings and build record:
-[plans/external-identity-providers.md](plans/external-identity-providers.md).
 Host guidance: the "External identity providers" section of
 `pockets/authentication/README.md`.
 
@@ -6282,7 +6276,7 @@ v0.19.0 and take v0.19.1** (v0.19.0's regression is under Known).
   JWT-shaped bearer whose payload was not JSON, or whose `iss` was neither the
   delegated issuer nor a wired provider, before the host `TokenSigner` saw it.
   A host signer that sets its own `iss` or emits non-JSON dotted tokens got 401
-  on every request. Fixed in v0.19.1 (#106). gps-360-go and Segovia use
+  on every request. Fixed in v0.19.1 (#106). two hosts use
   `golangjwt.New` (no `iss`) and were not affected.
 - **The form-encoded CSRF hole (before v0.19.1).** The gate skipped the
   token for every form body, but only the account-form handlers check a body
@@ -6310,7 +6304,7 @@ v0.19.0 and take v0.19.1** (v0.19.0's regression is under Known).
   (`NewAuthenticator`)**. A host whose clients authenticate with the session
   cookie (for example a same-origin SPA calling its API with
   `credentials: 'include'`) **must** wrap its router in
-  `http.CrossOriginProtection` (ARCHITECTURE host posture); gps-360-go's
+  `http.CrossOriginProtection` (ARCHITECTURE host posture); one host's
   `cmd/server` is the reference. CORS is not a substitute, because it governs
   reading responses, not sending forged requests. Bearer- and API-key-only hosts
   need nothing, since those credentials are not ambient. The residual limitation:
@@ -6325,7 +6319,7 @@ v0.19.0 and take v0.19.1** (v0.19.0's regression is under Known).
   others (F6), a pocket-less middleware (F7), the native-session seam (F8), a
   Firebase scrypt `Hasher` (F9), Firestore `external_subjects` (F10).
 - Downstream (owner):
-  - **gps-360-go and Segovia v2:** repin `pockets/authentication` to
+  - **The OAuth2 host and the tenancy v2 host:** repin `pockets/authentication` to
     **v0.19.1** (skip v0.19.0) and the auth stores to pgx v0.9.0 / Turso v0.8.0.
     Copy or re-export `0020_external_subjects.sql` into the host ledger and
     apply it before deploying. Make sure every cookie client sends
@@ -6339,8 +6333,7 @@ v0.19.0 and take v0.19.1** (v0.19.0's regression is under Known).
 
 MINOR release of the `workshop/gopernicus` CLI, alone. It adds the `guard` verb,
 the executable floor of the host contract in `examples/README.md` (issue #90).
-No other module is tagged, and no library API changes. Design, rulings and
-build notes: [the plan](plans/host-contract-reconciliation.md).
+No other module is tagged, and no library API changes.
 
 **What changed.**
 - **The contract (PR #91).** `examples/README.md` adopts the reference host's
@@ -6382,15 +6375,13 @@ that commit on `main` before tagging.
   the distinction matters; G30's `|| exit 1` works either way.
 - The `init` skeleton still emits the three grep guards. Emitting the `tool`
   pin and a `guard:` target is deferred to v0.4.1 (YOUR CALL 7).
-- Downstream: gps-360-go, venona-project and Segovia v2 pin the tool with
+- Downstream: the hosts pin the tool with
   `go get -tool github.com/gopernicus/gopernicus/workshop/gopernicus@v0.4.0`
-  and settle their findings in their own slices. The plan's "Downstream
-  handoff" section lists each host's findings.
+  and settle their findings in their own slices.
 
 ## Secrets pocket (sdk v0.13.0; pockets/secrets v0.1.0; pockets/secrets/stores/pgx v0.1.0 — published 2026-10-17)
 
-Three tags for one feature, in dependency order. Design and build record:
-[plans/secrets-pocket.md](plans/secrets-pocket.md).
+Three tags for one feature, in dependency order.
 
 **What changed.**
 - **sdk v0.13.0 (MINOR).** `cryptids.KeyRing`, `ParseKeyRing`, `KeyedEncrypter`
@@ -6425,8 +6416,6 @@ Three tags for one feature, in dependency order. Design and build record:
   (it flipped a base64 character, not a decoded byte) and failed once on PR
   #86's first CI run; fixed in #86 as a test-only change. `sdk/v0.13.0` runtime
   code is identical.
-
-Checksums and provenance: [release manifest](plans/secrets-pocket-release-manifest.json).
 
 ## Direct-hit short circuit (authorization v0.26.0 — published 2026-10-14)
 
@@ -6471,11 +6460,6 @@ existing expansion runs unchanged, and no extra budget step is charged.
 - A proposed 7-column pgx index was measured and dropped by owner ruling: it
   grew that index from 12 MB to 120 MB to fix only freshly bulk-loaded,
   un-vacuumed tables.
-
-Checksums and provenance: [release manifest](plans/per-route-lookup-strategy-release-manifest.json).
-Design, rulings and build notes: [the plan](plans/per-route-lookup-strategy.md).
-Host repins: [gps-360-go](plans/gps-360-go-authorization-v0.26-repin-handoff.md),
-[Segovia v2](plans/segovia-v2-authorization-v0.26-repin-handoff.md).
 
 ## Tuple-cache mirror keyed on its binding (authorization v0.25.0; goredis v0.5.0 — published 2026-10-14)
 
@@ -6522,8 +6506,6 @@ database" and "Mirror expiry and orphans".
   `go mod verify`.
 - Hosted Turso was not run; its adapter has no cache-runtime change.
 
-Checksums and provenance: [release manifest](plans/tuplecache-key-on-binding-release-manifest.json).
-Design, review findings F1–F12 and rulings: [the plan](plans/tuplecache-key-on-binding.md).
 Host adoption is covered by the v0.26.0 repin handoffs, which span this release.
 
 ## Invitation terminal settlement (published 2026-10-13)
@@ -6562,9 +6544,6 @@ in `examples/auth-cms` (PR #73). **Hosted Turso was not run: the playground
 database's group no longer exists.** The hosted sqld transaction bound for 0004 on
 large ledgers is unverified; Turso hosts should dry-run 0004 on a branched copy.
 
-Checksums and provenance: [release manifest](plans/invitation-terminal-settlement-release-manifest.json).
-Exact verification and Segovia adoption: [the plan](plans/invitation-terminal-settlement.md).
-
 ## StaticFileServer for an SPA beside an API (sdk v0.12.0 — published 2026-10-12)
 
 SDK `v0.12.0` adds two `StaticFileServer` options and one SPA-mode default.
@@ -6596,11 +6575,9 @@ any tidy. Using `GOWORK=off`, an empty module cache, `proxy.golang.org` and
 and saw the index bytes, the SPA fallback, the asset-zone 404 and the reserved
 404 behave as documented. No replacements were used.
 
-Downstream: three-sixty repins sdk v0.9.0 → v0.12.0 (crossing additive v0.10.0
-and v0.11.0) and retires its `ui/spa` overlay and stat branches; Segovia v2 7.2
+Downstream: a host repins sdk v0.9.0 → v0.12.0 (crossing additive v0.10.0
+and v0.11.0) and retires its `ui/spa` overlay and stat branches; another host
 uses `WithSPAMode` with the stdlib `GET /api/{path...}` JSON-404 recipe.
-
-Plan: [static-spa-beside-api](plans/static-spa-beside-api.md).
 
 ## Email unsubscribe headers (sdk v0.11.0; sendgrid v0.4.0 — published 2026-10-09)
 
@@ -6633,8 +6610,6 @@ The live provider check is still open: no real SendGrid message has been sent to
 confirm the client's Unsubscribe button, a single `List-Unsubscribe`, and DKIM
 coverage of both headers.
 
-Plan: [email-list-unsubscribe](plans/email-list-unsubscribe.md).
-
 ## Invitation grant operation ledger (published 2026-10-06)
 
 Coordinated MINOR releases: authorization `v0.23.0`, PostgreSQL adapter
@@ -6666,9 +6641,6 @@ full tests and vet passed, including its real TCP completion-fault → revoke �
 409 recovery with accepted list state and absent access. Memory, isolated local
 PostgreSQL, SQLite and HTTP libSQL behavior passed before release. Hosted Turso,
 visual browser automation and production host migration remain unverified.
-
-Checksums and provenance: [release manifest](plans/invitation-grant-operation-ledger-release-manifest.json).
-Exact verification and Segovia adoption instructions: [the plan](plans/invitation-grant-operation-ledger.md#release-record--2026-10-06).
 
 ## Namespace origin policy (sdk v0.10.0; authentication v0.16.0 — published 2026-09-28)
 
@@ -6707,9 +6679,6 @@ preflight, mounted HTML login and a TLS cookie-jar flow through login, CSRF
 bootstrap, password change and missing-token rejection. Browser automation and
 live datastore tests were not run for this change.
 
-Plan: [origin-namespace-policy](plans/origin-namespace-policy.md).
-Checksums and provenance: [release manifest](plans/origin-namespace-policy-release-manifest.json).
-
 ## Invitation resource rule (authentication v0.15.0)
 
 Authentication `v0.15.0` (MINOR, additive): who may administer invitations is now
@@ -6741,7 +6710,7 @@ populated. Create, grant and decline attribution are unchanged.
 
 Host adoption: none required — rule OFF (`InviteCheck` only) behaves exactly as
 before. Stores untouched, no migration. Guard G28 now also rejects the rule's
-names under authentication logic. Plan: [plans/invitation-resource-rule.md](plans/invitation-resource-rule.md).
+names under authentication logic.
 
 Published 2026-09-27 from main merge commit
 `ab7df2cc593f1289c6b2314e68ca560b852ba3e2` (PR #52) as annotated tag
@@ -6757,7 +6726,7 @@ empty module cache against `proxy.golang.org` and `sum.golang.org`: the proxy
 `PreparedManagement.WithActor` and both new sentinels, and `go mod verify` passed.
 `h1:srmQeJH/R0r+uerUK4A+HMchFDGSA7c2yruvie59yO0=` (module),
 `h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4=` (`go.mod`). Stores and schema
-unchanged. Segovia repin (from v0.13.2, which also brings v0.14.0) is downstream.
+unchanged. A host repin (from v0.13.2, which also brings v0.14.0) is downstream.
 
 ## Browser session recovery after access expiry (published 2026-09-22)
 
@@ -6794,9 +6763,7 @@ local SQLite storage and real authentication handlers passed custom-page recover
 in Chromium, Firefox and WebKit, including three tabs with exactly one rotation.
 No public-proxy retries, replacements or checksum exemptions were needed.
 All four release CI runs passed on Linux ([main check](https://github.com/gopernicus/gopernicus/actions/runs/35804533873)).
-Checksums and provenance are recorded in the
-[release manifest](plans/authentication-browser-session-recovery-release-manifest.json).
-GPS adoption and deployment remain separate work. Live PostgreSQL, remote Turso
+Host adoption and deployment remain separate work. Live PostgreSQL, remote Turso
 and Firestore were not exercised; no persistence code changed.
 
 ## Redis connector — URL, host and port, ACL username (published 2026-09-21)
@@ -6821,7 +6788,7 @@ and Firestore were not exercised; no persistence code changed.
   read as the `default` ACL user; a managed service whose credential belongs to
   any other user answered `WRONGPASS invalid username-password pair or user is
   disabled` at the boot ping, and no `ClientOption` reaches the go-redis options
-  to work around it. Found on gps-360-go's first production boot against a
+  to work around it. Found on a host's first production boot against a
   managed Valkey cluster.
 
 Host adoption: rename `<NAMESPACE>_REDIS_ADDR` to `<NAMESPACE>_REDIS_HOST` (a
@@ -6877,7 +6844,6 @@ parameter, Turso local-file profile, Firestore store coverage, the unshipped
 Published from `b0249fa08573cf5a9a4a4f4180c348e707d6787a`; the GitHub `check`
 run passed on Linux and the docs deploy succeeded. Cold-verified from a scratch
 consumer with `GOWORK=off` and an empty module cache against `sum.golang.org`.
-Checksums and run links are in [plans/docs-pass-2026-09.md](plans/docs-pass-2026-09.md).
 
 ## Authorization internal cleanup (published 2026-09-16)
 
@@ -6892,15 +6858,12 @@ published as authorization `v0.21.0`, PostgreSQL store `v0.15.0` and Turso store
 SQL adapter and auth-cms pins are updated. There is no schema, cursor/cache
 protocol or new third-party dependency change.
 
-See [API adoption](pockets/authorization/stores/UPGRADE.md#adopting-the-internal-cleanup-v0210)
-and [implementation/verification](plans/authorization-internal-cleanup.md).
+See [API adoption](pockets/authorization/stores/UPGRADE.md#adopting-the-internal-cleanup-v0210).
 
 Upgrade the core and selected SQL adapter together; Redis remains at `v0.4.0`.
 All 312 public archive entries match verified candidates. Public checksums,
 Git provenance, independent build/test/vet, consumer/auth-cms races and real
 SQLite/Redis compatibility passed, as did the local 42-module make check.
-See the [release record](plans/authorization-internal-cleanup-release.md) and
-[checksum manifest](plans/authorization-internal-cleanup-release-manifest.json).
 
 GitHub [main CI](https://github.com/gopernicus/gopernicus/actions/runs/35152994183)
 and all three tag checks reproduced the unchanged Linux SDK RangeEdges failure;
@@ -6971,9 +6934,7 @@ All 637 public archive entries match the verified candidates, with normal Go
 checksum and Git-origin verification. Independent versioned build/test/vet,
 standalone consumer and auth-CMS races, SQLite/Redis integration races, and the
 final local 42-module make check passed. Unchanged authentication adapters/views
-and Redis passed compatibility checks. See the
-[release record](plans/authorization-integrity-release.md) and
-[checksum manifest](plans/authorization-integrity-release-manifest.json).
+and Redis passed compatibility checks.
 
 GitHub [main CI](https://github.com/gopernicus/gopernicus/actions/runs/35146615264)
 and all four tag checks failed the existing Linux SDK RangeEdges test; SDK is
@@ -6997,9 +6958,7 @@ Published from main `68866b39e3d68830dd97d4e1d4232ef390d0d23c` as annotated tag
 `pockets/authorization/v0.19.0`. Public checksums and all 227 archive entries match
 the candidate. Independent build/test/vet/race and a real HTTP consumer passed.
 GitHub main/tag CI both hit the existing Linux SDK `RangeEdges` failure; SDK is
-unchanged. See [AUDIT-045](AUDIT.md#audit-045-host-denial-responses-and-decision-logging),
-the [release record](plans/authorization-host-policy-release.md) and
-[checksum manifest](plans/authorization-host-policy-release-manifest.json).
+unchanged. See [AUDIT-045](AUDIT.md#audit-045-host-denial-responses-and-decision-logging).
 
 ## Unified authorization tuples (published 2026-09-16)
 
@@ -7007,8 +6966,6 @@ Published from main `66d70c511a74b28b1019e526acfc1382044395ad` in one coordinate
 PostgreSQL connector `v0.9.0`, authorization core `v0.18.0`, PostgreSQL store
 `v0.13.0`, Turso store `v0.12.0`, and Redis store `v0.4.0`. All five annotated tags
 point to this commit; public module archives match the verified candidates.
-See the [release record](plans/authorization-unified-release.md) and
-[checksum manifest](plans/authorization-unified-release-manifest.json).
 
 Independent versioned build/test/vet, public checksum verification, HTTP consumer,
 SQLite/Redis race tests and the local 42-module gate passed. GitHub Linux CI hit
@@ -7077,8 +7034,6 @@ All four public archives match the verified candidates and passed normal Go
 checksum/source verification, independent build/test/vet and tagged compilation.
 A standalone public SQLite/Redis consumer and the published integration race test
 passed, as did local full-workspace and implementation SQL/Redis race checks.
-See the [release plan](plans/authorization-review-hardening-release.md) and
-[manifest](plans/authorization-review-hardening-release-manifest.json).
 See [AUDIT-039](AUDIT.md#audit-039-authorization-consistency-and-tuplecache-hardening)
 and the [benchmark report](pockets/authorization/BENCHMARKS.md). Remote Turso,
 Firestore, non-C PostgreSQL locale and production-scale load remain unverified.
@@ -7096,16 +7051,13 @@ returns `model.ErrEnumerationContended` / `sdk.ErrUnavailable` (HTTP 503).
 Upgrade core and the configured SQL adapter together. No migration, cache rebuild
 or new configuration is required. Existing ambient transactions retain their
 pending writes and isolation; separate page calls do not share a snapshot.
-See [release plan](plans/authorization-lookup-snapshots-release.md),
-[implementation verification](plans/authorization-lookup-snapshots.md) and
-[AUDIT-038](AUDIT.md#audit-038-consistent-authorization-lookup-reads).
+See [AUDIT-038](AUDIT.md#audit-038-consistent-authorization-lookup-reads).
 
 All three public archives match the verified candidates and passed normal checksum
 verification and independent versioned build/test/vet. The published consumer
 passed SQLite/PostgreSQL concurrent lookup and existing SQLite/Redis cache checks.
 Local full-workspace and race checks passed. GitHub Linux CI still fails the
 unchanged SDK file-storage RangeEdges case disclosed in the preceding release.
-See the [release manifest](plans/authorization-lookup-snapshots-release-manifest.json).
 
 ## Authorization cached filters and readable Redis keys (published 2026-09-15)
 
@@ -7116,20 +7068,17 @@ Relationship-owned `Decisions.FilterAuthorized` now uses TupleCache through
 the fixed core and uses `tuplecache:{<namespace>}` with the namespace verbatim.
 Accepted characters are ASCII letters, digits and `:._-/`.
 
-Segovia can retain Turso store `v0.9.0`. No SQL migration is needed. Restart the
+A host can retain Turso store `v0.9.0`. No SQL migration is needed. Restart the
 single dev server after updating both modules; its relay reconstructs the new
 hash automatically. Old base64-named hashes are left untouched. Multiple readers
 and relays sharing a source should switch together to avoid maintaining two mirrors.
-See [release plan](plans/authorization-filter-tuple-cache-release.md),
-[implementation verification](plans/authorization-filter-tuple-cache.md) and
-[AUDIT-037](AUDIT.md#audit-037-raw-authorization-tuplecache-replaces-generation-caching).
+See [AUDIT-037](AUDIT.md#audit-037-raw-authorization-tuplecache-replaces-generation-caching).
 
 Both published archives passed normal public checksum/source verification and
 isolated versioned build/test/vet. The published SQLite/Redis consumer passed
 warm filtering with zero SQL, revocation and mirror recovery using Turso v0.9.0.
 Local full-workspace and relevant race checks passed. GitHub Linux CI still fails
 the unchanged SDK file-storage `RangeEdges` case disclosed by the previous release.
-See the [release manifest](plans/authorization-filter-tuple-cache-release-manifest.json).
 
 ## Authorization TupleCache and Through batching (published 2026-09-15)
 
@@ -7144,9 +7093,7 @@ old cache-enabled binaries before optional `authorization-cache` migration 0002,
 use a fresh Redis namespace, wire the new runtime and retain a shared explicit
 freshness bound. The configured Turso or PostgreSQL store remains authoritative.
 Firestore retires old cache APIs and remains durable-only. There is no DecisionCache.
-See [AUDIT-037](AUDIT.md#audit-037-raw-authorization-tuplecache-replaces-generation-caching),
-the [release plan](plans/authorization-tuple-cache-release.md) and
-[Segovia handoff prompt](plans/segovia-tuple-cache-adoption-prompt.md).
+See [AUDIT-037](AUDIT.md#audit-037-raw-authorization-tuplecache-replaces-generation-caching).
 
 All five annotated tags passed normal public checksum/source verification and
 isolated versioned build/test/vet. A published consumer passed actual SQLite/Redis
@@ -7165,9 +7112,7 @@ the new `turso/localfile` driver package. No other module changed; existing tags
 unchanged. Candidate verification with the workspace off, every Turso-backed store
 suite and the repository guards passed before tagging; standard public
 checksum/origin verification and an isolated versioned consumer passed after
-tagging, with no bypass. See the [release plan](plans/turso-local-file-profile-release.md),
-[manifest](plans/turso-local-file-profile-release-manifest.json) and
-[AUDIT-036](AUDIT.md#audit-036-turso-local-file-profile-and-env-tagged-config).
+tagging, with no bypass. See [AUDIT-036](AUDIT.md#audit-036-turso-local-file-profile-and-env-tagged-config).
 Adopting hosts bump the connector, delete their local copies of the boundary file
 and rename their `AUTH_DATABASE_*` keys to the namespaced `AUTH_DB_*`.
 
@@ -7184,8 +7129,7 @@ authorization core `v0.14.1`, and authorization stores Turso `v0.8.1`, PostgreSQ
 `v0.9.1`, Firestore `v0.2.1`. Existing tags remain immutable. Prior accepted
 cloud/performance gaps remain disclosed; no new verification claim is implied.
 All candidate, repository and six-module public checksum/source/build/test/vet
-checks passed after proxy indexing. See [main integration plan](plans/authorization-cache-main-release.md)
-and [manifest](plans/authorization-cache-main-release-manifest.json).
+checks passed after proxy indexing.
 
 ## Authorization read caching (published 2026-09-14)
 
@@ -7197,9 +7141,7 @@ Firestore `v0.2.0`. No SDK, Redis adapter or authentication release was needed.
 
 Local correctness, repository-wide checks and isolated versioned consumer
 build/test/vet passed. Remote tag identities match the verified source. All six public
-checksum/source and isolated consumer checks passed after Go proxy indexing; see the
-[release plan](plans/authorization-cache-release.md) and
-[release manifest](plans/authorization-cache-release-manifest.json).
+checksum/source and isolated consumer checks passed after Go proxy indexing.
 
 The owner explicitly accepted this feature's unexecuted real-GCP/Turso Cloud
 verification and failed/incomplete representative performance acceptance for
@@ -7215,20 +7157,18 @@ rollout plans. No host activation, migration or deployment was performed.
 
 Published all 34 selected module tags from commit
 `c3f8b4ad453021ba1e40c91572d8e4618c2d8382` on `audit-release-20260911`.
-The [release manifest](plans/audit-release-manifest.json) records versions and
-verified ZIP/go.mod checksums; [AUDIT.md](AUDIT.md) is the consumer migration guide.
+[AUDIT.md](AUDIT.md) is the consumer migration guide.
 All published modules resolve and build with `GOWORK=off`, normal public checksum
 verification and no local replacements. Remote main and the newer Firestore branch
 were preserved. All three Firestore modules are published as `v0.1.0` from
 `10e5f97b32c043f8fdd71cbd733fbb09592c42f7`; the `v0.1.0-beta.1` tags remain
 at `973f94322a3a99b8699df8f266c33539c0c21ed8`. Public checksum/source/build/test/vet
-verification passed; [firestore-release.md](plans/firestore-release.md) records
-the evidence. The owner accepted the explicitly untested real GCP suite for this release.
+verification passed. The owner accepted the explicitly untested real GCP suite for this release.
 CMS is compatibility only.
 
 The implementation-time entries below retain their history; the coordinated
-manifest supplies their published versions. Segovia v2 adoption is complete in
-its local upgrade branch; consumer publication and deployment remain separate.
+release lists their published versions. Host adoption is complete in
+a local upgrade branch; consumer publication and deployment remain separate.
 
 ## Unreleased: Turso statement completion (2026-09-11)
 
@@ -7249,10 +7189,9 @@ instead of deferring known-invalid configuration to use. Raw SQL store wrappers
 retain simple signatures and reject nil borrowed databases explicitly.
 
 Migration: [AUDIT-032](AUDIT.md#audit-032-host-startup-cancellation-and-constructor-errors).
-Implementation/release plan: [startup-release-segovia.md](plans/startup-release-segovia.md).
-The coordinated SQL/core release is published; see the manifest above.
+The coordinated SQL/core release is published.
 Firestore v0.1.0 tags are published and retain the disclosed,
-owner-accepted gap in real GCP verification. Segovia v2 is the first PostgreSQL-backed adopter.
+owner-accepted gap in real GCP verification. A tenancy host is the first PostgreSQL-backed adopter.
 
 ## Unreleased: Consistent pocket construction (2026-09-11)
 
@@ -7264,7 +7203,6 @@ files use `constructor.go`. This supersedes the retained-pocket-Config choices
 from the previous constructor pass. Schemas, dependencies and versions are unchanged.
 
 Migration: [AUDIT-031](AUDIT.md#audit-031-consistent-pocket-constructor-options).
-Implementation and checks: [pocket-constructor-options.md](plans/pocket-constructor-options.md).
 No modules have been tagged or published.
 
 ## Unreleased: Constructor options (2026-09-11)
@@ -7276,7 +7214,6 @@ configure private construction settings instead of live objects. Nil options
 receive explicit diagnostics; defaults and runtime behavior are preserved.
 
 Migration: [AUDIT-030](AUDIT.md#audit-030-constructor-options).
-Review and verification: [constructor-options.md](plans/constructor-options.md).
 No module versions, dependencies, schemas or persisted formats changed.
 No modules have been tagged or published.
 
@@ -7289,7 +7226,6 @@ are corrected. Migration file selection and connection ownership are explicit.
 No dependency, persisted-format or SQL migration change is introduced.
 
 Migration: [AUDIT-029](AUDIT.md#audit-029-integration-contracts-and-startup-behavior).
-Review and verification: [integration-sweep.md](plans/integration-sweep.md).
 No modules have been tagged or published.
 
 ## Unreleased: Public pocket services and HTTP adapters (2026-09-11)
@@ -7303,7 +7239,6 @@ migration, stored-format change or module version update.
 
 Migration: [AUDIT-028](AUDIT.md#audit-028-public-pocket-services-and-http-adapters),
 including the symbol map and changes to construction, methods and lifecycle wiring.
-Implementation and verification: [pocket-structure.md](plans/pocket-structure.md).
 No modules have been tagged or published.
 
 ## Unreleased: Authorization change history and mutation simplification (2026-09-11)
@@ -7316,7 +7251,6 @@ apply SQL 0007 (after 0006). Firestore uses explicit ledger cleanup and optional
 additional audit indexes. Audit records and changed facts commit together.
 
 Migration: [AUDIT-026](AUDIT.md#audit-026-authorization-change-history-and-mutation-simplification).
-Verification: [implementation plan](plans/authorization-audit-log-implementation.md).
 This entry supersedes earlier authorization receipt/revision descriptions below.
 
 
@@ -7330,7 +7264,6 @@ with traffic stopped. Scope revisions and receipt history are removed by the sub
 AUDIT-026 change above. No tags, publication or external consumer edits occurred.
 
 Migration: [AUDIT-025](AUDIT.md#audit-025-authorization-tuple-identity-and-metadata-removal).
-Implementation and verification: [authorization-tuples-implementation.md](plans/authorization-tuples-implementation.md).
 
 ## Unreleased: Authorization mutation safety and host contracts (2026-09-11)
 
@@ -7343,7 +7276,6 @@ Firestore retry classification, role budgets and fixed FilterPage pulls are
 included. No stored-data migration, tags or publication.
 
 Migration: [AUDIT-024](AUDIT.md#audit-024-authorization-mutation-safety-and-simpler-host-contracts).
-Plan and verification: [authorization-followup-implementation.md](plans/authorization-followup-implementation.md).
 
 ## Unreleased: Authorization model authority and listing (2026-09-11)
 
@@ -7358,7 +7290,6 @@ Baseline/guarded dependency ownership remains an explicit host decision.
 No tags, publication or external consumer changes occurred.
 
 Migration: [AUDIT-023](AUDIT.md#audit-023-authorization-model-authority-evaluation-and-listing-apis).
-Implementation and verification: [authorization-audit-implementation.md](plans/authorization-audit-implementation.md).
 
 ## Unreleased: Authentication proof lifecycle (2026-09-10)
 
@@ -7373,7 +7304,6 @@ Firestore remains incomplete; implemented capabilities have the stronger contrac
 No tags, publication or external consumer edits occurred.
 
 Migration: [AUDIT-022](AUDIT.md#audit-022-authentication-proof-lifecycle-and-host-api).
-Verification: [authentication-audit-implementation.md](plans/authentication-audit-implementation.md).
 
 ## Unreleased: Jobs SQL generation ordering (2026-09-10)
 
@@ -7384,7 +7314,6 @@ writer together; old adapters can still insert out-of-order generations. Histori
 rows are not backfilled. Scheduler durability findings are recorded separately;
 this release note does not claim they are fixed. No tags or publication occurred.
 Migration: [AUDIT-019](AUDIT.md#audit-019-jobs-sql-generation-ordering).
-Evidence and remaining work: [jobs-persistence-audit.md](plans/jobs-persistence-audit.md).
 
 ## Unreleased: Jobs runtime handler snapshots (2026-09-10)
 
@@ -7395,7 +7324,6 @@ schemas are unchanged, but hosts must handle late invalid configuration at
 runtime construction rather than rely on Register. No tags, module requirements
 or external publication changed. Include this fix in the coordinated audit release.
 Migration: [AUDIT-018](AUDIT.md#audit-018-jobs-runtime-handler-snapshots).
-Implementation: [jobs-runtime-implementation.md](plans/jobs-runtime-implementation.md).
 
 ## Unreleased: SDK package directory rename (2026-09-10)
 
@@ -7408,7 +7336,6 @@ Release a compatible SDK and all dependent modules still referring to the old
 paths together; update consumer imports and any generation/build scripts. Current
 workspace verification does not prove unpublished module versions resolve remotely.
 No tags or external publication occurred. Migration: [AUDIT-017](AUDIT.md#audit-017-sdk-foundation-directory-renamed-to-pkg).
-Implementation: [sdk-pkg-rename.md](plans/sdk-pkg-rename.md).
 
 ## Unreleased: Shared pockets module (2026-09-10)
 
@@ -7427,7 +7354,6 @@ requires alignment. Confirm those pins against the final releases before tagging
 Local workspace and explicit sibling replacements verify the unpublished tree;
 they do not establish that module-proxy consumers can resolve these changes yet.
 Migration: [AUDIT-016](AUDIT.md#audit-016-shared-pockets-module).
-Implementation: [pockets-module-move.md](plans/pockets-module-move.md).
 
 ## Unreleased: Bound OAuth flows and truthful tracing (2026-09-10)
 
@@ -7446,7 +7372,6 @@ OTel HTTP middleware supplies server spans, typed metadata and opt-in W3C trust.
 Coordinate SDK, authentication, OAuth adapters, OTel and dependent module
 requirements when publishing. No module versions/tags or external consumer files
 were changed. Migration: [AUDIT-015](AUDIT.md#audit-015-bound-oauth-flows-and-truthful-tracing).
-Implementation: [oauth-tracing-implementation.md](plans/oauth-tracing-implementation.md).
 
 ## Unreleased: Explicit notification deliveries and email correctness (2026-09-10)
 
@@ -7465,7 +7390,6 @@ stricter. SendGrid isolates concurrent requests, refuses redirects and returns
 safe inspectable status errors. Shared production posture lives in notify.
 
 Consumer migration: [AUDIT-014](AUDIT.md#audit-014-explicit-notification-deliveries-and-email-correctness).
-Implementation and verification: [email-notify-implementation.md](plans/email-notify-implementation.md).
 Coordinate SDK, authentication, SendGrid and dependent module requirements when
 publishing. Remove bridge requirements; SendGrid drops unused rest/x/net
 dependencies. No module versions, tags, external consumers or queued envelope
@@ -7489,7 +7413,6 @@ attempts cancellation-safe multipart cleanup. Signed expiry is whole seconds
 from one second through seven days. Hosts own error reporting and resources.
 
 Consumer migration: [AUDIT-013](AUDIT.md#audit-013-file-storage-correctness-and-direct-adapter-contracts).
-Implementation and verification: [filestorage-implementation.md](plans/filestorage-implementation.md).
 Coordinate SDK, GCS/S3 adapter and dependent requirements when publishing. S3
 adds AWS transfermanager v0.1.6 without upgrading other pinned dependencies.
 GCS promotes its existing auth dependency to direct for credential-context tests.
@@ -7513,7 +7436,6 @@ coordinated old-stream drain, stopped old writers and disjoint physical prefixes
 it does not migrate or discard old pending work automatically.
 
 Consumer migration: [AUDIT-012](AUDIT.md#audit-012-event-delivery-contracts-and-redis-recovery).
-Implementation and verification: [events-implementation.md](plans/events-implementation.md).
 Coordinate SDK, events pocket, Redis adapter and dependent module requirements
 when publishing. No outbox schema, external consumer, module pin, tag or deployed
 Redis state was changed.
@@ -7529,7 +7451,6 @@ reports its deliberate open outage paths. A runnable host policy example retains
 dynamic limit resolution and worker Acquire without SDK account policy.
 
 Consumer migration: [AUDIT-011](AUDIT.md#audit-011-rate-limiter-contract-and-adapter-corrections).
-Implementation: [ratelimiter-implementation.md](plans/ratelimiter-implementation.md).
 Coordinate SDK, goredis, pgxdb and authentication requirements at release.
 Postgres requires the host-owned window_ms column migration. Both adapters use
 internal v2 keys; review physical namespace overlap and fresh/dual quotas before
@@ -7547,7 +7468,6 @@ policy. CMS exposes PageCache configuration. The minimal host demonstrates
 application-data caching at GET /catalog.json.
 
 Consumer migration: [AUDIT-010](AUDIT.md#audit-010-cache-storage-data-helpers-and-public-page-policy).
-Implementation and verification: [cacher-implementation.md](plans/cacher-implementation.md).
 Coordinate SDK, Redis adapter and CMS requirements when releasing. Old page keys
 become cold entries; no schema, module pins, tags or external consumers changed.
 
@@ -7562,7 +7482,6 @@ their packages. Consumer mapping: [AUDIT-009](AUDIT.md#audit-009-common-primitiv
 Coordinate SDK and affected pocket/store/integration requirements and the Workshop
 scaffold SDK pin before publishing; the old SDK lacks these root symbols. No
 requirements, versions, tags, schema or consumer applications changed here.
-Implementation: [sdk-root-promotion.md](plans/sdk-root-promotion.md).
 
 ## Unreleased: Restore the cryptids package name (2026-09-10)
 
@@ -7585,7 +7504,7 @@ drain, persistence reporting, polling cadence and fatal sibling shutdown.
 Keyed-work protocol methods now reject empty logical keys.
 
 Consumer migration: [AUDIT-007](AUDIT.md#audit-007-workers-job-middleware-and-async-lifecycle).
-Implementation: [workers-cleanup.md](plans/workers-cleanup.md). Coordinate SDK,
+Coordinate SDK,
 jobs, jobs store and dependent module requirements: old processors do not compile
 with the new SDK. Custom stores need the optional deferral port only if their
 processors defer. No stored status/schema changes, consumer edits, pins or tags.
@@ -7600,7 +7519,7 @@ SSE frames, strict body handling and static/SPA behavior. Authentication's older
 JSON routes now share its existing 1-MiB bound and trailing-input rejection.
 
 Consumer migration: [AUDIT-006](AUDIT.md#audit-006-web-correctness-and-api-cleanup).
-Implementation: [web-cleanup.md](plans/web-cleanup.md). Coordinate SDK, CMS and
+Coordinate SDK, CMS and
 Workshop requirements because old router constructors will not compile with the
 new SDK; release authentication/authorization input changes deliberately. No
 module pins, tags, consumer upgrades or data migrations were made.
@@ -7616,7 +7535,6 @@ projection/filter composition and empty offset JSON. SQL transaction helpers
 clean up panic/error/canceled/failed commits before connection reuse.
 
 Consumer migration: [AUDIT-005](AUDIT.md#audit-005-listing-vocabulary-and-transaction-correctness).
-Implementation: [listing-transaction-cleanup.md](plans/listing-transaction-cleanup.md).
 Coordinate SDK, affected pocket/connector and Workshop module requirements at
 release. Custom SQL projections and previous probes require review alongside
 import changes. No schema migration, release tag or consumer upgrade was made.
@@ -7632,7 +7550,6 @@ enforces its byte limit and classifies it as invalid input. Authentication adds
 the host's optional `Config.ValidatePassword` callback; nil preserves defaults.
 
 Consumer migration: [AUDIT-004](AUDIT.md#audit-004-identity-ids-cryptography-and-host-password-policy).
-Implementation: [identity-cryptography-cleanup.md](plans/identity-cryptography-cleanup.md).
 Coordinate pre-v1 SDK, affected pocket/integration, and Workshop releases and
 their SDK requirements: old SDK tags lack the new packages. Integration module
 paths stay unchanged. Auth-cms adds the local JWT integration dependency; bcrypt
@@ -7663,7 +7580,6 @@ move to root SDK (final destination after AUDIT-009); use Go 1.26's `new(value)`
 The case/acronym, date parsing, JSON default, and overlap APIs are removed.
 `sdk.Slugify` preserves the old slug.Make output. Consumer instructions:
 [AUDIT.md — AUDIT-002](AUDIT.md#audit-002-conversion-removal-and-pointer-package).
-Implementation: [plans/utility-package-cleanup.md](plans/utility-package-cleanup.md).
 No tag or dependency pin has changed; select a deliberate pre-v1 breaking SDK
 version when releasing this change.
 
@@ -7674,7 +7590,6 @@ a deliberate pre-v1 breaking SDK version. The standalone consumer migration
 instructions are in [AUDIT.md — AUDIT-001](AUDIT.md#audit-001-validation-consolidation),
 covering removed collectors, typed helper results, password-policy removal,
 Unicode length checks, optional fields, and pointer/null JSON decoding.
-Implementation record: [plans/validation-consolidation.md](plans/validation-consolidation.md).
 
 This repo is a multi-module workspace (`go.work`, dev-only) with thirty-seven
 modules today: `sdk`; `integrations/{cryptids/bcrypt, cryptids/golang-jwt, cryptids/google-uuid,
@@ -7694,8 +7609,7 @@ CLI — a `go install`-able tool, tagged like any importable module). Each impor
 versioned **independently** — there is no single repo-wide version.
 
 **First release cut 2026-08-14: every importable module tagged `<dir>/v0.1.0`**
-(33 tags — everything except the four `examples/*` hosts; plan of record
-`.claude/plans/release-v0.1.0.md`). The release commit dropped every nested
+(33 tags — everything except the four `examples/*` hosts). The release commit dropped every nested
 module's pre-tag relative `replace` and pinned sibling requires at `v0.1.0`
 (precondition 2 below, satisfied); `go.work` continues to resolve siblings by
 directory for local dev. All upgrade notes below keyed "next tag" describe the
@@ -7703,24 +7617,21 @@ v0.1.0 vintage. Tags are immutable once the module proxy serves them — a
 correction is a new patch tag, never a retag.
 
 **2026-08-14 (same day): `sdk/v0.2.0` + `features/jobs/v0.1.1`** — the fenced
-dead-letter reason fix (plan of record
-`.claude/plans/deadletter-failure-reason.md`; Coordination-Hub issue #5). See
+dead-letter reason fix (a host-reported issue). See
 the upgrade notes for both tags below. No other module was bumped: only
 `features/jobs` consumes the changed kernel symbol, and its store modules'
 `features/jobs v0.1.0` pins upgrade at the host via MVS.
 
 **2026-08-14 (same day): `features/jobs/v0.2.0` +
-`features/jobs/stores/{pgx,turso}/v0.2.0`** — jobs tenant metadata (plan of
-record `.claude/plans/jobs-tenant-metadata.md`; Coordination-Hub issue #4).
+`features/jobs/stores/{pgx,turso}/v0.2.0`** — jobs tenant metadata (a host-reported
+issue).
 Minor bumps all three; store pins move to `features/jobs v0.2.0` / `sdk
 v0.2.0`. See the upgrade notes below — already-migrated hosts need a host-tree
 ALTER (reference SQL in the store note).
 
 **2026-08-14 (same day): `sdk/v0.3.0`,
 `features/authentication/v0.2.0`, `integrations/datastores/pgxdb/v0.3.0`** — the
-coordination-hub authentication upstream batch (plan of record
-`.claude/plans/coordination-hub-auth-upstream/`; the owner-cut tag manifest and
-post-tag verification steps are in that directory's `tag-manifest.md`). Minor
+host authentication upstream batch. Minor
 bumps all three: genuinely global middleware + configurable CORS, the browser
 cookie-flow seams (`RefreshCookiePath`, `/auth/csrf`, `/auth/me`,
 `origin_rejected`), and the durable pgx rate limiter. `features/authentication`
@@ -7731,16 +7642,14 @@ pgxdb v0.3.0 ships **host schema**, and the sdk note carries the batch's one sil
 behavior change (`HandleRaw` no longer bypasses global middleware).
 
 **2026-08-15: `integrations/email/sendgrid/v0.2.0`** — truthful capability
-metadata (plan of record, in the Coordination-Hub repo,
-`.claude/plans/email-and-invitations.md`, task U1). A **minor**: `Sender` now
+metadata (task U1). A **minor**: `Sender` now
 implements `email.CapabilityReporter`, describing the configured instance —
 the default host and explicit HTTPS hosts report TLS/production-capable; a
 non-HTTPS custom host (tests, local emulators) reports development-only. No
 breaking API change. See the upgrade note below.
 
 **2026-08-16: `features/authentication/v0.2.2`** — the email layout-override
-seam (plan of record, in the Coordination-Hub repo,
-`.claude/plans/branded-auth-mail-and-pages.md`, task U1). A **patch**, additive
+seam (task U1). A **patch**, additive
 only: `Config.EmailLayouts []EmailLayoutOverride` (aliasing
 `delivery.LayoutOverride{FS embed.FS; Dir string}`, `Dir` defaulting to
 `"layouts"`) registers host layout files at `email.LayerApp`, so a host-shipped
@@ -7751,8 +7660,7 @@ break, no schema change, no `go.mod` change (still `sdk v0.3.0`), no store
 retags.
 
 **2026-08-15: `features/authentication/v0.2.1`** — the
-add-or-signup invitation lifecycle fix (plan of record, in the Coordination-Hub
-repo, `.claude/plans/email-and-invitations.md`, task U2). A **patch**: a brand-new
+add-or-signup invitation lifecycle fix (task U2). A **patch**: a brand-new
 OAuth-provisioned account now resolves its pending auto-accept invitations through
 the same best-effort resolver `Register`/`Verify` use, and the invitation JSON
 response gains the additive `invited_by` owner field. No exported API change, no
@@ -7760,8 +7668,8 @@ schema change, no `go.mod` change (still `sdk v0.3.0`), and no store retags. Rea
 the upgrade note below before adopting — it pins which OAuth branches do and do
 not grant.
 
-**2026-08-15: `sdk/v0.3.1`** — the coordination-hub
-`coordination-api-consistency` upstream flags: `web.ErrStateConflict` completes
+**2026-08-15: `sdk/v0.3.1`** — the host's
+API-consistency upstream flags: `web.ErrStateConflict` completes
 the 409 vocabulary (code `conflict`, distinct from `ErrConflict`'s
 `already_exists`), and `crud.Page`'s absent-`has_more`-means-false end-of-list
 contract is now documented (godoc + sdk README). Cut as a **patch by owner
@@ -7771,10 +7679,9 @@ in-repo module pins move.
 
 **2026-08-16: `sdk/v0.4.0`, `integrations/datastores/pgxdb/v0.4.0`,
 `integrations/datastores/turso/v0.3.0`, `features/authentication/v0.3.0`,
-`features/authentication/stores/{pgx,turso}/v0.2.0`** — the coordination-hub
-authentication upstream batch, phases 1–8 (plan of record
-`.claude/plans/coordination-hub-auth-upstream/`), stacked with the crud search
-plan (`.claude/plans/crud.md`, T1–T4). Six minor bumps closing every hub flag:
+`features/authentication/stores/{pgx,turso}/v0.2.0`** — the host
+authentication upstream batch, phases 1–8, stacked with the crud search
+plan. Six minor bumps closing every host flag:
 account lifecycle + operator directory, verification resend, canonical
 `environment.Mode` with capability-owned transport checks, password-reset links,
 provision-on-consumption (**default-off**), the transactional-layout logo fix,
@@ -7792,7 +7699,7 @@ the plan directory's `tag-manifest.md` §8 and `adoption-checklist.md`.
 **2026-08-18 `features/authentication/v0.3.1` — clickable OAuth pending-link mail.**
 Cut from `main` (which was already at `features/authentication/v0.3.0`) as an
 ordinary patch on the current line, NOT the earlier-considered maintenance-line
-`v0.2.4` off `v0.2.3`: coordination-hub adopts the current line, so no independent
+`v0.2.4` off `v0.2.3`: a host adopts the current line, so no independent
 patch line is maintained. The bump is a **patch** despite adding an exported
 `Config` field — the field is additive with a safe zero value, following the
 owner's `sdk/v0.3.1` precedent that an additive symbol may ship as a patch.
@@ -7811,23 +7718,20 @@ non-empty value is validated at construction — absolute http(s) with a host, n
 fragment (`ErrOAuthLinkURLInvalid`), HTTPS in production (`ErrOAuthLinkURLInsecure`);
 existing non-secret query parameters are preserved. No schema or sibling-module
 change. The host-side landing route that reads the fragment token and POSTs
-`verify-link` is coordination-hub's #162.
+`verify-link` is a host-side route.
 
 **2026-08-25: `sdk` + `integrations/datastores/pgxdb` — next tags, patch by owner
-ruling** — `crud.MapPageErr` and `pgxdb.ProbeTable` (plan of record
-`plans/pgxdb-probe-table-map-page-err.md`; originating host gps-360-go).
+ruling** — `crud.MapPageErr` and `pgxdb.ProbeTable` (reported by a host).
 Both additive, zero-value-preserving, no schema, no sibling pin moves. See the
 two upgrade notes below.
 
 **2026-08-25: `features/authentication/v0.5.3`** —
-`Config.PasswordFlowsDisabled` (plan of record
-`plans/authentication-password-flows-toggle.md`; originating host gps-360-go, a
+`Config.PasswordFlowsDisabled` (reported by a host, a
 Google-only staff host). Additive, zero value keeps every route; no schema, no
 pin moves. See the upgrade note below.
 
 **2026-08-25: `features/authentication/v0.5.4`** — `Config.MachineRoutesDisabled`
-(plan of record `plans/authentication-machine-routes-toggle.md`; originating
-host gps-360-go). Additive, zero value keeps every route; no schema, no pin
+(reported by a host). Additive, zero value keeps every route; no schema, no pin
 moves. Carries a **security caveat** on the bundled lifecycle routes — read the
 upgrade note before exposing them on a multi-user host.
 
@@ -7836,8 +7740,8 @@ upgrade note before exposing them on a multi-user host.
 `features/{authorization,cms,events}/stores/pgx/v0.2.0`,
 `features/jobs/stores/pgx/v0.3.0` — ONE train, cut and pushed 2026-08-26 (minor
 across all six; cold-resolution verified)** — host-chosen schema for every feature
-pgx store (plan of record `plans/pgx-store-schema-option.md`; gopernicus issue
-#4; originating host gps-360-go). `pgxdb.Schema` + `RunMigrations(...,
+pgx store (gopernicus issue
+#4; reported by a host). `pgxdb.Schema` + `RunMigrations(...,
 pgxdb.WithSchema(s))`, and `WithSchema(s)` on every store's `Repositories` AND
 every exported per-repository constructor. Default (no option) SQL is
 byte-for-byte unchanged. **Pin moves: every store pins `pgxdb v0.5.0`, which
@@ -7849,9 +7753,8 @@ compatibility consequence.
 **2026-08-26: `features/authentication/v0.6.0` — next tag, MINOR** — the bundled
 machine-identity lifecycle routes come standard **behind a host gate**
 (`Config.MachineRoutesGate`), and the one-day-old `Config.MachineRoutesDisabled`
-is **REMOVED** — a source break (plan of record
-`plans/authentication-machine-routes-gate.md`; gopernicus issue #6; the host
-that had to re-implement these routes is gps-360-go). Ungated routes no longer
+is **REMOVED** — a source break (gopernicus issue #6; the host
+that had to re-implement these routes reported it). Ungated routes no longer
 mount at all:
 a v0.5.x host with the machine repositories wired and no gate answers 404 on all
 five and WARNs at boot until it names one. `POST /auth/service-accounts` no
@@ -7864,9 +7767,8 @@ adopting.
 
 **2026-08-27: `sdk/v0.6.0`, `integrations/datastores/pgxdb/v0.6.0`,
 `pockets/authentication/v0.8.0` — next tags, ONE train, MINOR across all
-three** — the list contract reaches the request (plan of record
-`plans/web-crud-list-request.md`; gopernicus issues #11 and #9, bundled by
-owner ruling; originating host gps-360-go). `crud.ParseListQuery` over
+three** — the list contract reaches the request (gopernicus issues #11 and #9, bundled by
+owner ruling; reported by a host). `crud.ParseListQuery` over
 `url.Values` with every `ParseListRequest`/`ParseOrder` rejection wrapping
 `sdk.ErrInvalidInput`; `crud.Items`/`MapItems` and nil-page normalization;
 `web.NoStore()`; pgxdb registers a UTC `TimestamptzCodec` on every connection
@@ -7883,9 +7785,8 @@ evaluates in UTC.
 
 **2026-08-28: `features/authentication/v0.4.3` — TAGGED (maintenance line off the
 immutable `v0.4.2` tag) + `pockets/authentication/v0.8.1` (next tag on main) —
-host-owned mail DATA and SUBJECTS, not only bodies** (plan of record
-`plans/auth-mail-host-data-and-subjects.md`; consumer ruling 2026-08-28,
-originating host coordination-hub, pinned to `features/authentication v0.4.2`
+host-owned mail DATA and SUBJECTS, not only bodies** (consumer ruling 2026-08-28,
+reported by a host, pinned to `features/authentication v0.4.2`
 + `sdk v0.4.1`). `Config.DeliveryData` (a per-render data hook with reserved
 `Secret`/`Link`/`Subject`), `Config.EmailSubjects` + `Config.SMSBodies`
 (per-purpose overrides, missing-key errors on), the ten `Purpose*` constants
@@ -7894,15 +7795,14 @@ exported, and enriched invitation/member-added data (`ResourceName`,
 `OperationID`, …). Nil hook + empty maps render byte-for-byte today's output
 (pinned by golden). **Patch on both lines by plan ruling** — additive only, no
 schema, no store retags, **no pin moves**: the `v0.4.3` maintenance commit keeps
-`sdk v0.4.0` in `go.mod` (the hub's `sdk v0.4.1` pin stays), and `v0.8.1`
+`sdk v0.4.0` in `go.mod` (the host's `sdk v0.4.1` pin stays), and `v0.8.1`
 keeps `sdk v0.6.0`. Same public contract, safety rules, and tests on both;
 adapted commits, not one cherry-pick (the module/paths were renamed between
 them). Read the upgrade note below.
 
 **2026-08-28: `pockets/authentication/v0.8.2` — TAGGED @ `c016423` (#17
 squash) — `identity.Resolver` is principal-exact**
-(plan of record `plans/identity-resolver-principal-exact.md`; originating host
-gps-360-go plans/32). `Resolve` no longer synthesizes a user's display name
+(reported by a host). `Resolve` no longer synthesizes a user's display name
 from the primary email local part when the stored `DisplayName` is blank — a
 blank name is projected blank, exactly as stored; the port doc's "never
 fabricates an Info" now holds for every field. Service accounts unchanged.
@@ -7914,15 +7814,13 @@ render site. See the upgrade note below.
 **2026-08-28: `integrations/datastores/pgxdb/v0.6.1` — TAGGED @ `098241f`
 (#16 squash), a patch by owner ruling, as with `ProbeTable`** —
 `ListQuery.FixedOrder`, a store-fixed composite `ORDER BY` for the offset
-strategy (plan of record `plans/pgxdb-list-fixed-order.md`; gopernicus issue
-#15; originating host gps-360-go). Additive, zero-value-preserving, no schema,
+strategy (gopernicus issue
+#15; reported by a host). Additive, zero-value-preserving, no schema,
 no pin moves (still `sdk v0.4.0`), no store retags. See the upgrade note below.
 
 **2026-08-29: `pockets/authentication/v0.9.0` — TAGGED @ `ad8b8a8` (#18
 squash) — BREAKING, pre-1.0** — one composable authenticator, `RequirePrincipal(opts ...PrincipalOption)`,
-named helpers, and the credential on the context (plan of record
-`plans/authentication-principal-posture.md`; originating host gps-360-go
-`plans/33-principals-api-keys-and-route-proof.md` D2). `RequireUser`,
+named helpers, and the credential on the context (reported by a host). `RequireUser`,
 `RequireServiceAccount`, `RequireLiveSession`, `RequirePrincipalBrowser`,
 `RequireLiveSessionBrowser`, and `AuthenticateAPIKey` are REMOVED; every call
 site is rewritten against the four options (`Accept`, `Transports`, `Live`,
@@ -7932,8 +7830,8 @@ restating the others. No schema, no store retags. See the upgrade note below
 before adopting — the owner cuts the tag.
 
 **2026-08-31: `sdk/v0.7.0` — TAGGED @ `41ddfdb` (#23), MINOR (additive)** — the crud write
-vocabulary (plan of record `.claude/plans/crud-write-vocabulary.md`; gopernicus
-issue #21; originating host gps-360-go slice S1). One module changes, one tag:
+vocabulary (gopernicus
+issue #21; reported by a host slice S1). One module changes, one tag:
 the kernel gains `sdk.Violation`/`ValidationError`/`StaleError` + the five
 `Code*` strings (`faults.go`), `crud` gains `Field[T]`/`Some`/`Overlay`, and
 `web` gains `ReadBody` + `ErrStale` and renders the two new fault types. Every
@@ -7942,10 +7840,8 @@ bodies are byte-identical; no `go.mod` changes, no sibling retags, no schema.
 See the upgrade note below before adopting — the owner cuts the tag.
 
 **2026-08-31: `pockets/authorization/v0.7.0` — TAGGED @ `e95c82b` (#24, #25), MINOR (additive)** —
-the authorization train (plans of record
-`.claude/plans/authorization-gates-and-lookup.md` and
-`.claude/plans/authorization-role-routes.md`; gopernicus issues #19, #20, #22;
-originating host gps-360-go). One module changes, one tag:
+the authorization train (gopernicus issues #19, #20, #22;
+reported by a host). One module changes, one tag:
 `RequireAnyPermission(…GateSpec)` puts the disjunction on the route line (with
 the `ErrAlternativeNotApplicable` resolver sentinel), `LookupResourcesIn` adds
 a caller `Limit` + `LookupResult.Truncated` above the untouched budget, and the
@@ -7957,8 +7853,7 @@ store retags. See the upgrade note below before adopting — the owner cuts the
 tag.
 
 **2026-08-31: `pockets/jobs/v0.4.0` — TAGGED @ `3107dce`, MINOR (behavioral
-fix, no API change)** — graceful drain for the unfenced runtime (plan of record
-`.claude/plans/jobs-graceful-drain.md`; originating host gps-360-go plans/40
+fix, no API change)** — graceful drain for the unfenced runtime (reported by a host
 Batch 0). One module changes, one tag: the unfenced queue and scheduler pool
 iterations run under `context.WithoutCancel`, so cancellation stops NEW claims
 but an iteration already begun finishes its handler and persists its terminal
@@ -7970,9 +7865,8 @@ timeout strictly below the queue lease, since a detached iteration no longer
 dies with the process context.
 
 **2026-09-01: `sdk/v0.7.1` — TAGGED @ `418414f` (PR #33), PATCH (additive, zero-value-preserving)**
-— workers idle observability (plan of record
-`.claude/plans/workers-idle-observability.md`; gopernicus issue #32;
-originating host gps-360-go `cmd/workers/io`, its plans/40). One module
+— workers idle observability (gopernicus issue #32;
+reported by a host). One module
 changes, one tag: `foundation/workers.Pool` logs a Debug `"iteration: no work"`
 line per idle iteration and gains `WithHeartbeat(interval)`, an opt-in INFO
 `"pool alive"` beat carrying the iteration / claim / error deltas since the
@@ -7987,8 +7881,7 @@ retags, no schema, no new guard. See the upgrade note below before adopting.
 Cold-resolution verified on the module proxy first poll.
 
 **2026-09-01: `pockets/jobs/v0.4.1` — TAGGED, PATCH (additive)** — `Config.Heartbeat`
-passes the sdk v0.7.1 pool heartbeat through to jobs-built pools (plan of record
-`.claude/plans/jobs-heartbeat-passthrough.md`; originating host gps-360-go
+passes the sdk v0.7.1 pool heartbeat through to jobs-built pools (reported by a host
 `cmd/workers/io`). A jobs host never calls `workers.NewPool`, so `WithHeartbeat`
 was unreachable behind `jobs.NewRuntime`; one additive Config field now threads
 it onto both pools (queue and scheduler). Zero is the default and stays "no
@@ -7996,9 +7889,8 @@ heartbeat" — existing hosts are byte-identical. Pin moves sdk v0.5.0 → v0.7.
 The Debug "iteration: no work" line needed no pocket change — it rides the pool.
 
 **2026-09-03: `sdk/v0.8.0` — TAGGED @ `8564703` (PR #36), MINOR (additive + one parser semantic)** —
-environment secrets, the dotenv comment rule, and `ParseEnvTags` adoption (plan
-of record `.claude/plans/environment-secret-and-dotenv-gaps.md`; gopernicus
-issue #34; originating hosts gps-360-go and segovia v2). One module changes:
+environment secrets, the dotenv comment rule, and `ParseEnvTags` adoption (gopernicus
+issue #34; reported by hosts). One module changes:
 `foundation/environment` gains `Secret`/`DecodeSecret` (hex-encoded secret with
 a minimum-length floor; unset or empty → nil so the host applies its posture;
 `ErrSecretEncoding`/`ErrSecretUnderMinimum`), `LoadPath` adopts the dotenv
@@ -8042,8 +7934,8 @@ builds against the proxy.
 **2026-09-04: `pockets/jobs/v0.5.0` — TAGGED @ `eac19a0` (PR #38);
 `pockets/jobs/stores/pgx/v0.5.0` + `pockets/jobs/stores/turso/v0.4.0` — TAGGED
 @ `de453fb`; ONE train, MINOR (breaking ports)** — Claim and the scheduler pool filter by the kinds a runtime actually
-handles (plan of record `.claude/plans/jobs-kind-filtered-claim.md`; gopernicus
-issue #37; originating host gps-360-go plans/43 §4.5a). `job.QueueRepository.
+handles (gopernicus
+issue #37; reported by a host). `job.QueueRepository.
 Claim`, `job.FencedQueueRepository.Claim`, and `schedule.Repository.ListDue`
 gain a trailing `kinds []string` (nil = unfiltered); `schedule.Repository.
 ClaimDue` gains a trailing `expectedKind string` re-asserted in the CAS. Both
@@ -8060,9 +7952,7 @@ See the upgrade note below.
 `pockets/authorization/stores/pgx/v0.4.0` + `pockets/authorization/stores/turso/v0.3.0`
 — TAGGED @ `9e5a713`; ONE train, MINOR (breaking store port; train prepared
 2026-09-05 on branch `authorization-decisionview-permission`)** — `DecisionView.CheckPermission`: the hierarchy walk
-inside the guarded mutation (plan of record
-`.claude/plans/authorization-decisionview-permission.md`; originating host
-segovia v2 tenancy D13). The guard's only relationship read was a direct-tuple
+inside the guarded mutation (reported by a host tenancy D13). The guard's only relationship read was a direct-tuple
 `CheckRelation` that could not follow a `Through`, so a space manager or tenant
 owner — who holds no direct tuple on the dashboard they legitimately manage —
 was invisible to the guard. Now the read-side walk is generic over a two-method
@@ -8088,9 +7978,7 @@ below.
 — TAGGED @ `a5ca592`; ONE train, MINOR (host-contract expansion: the store ports
 gain the ambient-transaction paragraph and `storetest` gains an exported entry
 point; stores change behavior)** — baseline writes join the ambient
-`crud.Transactor` transaction (plan of record
-`.claude/plans/authorization-stores-ambient-transaction.md`, executed copy in
-`plans/`; originating host segovia v2 tenancy D15: "application rows are
+`crud.Transactor` transaction (reported by a host: "application rows are
 canonical; navigational tuples are an atomic projection"). Before, a host that
 wrapped its own row write and `RelationshipWriter.SetRelationTargets` in one
 `Transact` got a silent atomicity split: the row rolled back with the
@@ -8226,15 +8114,12 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### GPS-360-Go follow-ups — credential ownership and limiter schema (published 2026-09-13)
+### Host follow-ups — credential ownership and limiter schema (published 2026-09-13)
 
 Published from `5fb8d51cb2355027c6a32a9b1bb617acb42b13db`; all five modules passed
 normal public checksum/source and independent build/test/vet verification.
-The release is tracked in [plans/gps360-upstream-followups.md](plans/gps360-upstream-followups.md).
 The patch set is pgxdb `v0.7.1`, authentication `v0.11.1`, authentication/pgx
 `v0.6.1`, authentication/turso `v0.5.1`, and authentication/firestore `v0.1.1`.
-Published source/checksum and verification evidence is in
-[the release manifest](plans/gps360-upstream-release-manifest.json).
 
 The reported HTTP identifier-removal request could promote another user's
 identifier without changing that user's authentication revision, even with
@@ -8263,12 +8148,10 @@ tables require no migration. A host adopting a new selected schema applies the
 qualified table/index DDL before startup and probes that schema. No automatic
 DDL, search-path changes or counter relocation occurs. Schema changes require a
 coordinated cutover to avoid split quotas; host-owned pruning must be qualified.
-See [qualified DDL and wiring](integrations/datastores/pgxdb/README.md#schema-selection-on-a-shared-pool)
-and the [consumer repinning handoff](plans/gps360-upstream-repin-handoff.md).
+See [qualified DDL and wiring](integrations/datastores/pgxdb/README.md#schema-selection-on-a-shared-pool).
 
 ### Firestore — v0.1.0 (published 2026-09-13; real GCP suite untested)
 
-The release plan is [plans/firestore-release.md](plans/firestore-release.md).
 These are three new, opt-in modules; existing SQL hosts do not need to adopt them.
 The owner authorized unsuffixed `v0.1.0` after the verified beta publication,
 accepting the known real GCP testing gap. All three tags are published from
@@ -8377,8 +8260,7 @@ alone cannot establish real GCP coverage.
 
 ### pockets/authorization — v0.12.0 @ `1439407` (+ stores/pgx v0.7.0, stores/turso v0.6.0 @ `340f6f2`) — tagged 2026-09-09: `FilterAuthorized` decides the candidate SET in one evaluation (minor; BREAKING store port; no schema)
 
-Plan of record `plans/authorization-batch-decision.md` (originating host
-segovia v2, `v2-tenancy.md` leg 6.3 / O13: the owner's ruling "upstream should
+Reference (reported by a host: the owner's ruling "upstream should
 support batch lookups on B" after a DENIED check was measured at ~60–80 ms
 against pgx, making a sparse container page of 300 candidates take ~18 s). ONE
 train: core minor + both store minors together, because the point of the change
@@ -8459,12 +8341,12 @@ postfiltering was expensive — a manager's listing inside a huge tenant, a sear
 result, any host-ordered candidate stream whose visible set is not bounded. A
 container listing whose visible set IS bounded should stay on the prefilter
 (`LookupResourcesIn` + `WHERE id = ANY(...)`); see the amended choosing table in
-`plans/authorization-lookup-paging.md`.
+the authorization README.
 
 ### pockets/authorization — v0.11.0 @ `4bd2363` (+ stores/pgx v0.6.0, stores/turso v0.5.0 @ `a78aab2`) — tagged 2026-09-08: `LookupResourcesIn` pages — keyset `After`/`NextCursor` over both kinds (minor; BREAKING store ports; host migration `0005`)
 
-Plan of record `.claude/plans/authorization-lookup-paging.md` (#29, the
-deferred half of #22; originating host segovia v2, `v2-tenancy.md` O6/D10),
+Reference (#29, the
+deferred half of #22; reported by a host, `v2-tenancy.md` O6/D10),
 tasks 1–4 — the SECOND train under ruling R4, on top of v0.10.0. A **minor**
 by the repo's pre-1.0 convention that **breaks both store ports** and ships a
 **required host migration**. Owner rulings 2026-09-08: R1 `MaxLookupResults`
@@ -8522,7 +8404,7 @@ release as a deprecated alias.
   resource_id COLLATE "C")` (pgx; no COLLATE on turso — BINARY is byte order)
   and `idx_iam_roles_subject_resource_lookup` on `(subject_type, subject_id,
   resource_type, resource_id, role)`. **Hosts pin the ledger verbatim, so this
-  file is a REQUIRED re-export** (segovia v2's `ledger_test` fails until it is
+  file is a REQUIRED re-export** (a host's `ledger_test` fails until it is
   copied). It is an ORDINARY transactional `CREATE INDEX IF NOT EXISTS` —
   `pgxdb.RunMigrations` applies the stream in one transaction, where
   `CONCURRENTLY` is impossible — so the build holds a SHARE lock (writes block,
@@ -8555,19 +8437,19 @@ deleted at merge and reopened as #45 on the same commits.
 
 **Adoption.**
 
-- segovia v2 leg 6 (home, D10a): `LookupResourcesIn` per item type with
+- A tenancy host's home listing: `LookupResourcesIn` per item type with
   `Limit: 50`, cursor per section; set `Limits.MaxLookupResults: 5000` (R1);
   re-export `0005` into the ledger; add the overflow case to the verify list.
-- gps-360-go `/client-hubs` (the #22 origin): `After` replaces the host-side
+- An OAuth2 host's client-hubs listing (the #22 origin): `After` replaces the host-side
   cap of 50; re-export `0005`.
-- Coordination Hub `myCampaigns`: `After` once it moves onto v0.11+.
+- Another host's campaign listing: `After` once it moves onto v0.11+.
 - Any host implementing `relationship.Storer` / `role.Storer` itself: add the
   parameters and the role lookup, honor byte order, run `storetest.Run`.
 
 ### pockets/authorization — v0.10.0 @ `162d24e` — tagged 2026-09-08: `FilterPage`, the postfilter page-filler, and the memoized batch reader (minor; core-only)
 
-Plan of record `.claude/plans/authorization-lookup-paging.md` (#29, the
-deferred half of #22; originating host segovia v2, `v2-tenancy.md` O6/D10),
+Reference (#29, the
+deferred half of #22; reported by a host, `v2-tenancy.md` O6/D10),
 tasks 5–6 — the FIRST of two trains under ruling R4. A **minor**: purely
 additive, no store port change, store modules NOT retagged, `sdk v0.7.0` pin
 unchanged.
@@ -8604,7 +8486,7 @@ unchanged.
   `Check`; it never enumerates globally, so a bounded container listing cannot
   fail on a principal whose total accessible set exceeds `MaxLookupResults`.
 
-**Adoption.** segovia v2 container listings (`/spaces/{id}/spaces`,
+**Adoption.** A tenancy host's container listings (`/spaces/{id}/spaces`,
 `/spaces/{id}/dashboards`, `/tenants/{id}/spaces`): replace the unbounded
 `FilterAuthorized` over the whole container with `FilterPage` over the
 tenancy/dashboards stores' keyset queries (per-row cursors). "Everything of
@@ -8612,8 +8494,7 @@ type X I may see" stays on the prefilter — paged on the next tag.
 
 ### pockets/authentication — v0.10.0 @ `62e69f4` — tagged 2026-09-08: `Optional()`, the pass-by-absence posture on `RequirePrincipal` (minor; additive)
 
-Plan of record `plans/authentication-optional-principal.md` (originating host
-segovia v2 tenancy D11 / leg 6b, the anonymous public read). `sdk` untouched;
+Reference (reported by a host, the anonymous public read). `sdk` untouched;
 store modules untouched; no schema. PR #44.
 
 **One more `PrincipalOption`:**
@@ -8641,8 +8522,7 @@ absence. No existing posture changes; no host code needs to move.
 
 ### pockets/authorization — v0.9.0 @ `495787c` (+ stores/pgx v0.5.0, stores/turso v0.4.0 @ `a5ca592`) — tagged 2026-09-08: baseline writes join the ambient `crud.Transactor` transaction (minor; store behavior change; guarded path refuses inside a transaction)
 
-Plan of record `.claude/plans/authorization-stores-ambient-transaction.md`
-(originating host segovia v2, `v2-tenancy.md` D15). A **minor** by the repo's
+Reference (reported by a host). A **minor** by the repo's
 pre-1.0 convention: no signature changes, but the store ports gain a contract
 paragraph every store author must honor and `storetest` gains an exported
 entry point. Owner rulings 2026-09-08: this version line; roles IN; the guarded
@@ -8681,7 +8561,7 @@ path refuses.
   `authorization.ErrGuardedInsideTransaction` with a nil receipt when the
   context carries the ambient transaction, BEFORE any guard, validator, lock, or
   row. Previously the guarded path silently ran on its own connection. No known
-  host does this (the Hub writes no tuples; segovia's only guarded call, the
+  host does this (one host writes no tuples; another's only guarded call, the
   `tenant#owner` seed, runs outside `Transact`). If yours does: move the guarded
   call outside `Transact`, or file for the joining design.
 - **`storetest.RunTransactional(t, newRepos func(t) (authorization.Repositories, crud.Transactor))`**
@@ -8710,8 +8590,7 @@ against the tags.
 
 ### pockets/authorization — v0.8.0 @ `3c446c0` (+ stores/pgx v0.4.0, stores/turso v0.3.0 @ `9e5a713`) — tagged 2026-09-08: `DecisionView.CheckPermission` — the hierarchy walk inside the guarded mutation (minor, breaking store port)
 
-Plan of record `.claude/plans/authorization-decisionview-permission.md`
-(originating host segovia v2, `v2-tenancy.md` D13). A **minor** by the repo's
+Reference (reported by a host). A **minor** by the repo's
 pre-1.0 convention that **breaks the mutation store port** for anyone who
 implements `mutation.DecisionView` or hands a `mutation.Guard` closure to
 `ApplyGuarded` directly. A host guard's `AuthorizeMutation(ctx, attempt, view
@@ -8782,14 +8661,14 @@ once:
 additive gate/lookup/role-routes tag; no store symbol depends on them). Core
 `go.mod` unchanged (`sdk v0.7.0`).
 
-**Adoption.** segovia v2 leg 3: the host guard becomes platform-admin
+**Adoption.** A tenancy host: the host guard becomes platform-admin
 short-circuit, the change-shape matrix, then `view.CheckPermission(scope,
 manage | manage_access, actor)`.
 
 ### pockets/jobs — v0.5.0 @ `eac19a0` (+ stores/pgx v0.5.0, stores/turso v0.4.0 @ `de453fb`) — tagged 2026-09-04: Claim and the scheduler pool filter by registered kinds (minor, breaking ports)
 
-Plan of record `.claude/plans/jobs-kind-filtered-claim.md` (gopernicus #37;
-originating host gps-360-go). A **minor** by the repo's pre-1.0 convention that
+Reference (gopernicus #37;
+reported by a host). A **minor** by the repo's pre-1.0 convention that
 **breaks the three repository ports** for anyone who implements them.
 
 **What changed.** Before, a worker polling a shared queue claimed the oldest
@@ -8814,7 +8693,7 @@ pending, zero attempts charged, never dead-lettered by a foreign worker.
 - **Hosts running ONE worker binary with every kind registered**: no
   behavior change beyond one INFO line per runtime (`"jobs runtime: claiming
   kinds"`) and a `kinds` attr on `Register`'s line.
-- **Hosts running SEVERAL worker binaries over one queue** (gps-360-go's two
+- **Hosts running SEVERAL worker binaries over one queue** (one host's two
   ingest workers): they stop dead-lettering each other's jobs and firing each
   other's schedules — retire any deploy-together stopgap. Note the trade: a
   kind nobody registers now waits silently instead of failing loudly; watch
@@ -8827,8 +8706,7 @@ pending, zero attempts charged, never dead-lettered by a foreign worker.
 
 ### sdk — v0.8.0 — tagged 2026-09-03 @ `8564703`: secrets, the dotenv comment rule, and ParseEnvTags that hosts can actually adopt (minor)
 
-Plan of record `.claude/plans/environment-secret-and-dotenv-gaps.md`
-(gopernicus #34; originating hosts gps-360-go and segovia v2). A **minor**:
+Reference (gopernicus #34; reported by hosts). A **minor**:
 four additive surfaces and one parser semantic in `foundation/environment` +
 `foundation/web`. Read all five items before repinning.
 
@@ -8839,7 +8717,7 @@ failure wraps `ErrSecretEncoding`, a short key wraps `ErrSecretUnderMinimum`,
 and `Secret` prefixes every error with the key name. `minBytes` is a floor,
 not the authority — `cryptids.NewAESGCM` still requires exactly 32. Hosts may
 delete their `hexKeyEnv` / `secretKeys.key` decode+length lines. A key read as
-raw ASCII today (the `examples/auth-cms` encrypter keys, its and gps-360-go's
+raw ASCII today (the `examples/auth-cms` encrypter keys, its and a host's
 `AUTH_JWT_SECRET`) gets `ErrSecretEncoding` at boot if moved to `Secret`
 without re-encoding — move the value to hex when you move the read.
 
@@ -8847,7 +8725,7 @@ without re-encoding — move the value to hex when you move the read.
 `AUTH_JWT_SECRET=   # >=32 bytes; …` (the shape in `examples/auth-cms/.env.example`
 and any template copied from it) into the value `# >=32 bytes; …`. A host that
 reads that key as ASCII (`cryptids.NewHS256([]byte(secret))` — `examples/auth-cms`
-and gps-360-go do) accepted the 55-byte comment as its signing key with no
+and a host do) accepted the 55-byte comment as its signing key with no
 warning: the EPHEMERAL-key WARN never fired and the host ran on publicly
 committed key material. Hex-read keys and exactly-32 AES keys failed loudly;
 the JWT key is the one that succeeded silently. If any environment was ever
@@ -8932,7 +8810,7 @@ one process disambiguates with the namespace argument: `ParseEnvTags("FENCED",
 `AUTH_COOKIE_MAX_AGE` (nested: needs the host's sdk ≥ v0.8.0; the pockets' own
 sdk pins do not move — MVS takes the host's). No `default:` tags anywhere: zero
 keeps every documented `0 → default` contract. Not retired by tags:
-gps-360-go's `JOBS_HANDLER_TIMEOUT` (a host-side handler wrapper, no Config
+a host's `JOBS_HANDLER_TIMEOUT` (a host-side handler wrapper, no Config
 field). `authorization.Config` is untagged (its scalars live in the nested
 `EvaluationLimits`; gopernicus #35 tracks it with the other follow-ups —
 example hosts onto `Secret` with hex keys, and the example env templates
@@ -8952,7 +8830,7 @@ Re-init a host with `go install …/workshop/gopernicus@v0.2.1` only after
 
 ### pockets/jobs — v0.4.1 — tagged 2026-09-01: Config.Heartbeat, the pool heartbeat passthrough (patch)
 
-Plan of record `.claude/plans/jobs-heartbeat-passthrough.md`. A **patch**: one
+A **patch**: one
 additive field. `jobs.Config.Heartbeat time.Duration` reaches
 `workers.WithHeartbeat` on both runtime pools; 0 (the default) keeps the
 heartbeat off, so no existing host changes behavior. Adopt by setting it at
@@ -8964,8 +8842,8 @@ set must beat.
 
 ### sdk — v0.7.1 (tagged 2026-09-01 @ `418414f`): the worker pool proves it is idle, not wedged (patch)
 
-Plan of record `.claude/plans/workers-idle-observability.md` (gopernicus #32;
-originating host gps-360-go `cmd/workers/io`). A **patch**: two additive
+Reference (gopernicus #32;
+reported by a host `cmd/workers/io`). A **patch**: two additive
 observability seams in `foundation/workers`, both zero-value-preserving. A
 workless pool used to emit nothing after its `worker started` lines — an empty
 claim (`ErrNoWork`) was swallowed in `Pool.worker` at every level, and the
@@ -9019,8 +8897,7 @@ drain-contract change. `sdk`'s `go.mod` still has no require block.
 
 ### pockets/jobs — v0.4.0 — tagged 2026-08-31 @ `3107dce`: unfenced graceful drain honors the documented contract (minor)
 
-Plan of record `.claude/plans/jobs-graceful-drain.md` (originating host
-gps-360-go plans/40). A **minor**: a behavioral fix toward the README's own
+Reference (reported by a host). A **minor**: a behavioral fix toward the README's own
 drain contract ("in-flight handlers finish and persist"); no API change, no
 schema, no store retags.
 
@@ -9037,15 +8914,14 @@ lease reclaimable.
 **Adopter action.** A detached iteration no longer dies with the process
 context, so bound handler work yourself: wrap registered handlers in a timeout
 **strictly below the queue lease** (default 15m), or a hung handler can drain
-past the lease and be reclaimed concurrently. Reference: gps-360-go wraps every
+past the lease and be reclaimed concurrently. Reference: a host wraps every
 handler at a configurable 10m, boot-refusing a value at or above the lease. The
 regression proof is `internal/logic/runtime/runtime_test.go`'s
 cancellation-during-handler test.
 
 ### pockets/authorization — v0.7.0 — tagged 2026-08-31 @ `e95c82b`: the disjunction gate, the bounded lookup, and role administration comes standard (minor)
 
-Plans of record `.claude/plans/authorization-gates-and-lookup.md` (#19, #22)
-and `.claude/plans/authorization-role-routes.md` (#20). A **minor**: purely
+Gopernicus issues #19, #22 and #20. A **minor**: purely
 additive symbols, one pin move, one new boot WARN.
 
 **Additions — decision surface.**
@@ -9096,7 +8972,7 @@ additive symbols, one pin move, one new boot WARN.
 v0.7.0's write vocabulary; no authorization symbol depends on the new kernel
 faults yet).
 
-**Adoption.** gps-360-go: replace the sequential-`Check` OR handlers with
+**Adoption.** An OAuth2 host: replace the sequential-`Check` OR handlers with
 `RequireAnyPermission` on the route line; delete the hand-written role wire
 (`pockets/auth/inbound/roles.go`) and pass `ValidateAssignment` as
 `Config.AssignmentPolicy`; re-cap dashboard rosters with
@@ -9104,7 +8980,7 @@ faults yet).
 
 ### sdk — v0.7.0 — tagged 2026-08-31 @ `41ddfdb`: the write vocabulary (minor)
 
-Plan of record `.claude/plans/crud-write-vocabulary.md` (gopernicus #21). A
+Reference (gopernicus #21). A
 **minor**: purely additive, but it materially expands the host contract. Every
 JSON write slice had been re-deriving the same four pieces — a sparse-PATCH
 field, a collect-every-problem refusal, a strict body reader, and a
@@ -9273,7 +9149,7 @@ example adopts the vocabulary on this train.
 
 ### sdk — v0.6.0 (next tag, 2026-08-27): the list contract reaches the request (minor)
 
-Plan of record `plans/web-crud-list-request.md` (gopernicus #11). A **minor**
+Reference (gopernicus #11). A **minor**
 rather than the additive-as-patch precedent (`v0.3.1`, `v0.4.1`) by owner
 ruling, because two things change observably alongside the additions.
 
@@ -9318,7 +9194,7 @@ generic mapping is deliberate — `SafeDomainError` posture unchanged), and
 That is the contract: `ErrFromDomain` for the status, `ErrValidation` for the
 sentence — the path `DecodeJSON` failures already take. Cursor-decode errors
 are NOT wrapped: a stale or bad cursor token is a first page by rule, never a
-400. A host that special-cased the old 500 (gps-360-go `wire.ListRequest`)
+400. A host that special-cased the old 500 (a host `wire.ListRequest`)
 can delete the special case; the helper collapses to
 `crud.ParseListQuery(r.URL.Query(), crud.ListQueryOptions{Limits: limits})` +
 `web.RespondJSONError(w, web.ErrValidation(err))`.
@@ -9337,7 +9213,7 @@ parser.
 
 ### integrations/datastores/pgxdb — v0.6.0 (next tag, 2026-08-27): UTC-located `timestamptz` on every connection, session `timezone=UTC` by default, `Collect`/`ProbeTables`/22P02 (minor; connect-time behaviour change)
 
-Plan of record `plans/web-crud-list-request.md` (gopernicus #11 D6, and #9
+Reference (gopernicus #11 D6, and #9
 bundled by owner ruling). Pin stays `sdk v0.4.0` — no new sdk symbol is used.
 No `Config` field is added: the scan location is always UTC, and the DSN is
 the session-zone escape hatch.
@@ -9368,7 +9244,7 @@ zone) already decoded to UTC — untouched. **What changes:** every scanned
 are unchanged; `String()`/`Format` and `encoding/json` output switch from the
 local offset to `Z`. Hosts already on `timestamps.go`'s `From*` helpers see
 nothing new. Hosts carrying a `wire.Time`/`TimePtr`-style presentation helper
-(gps-360-go: 55 sites) can delete it — DTO fields become `time.Time` /
+(one host: 55 sites) can delete it — DTO fields become `time.Time` /
 `*time.Time`, byte-identical output for scanned instants. **Audit first:** an
 instant minted in-process (`time.Now()` in a domain constructor) still carries
 `time.Local` unless the container runs `TZ=UTC` — normalize those at the
@@ -9394,8 +9270,8 @@ instant). Today those expressions differ silently between a laptop and a
 `TZ`-less container; after this tag they evaluate identically. **Escape
 hatches:** `AT TIME ZONE '…'` in the SQL that needs local bucketing, or pin
 `timezone=` in the DSN. Adopter check before repinning: grep the host for
-`date_trunc|::date|to_char|AT TIME ZONE|EXTRACT` (gps-360-go: zero hits;
-coordination-hub: the owner's to run).
+`date_trunc|::date|to_char|AT TIME ZONE|EXTRACT` (one host: zero hits;
+another: the owner's to run).
 
 **#9 — the small helpers (additive).**
 
@@ -9425,8 +9301,8 @@ to `2025-12-31T19:00:00Z`, `SHOW TimeZone` = `UTC` by default and
 
 ### integrations/datastores/pgxdb — v0.6.1 — tagged 2026-08-28: `ListQuery.FixedOrder`, a store-fixed composite ORDER BY for the offset strategy (patch; additive)
 
-Plan of record `plans/pgxdb-list-fixed-order.md` (gopernicus #15; originating
-host gps-360-go, which carried an `OffsetPage[R, D]` helper in nine stores
+Reference (gopernicus #15; reported by
+a host, which carried an `OffsetPage[R, D]` helper in nine stores
 because `pgxdb.List` could not express `closing_date DESC NULLS LAST, name
 ASC, id ASC`). Pin stays `sdk v0.4.0`; no schema; no sibling bumps.
 
@@ -9449,7 +9325,7 @@ tiebreak; `List` appends nothing. When set:
 **Zero value.** A `ListQuery` without `FixedOrder` builds byte-identical SQL
 to `v0.6.0` (pinned by test).
 
-**Adopting (gps-360-go).** Replace each local `offsetPage` helper with
+**Adopting (an OAuth2 host).** Replace each local `offsetPage` helper with
 `pgxdb.List` + `FixedOrder` carrying the same expression, then delete
 `rows.go`'s `offsetPage`. Same SQL shape, same page fields. Hosts serving
 these lists over `web.ParseListQuery` should note a client-supplied `order`
@@ -9462,8 +9338,7 @@ Proof: hermetic SQL-capture tests (`TestList_FixedOrder*`) and the live
 
 ### pockets/authentication — v0.9.0 — tagged 2026-08-29: one composable authenticator, named helpers, the credential on the context (BREAKING, pre-1.0)
 
-Plan of record `plans/authentication-principal-posture.md` (originating host
-gps-360-go `plans/33-principals-api-keys-and-route-proof.md` D2). `sdk`
+Reference (reported by a host). `sdk`
 untouched; store modules untouched; no schema.
 
 **The one authenticator.** `Service.RequirePrincipal(opts ...PrincipalOption) web.Middleware`
@@ -9543,7 +9418,7 @@ go mod edit -require github.com/gopernicus/gopernicus/pockets/authentication@v0.
 go mod tidy
 ```
 
-**gps-360-go's one call site:**
+**The OAuth2 host's one call site:**
 
 ```
 router.Group("/api/v1", authenticationSvc.RequirePrincipal, …)
@@ -9557,7 +9432,7 @@ No tag exists yet — the owner cuts `v0.9.0`.
 
 ### pockets/authentication — v0.8.2 — tagged 2026-08-28: identity.Resolver is principal-exact (patch)
 
-Plan of record `plans/identity-resolver-principal-exact.md`. `Resolve` for a
+`Resolve` for a
 `user` principal projects the stored `DisplayName` exactly — blank stays blank;
 the email-local-part fallback and its helpers are gone. Identifier matching (an
 email value → a user) never enters `Resolve` (`TestResolveUserIsPrincipalExact`).
@@ -9571,7 +9446,7 @@ in a shared Resolver decorator.
 
 ### pockets/authentication — v0.8.1 + features/authentication — v0.4.3 — tagged 2026-08-28 (maintenance line off v0.4.2): host-owned mail data, subjects, and SMS bodies (patch; additive)
 
-Plan of record `plans/auth-mail-host-data-and-subjects.md`. A **patch on both
+A **patch on both
 lines** by plan ruling: every symbol is additive, the zero value of every new
 `Config` field renders today's output byte-for-byte (pinned by golden test
 against the pre-release render), no schema, no store retags, and **no pin
@@ -9612,7 +9487,7 @@ moves** — the `v0.4.3` maintenance commit is the `v0.4.2` tree plus this chang
   ran one to any effect), and a caller-supplied `Data["Secret"]` no longer
   shadows `Request.Secret` (no caller ever did).
 
-**Adopting (coordination-hub):** bump `features/authentication v0.4.2 →
+**Adopting (a host):** bump `features/authentication v0.4.2 →
 v0.4.3` only; set `cfg.DeliveryData` to look up the campaign name and return
 `{"ResourceName": name}` for `auth.PurposeInvitation` / `auth.PurposeMemberAdded`;
 optionally `cfg.EmailSubjects[auth.PurposeInvitation]`. No template override is
@@ -9620,7 +9495,7 @@ needed for the name to appear.
 
 ### pockets/authentication — v0.8.0 (next tag, 2026-08-27): list routes answer the parser's sentence; pin → `sdk v0.6.0` (minor)
 
-Plan of record `plans/web-crud-list-request.md` (D3). A **minor**: the pin
+Reference (D3). A **minor**: the pin
 moves to a sibling minor (`sdk v0.5.0 → v0.6.0`), and one wire body changes.
 No schema, no store retags (`stores/{pgx,turso}` keep their `authentication
 v0.7.0` / `sdk v0.5.0` pins and upgrade at the host via MVS).
@@ -9643,7 +9518,7 @@ v0.7.0` / `sdk v0.5.0` pins and upgrade at the host via MVS).
 
 ### 2026-08-27: the `features/` tier is `pockets/` (module-path rename; ONE train of 19 tags)
 
-Plan of record `plans/rename-features-to-pockets.md`. The third tier is renamed
+The third tier is renamed
 so a host app's own *feature* ("invite a teammate") stops colliding with the
 framework's word for the unit it composes. This is a **module-path rename** —
 an identity change for seventeen modules — plus the composer package move. No
@@ -9730,13 +9605,13 @@ store's tests).
 **Adopter action (breaking):** rename `Model:` → `RelationshipModel:` in every
 `authorization.Config` literal; remove any `errors.Is(err, authorization.ErrConfigConflict)`
 branch. The compiler finds both. Known hosts: `examples/auth-cms` (done in-repo),
-coordination-hub and gps-360-go (owner-updated downstream). No store change; stores
+the hosts (owner-updated downstream). No store change; stores
 not retagged.
 
 ### features/authorization — v0.4.0 — tagged 2026-08-26: `Config.RelationshipModel` + `ErrNoDecisionKind` is a 500 (minor; one-release deprecation)
 
-Plan of record `plans/authorization-roles-model-followups.md` — the two
-owner calls left open at the v0.3.0 close, released BEFORE gps-360-go adoption so
+The two
+owner calls left open at the v0.3.0 close, released BEFORE a host adoption so
 the handoff targets the final names.
 
 **1. `Config.Model` → `Config.RelationshipModel`.** The relationship kind's model
@@ -9780,8 +9655,8 @@ against the field name it was tagged with.
 
 ### features/authorization — v0.3.0 (next tag): the roles kind's model + one decision surface (minor, predominantly additive)
 
-Plan of record `plans/authorization-roles-model.md` (gopernicus issue #5;
-originating host gps-360-go, which hand-wrote the entire roles decision half).
+Reference (gopernicus issue #5;
+reported by a host, which hand-wrote the entire roles decision half).
 The roles kind gains the model it never had, and the decision surface stops being
 relationship-kind-only. **A host that sets no `Config.RoleModel` is behaviourally
 unchanged** — same decisions, reasons, traces, and zero-length values.
@@ -9817,7 +9692,7 @@ unchanged** — same decisions, reasons, traces, and zero-length values.
   resource-type or role names; policy vocabulary stays out of logs.
 
 **The one error-identity change — `ErrNoDecisionKind`.** On a host where NO kind
-bears a model (a roles-only wiring with no `Config.RoleModel` — gps-360-go today),
+bears a model (a roles-only wiring with no `Config.RoleModel` — a host today),
 these five calls return the new `ErrNoDecisionKind` where they previously returned
 `ErrRelationshipsNotConfigured`: **`Check`, `CheckBatch`, `CheckExplain`,
 `FilterAuthorized`, `LookupResources`.** Nothing else moves — every other
@@ -9830,7 +9705,7 @@ seam — never a deny, never 403, never `ErrUnavailable`. *(Changed to 500 in
 v0.4.0: the sentinel dropped its `sdk.ErrInvalidInput` wrap and is now classed as
 a server-side wiring fault — see that entry above.)* A host branching on
 `errors.Is(err, ErrRelationshipsNotConfigured)` for those five calls must add the
-new sentinel; no host in `examples/` or gps-360-go did (grep, 2026-08-26). The
+new sentinel; no host in `examples/` or a host did (grep, 2026-08-26). The
 three gates still panic at mount on that wiring, with a **new message**:
 
 ```
@@ -9845,7 +9720,7 @@ or Config.RoleModel); a roles-only host without a role model must not mount it
 assigned role grants exactly the role-owned pairs whose grantor lists EXPLICITLY
 name it, and acquires neither relationship-owned permissions nor permissions added
 to the model later. An application flag that must bypass every present and future
-decision (gps-360-go's `ManageAuthorization`, auth-cms's `isPlatformAdmin`) stays
+decision (a host's `ManageAuthorization`, auth-cms's `isPlatformAdmin`) stays
 in host composition, run before the surface, and owns the widening. A host
 transcribing an existing steward/admin role must therefore list it on every
 permission it should grant.
@@ -9865,7 +9740,7 @@ is now loud at assign time.
 
 **Source-compatibility caveat.** `Config`, `ExplainStep`, and `LookupResult` gain
 exported fields. Keyed literals are unaffected and no unkeyed literal of any of the
-three exists in-repo or in gps-360-go (grep 2026-08-26; `go vet` checks composites
+three exists in-repo or in a host (grep 2026-08-26; `go vet` checks composites
 in the verify set) — but, as with any exported Go struct field addition, an unknown
 downstream **unkeyed** literal of those three types must become keyed.
 
@@ -9907,13 +9782,13 @@ semantics are `RequirePermission`'s (401 / 403 / 500 / 503, fail closed);
 gates, and an empty path value is a resolver error (500 — the honest answer to a
 parameter name that does not match the route pattern). Same relationship-kind
 precondition as `RequirePermission` (panics at mount on a roles-only host).
-Origin: gps-360-go / coordination-hub's per-route authorizer style (owner
+Origin: two hosts' per-route authorizer style (owner
 ruling, 2026-08-26).
 
 ### integrations/datastores/pgxdb v0.5.0 + every feature `stores/pgx` — tagged 2026-08-26: WithSchema — host-chosen schema instead of a search_path pin (minor across all six; ONE train)
 
-Plan of record `plans/pgx-store-schema-option.md` (gopernicus issue #4;
-originating host gps-360-go, which shares another app's Postgres and today
+Reference (gopernicus issue #4;
+reported by a host, which shares another app's Postgres and today
 pins `search_path` in its DSN). Everything is additive and the default is
 byte-for-byte unchanged: a host that passes no option gets exactly the SQL,
 probes, and ledger statements it always had. Target tags:
@@ -10037,7 +9912,7 @@ bypasses it) before adopting.** Compile-safety of the drag was cold-verified
 (`GOWORK=off` builds of the four feature cores against sdk v0.4.2). No
 feature-core, sdk, or turso module is bumped.
 
-**Adoption (gps-360-go shape).** Delete the `search_path` DSN wrapper, then:
+**Adoption (OAuth-only host shape).** Delete the `search_path` DSN wrapper, then:
 
 ```go
 authSchema, err := pgxdb.NewSchema(os.Getenv("AUTH_DB_SCHEMA")) // "auth"
@@ -10064,8 +9939,7 @@ table is neither read nor written when a schema is configured.
 
 ### features/authentication — v0.6.0 (next tag): the lifecycle routes come standard behind a host gate (minor; MachineRoutesDisabled REMOVED — a source break; ungated routes no longer mount)
 
-authentication-machine-routes-gate (plan of record
-`plans/authentication-machine-routes-gate.md`, gopernicus issue #6). A **minor**:
+authentication-machine-routes-gate (gopernicus issue #6). A **minor**:
 an intended behaviour change — the bundled machine-identity lifecycle routes no
 longer mount without a host authorization gate — plus one removed `Config` field.
 It supersedes the v0.5.4 caveat below, which stays as ledger history.
@@ -10073,7 +9947,7 @@ It supersedes the v0.5.4 caveat below, which stays as ledger history.
 - **REMOVED: `Config.MachineRoutesDisabled bool`** (and its
   `authsvc.Deps.MachineRoutesDisabled` / `Service.MachineRoutesEnabled()`
   plumbing). A **compile break** for any keyed literal that sets it; the one
-  known caller is gps-360-go `cmd/server/authentication.go:50`, a single line it
+  known caller is a host `cmd/server/authentication.go:50`, a single line it
   deletes while adopting the gate — nil `MachineRoutesGate` is the same posture.
   Removed one day after it shipped rather than deprecated: "off even if a gate is
   set" is a second way to spell nil, and the pre-1.0 rule the owner applied to
@@ -10168,10 +10042,10 @@ It supersedes the v0.5.4 caveat below, which stays as ledger history.
   v0.3.0.
 - **The standard unkeyed-literal caveat:** `Config` gains one field and loses
   one, so any UNKEYED `auth.Config{…}` literal breaks. None exists in-repo or in
-  gps-360-go (grep 2026-08-26); keyed literals are unaffected except for the
+  a host (grep 2026-08-26); keyed literals are unaffected except for the
   removed field.
 
-**Adoption — gps-360-go.** It builds authentication at `cmd/server/main.go`
+**Adoption — an OAuth2 host.** It builds authentication at `cmd/server/main.go`
 BEFORE authorization, so either move the authorization boot above the
 authentication config or set `MachineRoutesGate` on the config after the
 authorizer exists and before `NewService`. Then replace
@@ -10185,11 +10059,11 @@ client-visible divergences at once**: the path (`/api/v1/service-accounts*` →
 `{…,"key":…}`), the revoke status (204 → 200 `{"status":"revoked"}`), and
 `created_by` (`"user:<id>"` → a bare user id, with existing rows keeping the old
 format — one column, two formats, no backfill). Repoint the key-holding clients
-or keep a thin host adapter. gps's blanket `act_as_user ⇒ 400` refusal becomes a
+or keep a thin host adapter. the host's blanket `act_as_user ⇒ 400` refusal becomes a
 gate-protected capability; a host that still wants no delegation keeps its own
 create route (own-the-routes) and adopts the bundled ones for the rest.
 
-**Adoption — coordination-hub and any other v0.5.x host.** If the machine
+**Adoption — any other v0.5.x host.** If the machine
 repositories are wired, the five routes answer 404 and boot logs the WARN until
 `MachineRoutesGate` is named. Once named, run the ghost-owner audit query above
 and repoint any cookie-driven admin UI at the CSRF bootstrap. Nothing else
@@ -10199,8 +10073,7 @@ unchanged, and no store or migration is touched.
 
 ### features/authentication — v0.5.4 (2026-08-25): MachineRoutesDisabled + a caveat on the bundled lifecycle routes (patch by owner ruling)
 
-authentication-machine-routes-toggle (plan of record
-`plans/authentication-machine-routes-toggle.md`). A **patch by owner ruling**:
+authentication-machine-routes-toggle. A **patch by owner ruling**:
 one additive `Config` bool whose zero value preserves every route; no schema,
 no `go.mod` change, no store retags.
 
@@ -10226,8 +10099,7 @@ no `go.mod` change, no store retags.
 
 ### features/authentication — v0.5.3 (2026-08-25): PasswordFlowsDisabled — the password credential as a posture (patch by owner ruling)
 
-authentication-password-flows-toggle (plan of record
-`plans/authentication-password-flows-toggle.md`). A **patch by owner ruling**:
+authentication-password-flows-toggle. A **patch by owner ruling**:
 one additive `Config` bool whose zero value preserves every existing route, no
 schema, no `go.mod` change, no store retags.
 
@@ -10254,8 +10126,7 @@ schema, no `go.mod` change, no store retags.
 
 ### sdk — next tag (2026-08-25): crud.MapPageErr — the fallible row→domain page bridge (patch by owner ruling)
 
-pgxdb-probe-table-map-page-err (plan of record
-`plans/pgxdb-probe-table-map-page-err.md`). A **patch by owner ruling**
+pgxdb-probe-table-map-page-err. A **patch by owner ruling**
 (one additive generic function; the `sdk/v0.4.1` precedent). No in-repo module
 pins move.
 
@@ -10271,15 +10142,14 @@ pins move.
 
 ### integrations/datastores/pgxdb — next tag (2026-08-25): ProbeTable — the boot-time table probe (patch by owner ruling)
 
-pgxdb-probe-table-map-page-err (plan of record
-`plans/pgxdb-probe-table-map-page-err.md`). A **patch by owner ruling**
+pgxdb-probe-table-map-page-err. A **patch by owner ruling**
 (one additive function; no `go.mod` change — still `sdk v0.4.0`).
 
 - **`pgxdb.ProbeTable(ctx, q Querier, table string) error`** is the existence
   probe every pgx store constructor already carried privately
   (`features/{authentication,authorization,events}/stores/pgx`): `SELECT
   to_regclass($1)::text` with the name bound as a parameter (bare, or
-  schema-qualified like `gps.organizations`). Absent → wraps `sdk.ErrNotFound`
+  schema-qualified like `app.organizations`). Absent → wraps `sdk.ErrNotFound`
   naming the relation; a query/infrastructure failure maps through `MapError`
   and is **never** misreported as a missing table. Accepts a `*DB` or a `*Tx`.
   Run it in a store constructor so a host aimed at a database without its
@@ -10292,7 +10162,7 @@ pgxdb-probe-table-map-page-err (plan of record
 
 ### features/authentication — next tag v0.5.2 (2026-08-25): completed account mutations stop landing silently (patch; REDIRECT TARGETS AND RENDERED COPY CHANGE)
 
-Defect fix (Segovia flag #19). Every auth page model embeds `PageContext.Message` and
+Defect fix (host-reported). Every auth page model embeds `PageContext.Message` and
 every bundled page body renders it, and the feature already populates that slot across
 a redirect in four places (`?sent=1` on forgot / password-remove / step-up /
 oauth-unlink). The account page was never wired in: all seven completed account
@@ -10359,7 +10229,7 @@ upgrades at the host through MVS.
 
 ### features/authentication v0.5.1 + views/goth v0.2.2 (2026-08-23): the identifier edit form stops offering a removal the policy refuses (patch pair)
 
-Defect fix one layer deeper than v0.2.1 (Segovia flag #18). The credential policy's
+Defect fix one layer deeper than v0.2.1 (host-reported). The credential policy's
 `Removable` hint reached the account page but never reached the identifier
 **management form**, so `GET /auth/identifiers/{id}/edit` always rendered a live
 "Remove this identifier" button — including for the account's only recovery-capable
@@ -10421,7 +10291,7 @@ available and should gate its own remove control on it.
 
 ### features/authentication/views/goth — v0.2.1 (2026-08-21): a suppressed unlink control now explains itself (patch)
 
-Presentation-only defect fix (Segovia flag #17). When the credential policy reports
+Presentation-only defect fix (host-reported). When the credential policy reports
 a linked OAuth account as non-removable — the common case being an account whose
 only sign-in method is that link — the bundled account page rendered the row with
 no unlink control **and no text at all**, which reads as a broken affordance. The
@@ -10453,8 +10323,7 @@ unaffected.
 
 ### features/authentication v0.5.0 + views/goth v0.2.0 (2026-08-21): OAuth linking completed in the bundled HTML surface (minor floor)
 
-Closes the two browser-side gaps in the OAuth linking story (Segovia flags
-#15/#16, plan of record `.claude/dashboards/04-account-oauth.md` in that repo),
+Closes the two browser-side gaps in the OAuth linking story (host-reported),
 and teaches the browser-lane redirect resolver to honor safe same-origin relative
 paths. Additive only —
 no schema change, no store retags, no `go.mod` change (`features/authentication`
@@ -10534,8 +10403,7 @@ store retags, `go.mod` unchanged (still `sdk v0.4.0`).
 
 ### features/authentication — v0.4.1 (2026-08-21): authorized invitation operations with invitee context + owner metadata projection (patch by owner ruling)
 
-invitation-metadata-host-seams proposals 1 and 3 (plan of record
-`plans/invitation-metadata-host-seams.md`, amending `plans/invitation-metadata.md`).
+invitation-metadata-host-seams proposals 1 and 3.
 Cut as a **patch by owner ruling** despite additive exported symbols — the
 `sdk/v0.3.1` / `features/authentication/v0.3.1` precedent: it completes the
 v0.4.0 metadata contract rather than opening new surface. No schema change, no
@@ -10571,8 +10439,7 @@ consume the sdk v0.4.1 wrapper).
 
 ### sdk — v0.4.1 (2026-08-21): web.SafeDomainError — explicit host-facing safe wire errors (patch by owner ruling)
 
-invitation-metadata-host-seams proposal 2 (plan of record
-`plans/invitation-metadata-host-seams.md`). A **patch by owner ruling** (one
+invitation-metadata-host-seams proposal 2. A **patch by owner ruling** (one
 additive type + constructor; the `sdk/v0.3.1` precedent). The sdk tree is
 otherwise byte-identical to `sdk/v0.4.0`; no in-repo module pins move.
 
@@ -10593,7 +10460,7 @@ otherwise byte-identical to `sdk/v0.4.0`; no in-repo module pins move.
 
 ### features/authentication v0.4.0 + both store modules v0.3.0 (2026-08-20): invitation metadata (minor; store migration REQUIRED)
 
-invitation-metadata (`plans/invitation-metadata.md`). Adds an opt-in, host-defined
+invitation-metadata. Adds an opt-in, host-defined
 `Metadata map[string]string` that rides an invitation from create to the Granter
 seam — a channel for a host to route its own facts (a firm id, a plan tier) from
 invite-time to grant-time. The feature never interprets it; empty metadata
@@ -10648,8 +10515,7 @@ not run this cut (no Postgres DSN available in the release environment).
 
 ### sdk — v0.3.0 (2026-08-14): global middleware is genuinely global + configurable CORS (minor)
 
-coordination-hub-auth-upstream U1 (plan of record `.claude/plans/`
-`coordination-hub-auth-upstream/`; Coordination-Hub upstream items 1b/3/5). Additive
+Host auth-upstream U1 (upstream items 1b/3/5). Additive
 API, so a **minor** floor — but it carries the batch's one silent behavior change,
 which leads this note:
 
@@ -10688,7 +10554,7 @@ which leads this note:
 
 ### features/authentication — v0.2.0 (2026-08-14): browser cookie-flow seams (minor; pins sdk v0.3.0)
 
-coordination-hub-auth-upstream U2–U4. Every change is additive — no existing request
+Host auth-upstream U2–U4. Every change is additive — no existing request
 body, response shape, or route was changed or removed — so a **minor** bump. The
 module's `go.mod` now requires **`sdk v0.3.0`**: the documented cross-origin browser
 flow depends on the CORS seam above, and pinning is what stops a host from adopting
@@ -10748,7 +10614,7 @@ flow depends on the CORS seam above, and pinning is what stops a host from adopt
 
 ### sdk — v0.3.1 (2026-08-15): 409 vocabulary completed + Page end-of-list contract documented (patch by owner ruling)
 
-The two upstream flags from coordination-hub's `coordination-api-consistency`
+The two upstream flags from a host's `coordination-api-consistency`
 work. **Owner ruling:** this tag carries one additive exported symbol, which the
 bump rules below classify as a minor; the owner cut it as a **patch** because it
 is a defect fix in an existing contract, not new surface. Pre-`v1` Go semantics
@@ -10771,8 +10637,7 @@ make this safe for consumers either way.
 
 ### features/authentication — v0.2.1 (2026-08-15): add-or-signup invitation lifecycle finished (patch)
 
-coordination-hub `email-and-invitations` task U2 (plan of record, in the
-Coordination-Hub repo, `.claude/plans/email-and-invitations.md`). Both changes are
+Host `email-and-invitations` task U2. Both changes are
 additive/behavioral with no exported API change and no schema change, so a
 **patch**. `go.mod` is unchanged (still `sdk v0.3.0`); no store module retags.
 
@@ -10815,8 +10680,7 @@ additive/behavioral with no exported API change and no schema change, so a
 
 ### integrations/email/sendgrid — v0.2.0 (2026-08-15): truthful capability metadata (minor)
 
-coordination-hub `email-and-invitations` task U1 (plan of record, in the
-Coordination-Hub repo, `.claude/plans/email-and-invitations.md`). Additive
+Host `email-and-invitations` task U1. Additive
 (**minor**): `Sender` now implements `email.CapabilityReporter`. The report is
 instance-sensitive — it describes the configured `Config.Host`, not merely the
 package default:
@@ -10836,7 +10700,7 @@ removed or renamed; `go.mod` unchanged.
 
 ### integrations/datastores/pgxdb — v0.3.0 (2026-08-14): durable rate limiter — this tag ships HOST SCHEMA (minor)
 
-coordination-hub-auth-upstream U5. The Go surface is additive (**minor**): `Limiter`,
+Host auth-upstream U5. The Go surface is additive (**minor**): `Limiter`,
 `NewLimiter(db *DB, opts ...LimiterOption)`, `WithLimiterKeyPrefix(prefix)` (default
 namespace `ratelimit:`), and `(*Limiter).StatusCheck(ctx)`. `NewLimiter` satisfies
 `sdk/capabilities/ratelimiter.Limiter` over the pool the host already owns — a
@@ -10899,8 +10763,8 @@ Go API alone:
 ### integrations/datastores/{pgxdb,turso} — v0.2.0: crud.Transactor implemented (minor)
 
 transactor-connectors (2026-08-14) implemented the sdk transaction seam in BOTH
-datastore connectors — the seam's first consumer arrived (the Coordination-Hub
-timeline cascade, gpsimpact/Coordination-Hub#13). Additive only, so a **minor**
+datastore connectors — the seam's first consumer arrived (a host's
+timeline cascade). Additive only, so a **minor**
 floor: `(*DB).Transact` (commit on nil; rollback + fn's error unwrapped;
 rollback + re-panic on panic), the connector-typed `TxFromContext(ctx) (*Tx,
 bool)`, and `(*DB).QuerierFrom(ctx) Querier` (ambient tx when inside a
@@ -10928,7 +10792,7 @@ unchanged (see its v0.1.1 note).
 Behavior fix, no exported API change (**patch**; pins `sdk v0.2.0`): the
 per-kind `DeadLetterFunc`'s `j.FailureReason` — structurally always empty
 before this tag — is now populated with the recorded terminal reason before
-the hook runs (Coordination-Hub issue #5). The AV3D-1.4 compile seam
+the hook runs (a host-reported issue). The AV3D-1.4 compile seam
 asserting `DeadLetterFunc` ≡ `workers.FencedDeadLetterFunc[job.Job]` is
 removed; the runtime's dispatch closure is the adapter. Hosts that retained
 their own handler-error fallback for the empty field can drop it.
@@ -11099,7 +10963,7 @@ former evolution files (`0012_id_defaults`, `0013_invitation_identifier_kind`,
 CREATEs — auth's set is `0001…0011`, one CREATE per table. New hosts scaffold
 the final shape. A host that scaffolded an earlier shape writes its OWN
 migration in its host tree (reference SQL in the feature README's upgrade
-note; segovia's `0018_sessions_refresh.sql` is the exemplar). Same
+note; a host's `0018_sessions_refresh.sql` is the exemplar). Same
 no-rolling-deploy / rollback runbook as the feature entry above.
 
 ### features/cms stores — next tag: id defaults folded into base CREATEs
@@ -11355,8 +11219,7 @@ JWT-refresh cut and `TrustProxies` to middleware-consolidation, each keyed above
 
 ### features/authentication v0.3.0 + both store modules v0.2.0 (2026-08-16): passwordless provision-on-consumption (minor; store migration REQUIRED)
 
-coordination-hub auth upstream, phase 6 (`.claude/plans/coordination-hub-auth-upstream/06-passwordless-provisioning.md`,
-CHAU-6.1…6.7, 2026-08-16). The plan called for a **separate release train** from
+Host auth upstream, phase 6 (2026-08-16). The plan called for a **separate release train** from
 the core admin/resend/reset work, since it is the highest-risk change in the
 packet. **The owner ruled one train**, so it shipped on the same tags: it is
 additive and default-off, and it raised no bump of its own. What adopters take
@@ -11414,8 +11277,7 @@ session; and every stable failure collapsing to one generic 401.
 
 ### features/authentication — v0.3.0 (2026-08-16): password-reset LINKS (minor; NEW REQUIRED PRODUCTION CONFIG)
 
-coordination-hub auth upstream, phase 5 (`.claude/plans/coordination-hub-auth-upstream/05-password-reset-links.md`,
-CHAU-5.1…5.4, 2026-08-16). Closes the "password-reset mail exposes only the raw
+Host auth upstream, phase 5 (2026-08-16). Closes the "password-reset mail exposes only the raw
 token" flag. **No schema change.**
 
 - **`Config.PasswordResetURL`** (env tag `AUTH_PASSWORD_RESET_URL`) — the absolute
@@ -11449,8 +11311,7 @@ token" flag. **No schema change.**
 
 ### features/authentication — v0.3.0 (2026-08-16): registration-verification resend (minor; additive)
 
-coordination-hub auth upstream, phase 2 (`.claude/plans/coordination-hub-auth-upstream/02-verification-resend.md`,
-CHAU-2.1…2.4, 2026-08-16). Closes the "no verification resend" flag. **No schema
+Host auth upstream, phase 2 (2026-08-16). Closes the "no verification resend" flag. **No schema
 change**; the primitives (`deliveryQueue.Replace`, `enqueueRenderedReplace`,
 `verify_registration` challenges) already existed — what was missing was a
 service method, an off-request-path worker initializer, routes, budgets, and any
@@ -11486,8 +11347,7 @@ the newest code verifies. Document that in your UI copy.
 
 ### features/authentication v0.3.0 + both store modules v0.2.0 (2026-08-16): account lifecycle and the operator directory (minor; store migration REQUIRED)
 
-coordination-hub auth upstream, phase 1 (`.claude/plans/coordination-hub-auth-upstream/01-user-directory-and-lifecycle.md`,
-CHAU-1.1…1.7, 2026-08-16). Closes two flags at once — "no administrative user
+Host auth upstream, phase 1 (2026-08-16). Closes two flags at once — "no administrative user
 listing" and "no account status/deactivation" — as one capability, because a
 directory you cannot act from and a deactivation you cannot see are each half a
 feature.
@@ -11562,7 +11422,7 @@ confirming `users.id` reports collation `C`.
 
 ### sdk v0.4.0 + pgxdb v0.4.0 + turso v0.3.0 + features/authentication v0.3.0 (+ its stores v0.2.0) — 2026-08-16: LIST SEARCH restored (minor)
 
-Plan of record `.claude/plans/crud.md` (crud-search-upstream, T1–T4, 2026-08-16;
+Reference (crud-search-upstream, T1–T4, 2026-08-16;
 stacked onto this release train by owner direction). This is a **regression fix**,
 not a feature request: v1 generated a `@search:` annotation, a `SearchTerm` filter
 field, a store-side predicate, and a transport key, and the de-generation dropped
@@ -11627,8 +11487,7 @@ milestone — that alias is deliberately not in `crud.ListParams`.
 
 ### sdk — v0.4.0 (2026-08-16): canonical runtime posture + capability-owned transport checks (minor)
 
-coordination-hub auth upstream, phase 3 (`.claude/plans/coordination-hub-auth-upstream/03-runtime-posture-foundation.md`,
-CHAU-3.1…3.4, 2026-08-16). The upstream flag: coordination-hub's **generic**
+Host auth upstream, phase 3 (2026-08-16). The upstream flag: a host's **generic**
 `internal/integrations/mailer` imported `features/authentication` for nothing but
 the runtime-mode vocabulary and the insecure-transport error. That is a layering
 inversion — an app-wide mailer should not depend on an auth feature to name its
@@ -11666,7 +11525,7 @@ it into its own patch — this minor covers both.
 
 ### features/authentication — v0.3.0 (2026-08-16): RuntimeMode is now an alias of environment.Mode (minor; SOURCE-COMPATIBLE)
 
-The feature half of phase 3 (CHAU-3.3). **No host code change is required**, and
+The feature half of phase 3. **No host code change is required**, and
 none is expected to break:
 
 - `RuntimeMode` is a **type alias** of `environment.Mode`, and
@@ -11696,15 +11555,14 @@ none is expected to break:
   removed as orphaned by this change; both were unexported and had no other
   caller.
 
-Downstream action for coordination-hub: delete the `features/authentication`
+Downstream action for the host: delete the `features/authentication`
 import from the generic `internal/integrations/mailer` / notifymail packages and
 name `environment.Mode` + `email.CheckSender` instead. The auth composition may
 keep importing the feature — it needs `auth.Config` regardless.
 
 ### sdk/capabilities/email — sdk v0.4.0 (2026-08-16): bundled transactional layout renders Brand.LogoURL (RENDERED-OUTPUT change; rode the minor)
 
-coordination-hub auth upstream, phase 4 (`.claude/plans/coordination-hub-auth-upstream/04-email-layout-branding.md`,
-CHAU-4.1…4.3, 2026-08-16). The upstream flag read "sdk layouts ignore
+Host auth upstream, phase 4 (2026-08-16). The upstream flag read "sdk layouts ignore
 `Brand.LogoURL`"; the audit found it true of exactly one bundled layout.
 `marketing.html` already rendered the logo and `minimal.html` is deliberately
 unbranded, but `transactional.html` — the layout **every** authentication
@@ -11728,7 +11586,7 @@ no image and no error.
 **No exported symbol changed**, so this floors at a **patch**. It is, however, a
 **rendered-output change**: HTML differs *only* when `Branding.LogoURL` is
 non-empty, and only for hosts on the bundled transactional layout. A host that
-overrides the layout at `email.LayerApp` (coordination-hub does) sees **no
+overrides the layout at `email.LayerApp` (one host does) sees **no
 change** — the override wins wholesale and owns its own logo markup. The
 plain-text alternatives are untouched and remain image-free. Do not split this
 into its own tag if the phase-3 runtime-posture work rides the same commit; that
@@ -12591,7 +12449,7 @@ password-only, and an un-normalized duplicate-collision pair.
   (`UNIQUE constraint failed: user_identifiers.kind, normalized_value`) with
   **0 rows** written. **PASS (expected failure observed).**
 
-**Do not apply this runbook to segovia or another real host in this milestone.**
+**Do not apply this runbook to a real host in this milestone.**
 
 ## Auth delivery-runtime upgrade runbook (bespoke auth outbox → generic jobs / in_process)
 
@@ -12831,8 +12689,6 @@ The working implementation adds opt-in OAuth authorization, restricted MCP-to-AP
 exchange and independently revocable delegated sessions. Coordinate core
 `pockets/authentication` v0.13.0 with pgx v0.7.0 or Turso v0.6.0 and optional
 Goth views v0.5.0. Firestore v0.2.0 is a first-party compatibility release.
-Publication status and exact archive verification belong in
-[the release record](plans/authentication-mcp-oauth-release.md).
 Firestore compatibility does not imply
 support for the OAuth storage capability.
 
@@ -12858,7 +12714,7 @@ checks and no-fallback resolution remain unchanged. Combined audience options
 must both match. This is an independently adoptable host-configuration patch:
 only `pockets/authentication` is tagged; current SQL/view/Firestore versions and
 all dependency pins remain unchanged. No migration or production rollout occurs
-as part of this release. See [the release record](plans/authentication-delegated-audience-release.md).
+as part of this release.
 
 ## Authentication login page password posture
 
@@ -12869,4 +12725,3 @@ passwordless choices remain available. Upgrading the core with older views is
 compatible; adopting the corrected bundled renderer selects its required core.
 These are presentation bugfix patches with no route-security, schema, store or
 mandatory configuration changes. Custom renderers should honor the new field.
-See [the fix and release record](plans/authentication-login-password-posture.md).

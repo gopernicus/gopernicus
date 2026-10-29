@@ -63,7 +63,7 @@ type collatedColumn struct {
 // deliberately excluded: equality parity already holds under any deterministic
 // collation, and collating display text would change user-facing sort (Risk 7).
 //
-// users.id JOINED the inventory in CHAU-1.2: the operator directory
+// users.id JOINED the inventory with migration 0014: the operator directory
 // (user.AdminRepository.List) pages users by (created_at DESC, id DESC), and the
 // storetest UserDirectory/OrderingAndCursorParity collision case pins that
 // tiebreak. Its pin is an ALTER in migration 0014 rather than a CREATE TABLE
@@ -73,7 +73,7 @@ var contractualCollatedColumns = []collatedColumn{
 	{"api_keys", "id", "keyset PK tiebreak; collision suite pins byte order"},
 	{"security_events", "id", "keyset PK tiebreak; collision suite pins byte order"},
 	{"invitations", "id", "keyset PK tiebreak; collision suite pins byte order"},
-	{"users", "id", "operator-directory keyset PK tiebreak (CHAU-1.2); pinned by ALTER in 0014"},
+	{"users", "id", "operator-directory keyset PK tiebreak; pinned by ALTER in 0014"},
 }
 
 // Database backstops by entity class (plan D3). Go mints every id; the column

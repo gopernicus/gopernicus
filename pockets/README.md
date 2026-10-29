@@ -132,9 +132,7 @@ explicit; named input records can group related required ports. The
 owner's constructor audit (2026-09-11) replaces FS6's former blanket prohibition
 on functional options. Document defaults, nil arguments and ordering; validate
 the resolved configuration before returning a usable component. Options are
-construction inputs, not setters on running services. See
-[pocket-constructor-options.md](../plans/pocket-constructor-options.md) for the
-owner-approved follow-up. Use `New` / `NewX` for functions and **constructor**
+construction inputs, not setters on running services. Use `New` / `NewX` for functions and **constructor**
 for the noun and dedicated filenames (`constructor.go`). Short constructors may
 stay in their service files; no file split is required just for naming uniformity.
 
@@ -142,8 +140,8 @@ Route tables are direct `Handle` calls through the
 `RouteRegistrar` seam (`r.Handle("POST", "/auth/login", h.login)`) — the
 stringly form is deliberate signposting that a pocket registers as a
 guest through a one-method port, where an app-local domain uses the
-concrete `web.WebHandler`'s verb helpers it owns (ruled 2026-07-08,
-segovia-lessons phase 02: a `pocket.Methods` verb-sugar wrapper was
+concrete `web.WebHandler`'s verb helpers it owns (ruled 2026-07-08:
+a `pocket.Methods` verb-sugar wrapper was
 built, live-proven, and DECLINED same day as cosmetics-only sdk surface —
 resurrect trigger: real host-developer demand). [FS7's `[]pocket.Route`
 data form SUPERSEDED 2026-07-08: shipped at feature-standard with zero
@@ -194,8 +192,7 @@ packages. Test support and memory remain covered by the core dependency rules.
   admission policy; otherwise the pocket keeps one named local helper
   with a comment citing the failed admission test — never a silent fork of
   an existing sdk responder.
-- **Multi-datastore out of the box** (ratified 2026-07-02, DP1 —
-  `.claude/plans/roadmap/datastore-portability.md` §2). The supported
+- **Multi-datastore out of the box** (ratified 2026-07-02, DP1). The supported
   store-implementation set is **{turso, pgx}** — a named, amendable list
   (store modules are named for the driver package they're built on, R-KV3;
   the underlying SQL dialects remain SQLite and PostgreSQL). Every pocket ships
@@ -279,7 +276,7 @@ contract:
    pocket's root route) so a host doesn't have to. `""` or `"/"` as `Prefix`
    is a deliberate no-op. Unit-tested in `pockets/routes_test.go`.
 3. **Per-route override — wrap the registrar** (the route-level face of
-   extension tier 4; segovia-lessons phase 02, 2026-07-08). `Mount.Router`
+   extension tier 4; 2026-07-08). `Mount.Router`
    is a one-method interface precisely so a host can interpose on
    registrations in code it cannot edit: deny a route, swap its handler,
    re-path it, or add middleware to exactly one. ~8 lines of host code, no
@@ -524,7 +521,7 @@ cite by item number:
     `OrderFields`/`DefaultOrder`, and its stores and handlers pass it to
     `req.NormalizedLimit` / `list.Params.Limits`; the zero value keeps
     `list`'s `DefaultLimit`/`MaxLimit`.
-14. Entity-ID strategy (segovia-lessons phase 04, amended D9/D10): the
+14. Entity-ID strategy (amended D9/D10): the
     pocket `Config` carries `IDs sdk.IDGenerator` and threads it to every
     ENTITY-KEY constructor. The zero value selects the class default at the
     layer that mints, through `ids.Or(sdk.UUIDv7())`: NanoID for identities

@@ -333,7 +333,7 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	if pw {
 		r.Handle("POST", "/auth/password/forgot", h.forgotPassword)
 	}
-	// The public registration-verification resend (CHAU-2.3) is an UNAUTHENTICATED
+	// The public registration-verification resend is an UNAUTHENTICATED
 	// credential-establishment endpoint, exactly like the passwordless starts: it
 	// carries the allowlisted-Origin gate but NOT the double-submit CSRF gate,
 	// because the population it serves — users who cannot log in because they never
@@ -449,7 +449,7 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	r.Handle("PATCH", "/auth/identifiers/{id}", h.patchIdentifier, auth.CredentialManagement, browserSafe)
 	r.Handle("DELETE", "/auth/identifiers/{id}", h.deleteIdentifier, auth.CredentialManagement, browserSafe)
 
-	// The administrative user surface (CHAU-1.6) is registered only when the host
+	// The administrative user surface is registered only when the host
 	// made an explicit authorization decision AND the capability is wired
 	// (deny-by-absence). Repository presence alone is NOT enough: a bundled store
 	// adapter returns the administration ports for every host, and turning them

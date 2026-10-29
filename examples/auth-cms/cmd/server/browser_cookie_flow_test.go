@@ -21,7 +21,7 @@ import (
 // U7 cross-module acceptance: the whole same-site cross-origin cookie flow through
 // EXPORTED host seams only. This host is a different module from the pocket, so
 // nothing here can reach an internal package — it composes exactly what
-// coordination-hub composes (web router + a globally installed CORS policy that opts
+// a host composes (web router + a globally installed CORS policy that opts
 // in the pocket's echo header + the authentication pocket mounted under /api/v1
 // with a matching RefreshCookiePath), and drives it over a real TLS server and a real
 // cookie jar. The test NEVER reads a cookie value to build a request; like the browser
@@ -50,7 +50,7 @@ const (
 	flowNewPassword = "newpassword456789"
 )
 
-// newBrowserFlowHost builds the coordination-hub-shaped composition and returns the
+// newBrowserFlowHost builds the host-shaped composition and returns the
 // running TLS server plus the built auth Service (for its exported cookie names).
 func newBrowserFlowHost(t *testing.T) (*httptest.Server, *auth.Components) {
 	t.Helper()

@@ -221,16 +221,16 @@ func TestConfigConnectionString_SplitFields(t *testing.T) {
 	cfg := Config{
 		Host:     "db.internal",
 		Port:     "5433",
-		User:     "gps360",
+		User:     "app",
 		Password: "secret",
-		Database: "gps360",
+		Database: "app",
 		SSLMode:  "disable",
 	}
 	got, err := cfg.connectionString()
 	if err != nil {
 		t.Fatalf("connectionString: %v", err)
 	}
-	want := "postgres://gps360:secret@db.internal:5433/gps360?sslmode=disable"
+	want := "postgres://app:secret@db.internal:5433/app?sslmode=disable"
 	if got != want {
 		t.Fatalf("connectionString() = %q, want %q", got, want)
 	}
@@ -252,12 +252,12 @@ func TestConfigRedacted(t *testing.T) {
 	cfg := Config{
 		Host:     "db.internal",
 		Port:     "5433",
-		User:     "gps360",
+		User:     "app",
 		Password: "secret",
-		Database: "gps360",
+		Database: "app",
 		SSLMode:  "disable",
 	}
-	want := "postgres://gps360:REDACTED@db.internal:5433/gps360?sslmode=disable"
+	want := "postgres://app:REDACTED@db.internal:5433/app?sslmode=disable"
 	if got := cfg.Redacted(); got != want {
 		t.Fatalf("Redacted() = %q, want %q", got, want)
 	}

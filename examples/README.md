@@ -9,8 +9,8 @@ pockets live under `pockets/`, so the charter sits where the things it governs
 sit; there is no `hosts/` directory and this page is not a description of how
 the examples directory is organized.
 
-**The reference host is [`gps-360-go`](https://github.com/jimkottmeyer/gps-360-go)**
-— a private production host built on this framework, whose layout the rules
+**The reference host is a private production host**
+— built on this framework, whose layout the rules
 below generalize from. Where this document and the reference disagree, the
 disagreement is a finding to be settled, not a style choice; the reference is
 the living evidence that the shape works.
@@ -28,10 +28,8 @@ second noun — says which:
 - a **host** is the application that mounts them.
 
 Both are pockets. The retired third-tier noun this framework used before
-2026-08-27 is never revived to name the local one — see
-[`plans/rename-features-to-pockets.md`](../plans/rename-features-to-pockets.md)
-for the rename, and the root `Makefile`'s G20 guard for the floor that keeps
-it retired.
+2026-08-27 is never revived to name the local one — the root `Makefile`'s G20 guard
+is the floor that keeps it retired.
 
 **A thin host has no local `pockets/` at all.** A host pocket exists only when
 the host WRITES code against a pocket's ports or rim. Mounting a framework
@@ -384,18 +382,18 @@ serialize data integrity and committed changes; they do not repeat permission
 checks. Ordinary route admission does not hold a snapshot through subsequent
 application work.
 
-> **Amendment 2026-08-27 (host-layout-contract, ruling 1 — the reference wins):** in the tree and prose below, the transport-plumbing package is `middleware/` (gps-360-go's charter forbids a package named `http`) and `wire/` — the API's HTTP+JSON conventions, one flat package — is a sanctioned sibling. Those two names are the only edits to the 2026-07-08 text.
+> **Amendment 2026-08-27 (host-layout-contract, ruling 1 — the reference wins):** in the tree and prose below, the transport-plumbing package is `middleware/` (the reference host's charter forbids a package named `http`) and `wire/` — the API's HTTP+JSON conventions, one flat package — is a sanctioned sibling. Those two names are the only edits to the 2026-07-08 text.
 
 
 This section was RATIFIED 2026-07-08 in `ARCHITECTURE.md` and moved here
 verbatim on 2026-08-27, when the host contract got its own home. Dates and
 ratification lines are the original ones.
 
-Adopted from Segovia v2 (segovia-lessons flag #1, 2026-07-08) — the host
+Adopted from a reference host (2026-07-08) — the host
 app built in tandem with this framework and the living reference
 implementation. The future `gopernicus new domain` scaffold (workshop-v2)
 should emit this shape; until that scaffold exists, adoption is by hand:
-read this section, apply it, use Segovia v2 as the worked example.
+read this section, apply it, use the reference host as the worked example.
 
 ```
 internal/inbound/
@@ -441,7 +439,7 @@ internal/inbound/
   (`templates/`), never mere file count; a domain wanting its own package
   tree is two domains. The same axis mirrors in `logic/domains/<domain>/`
   and `templates/{resource}.templ`.
-- **The maximal flatten** (a gopernicus-side clarification of the Segovia
+- **The maximal flatten** (a gopernicus-side clarification of the host
   text): a single-resource, single-transport domain with a small handler
   set may keep its handlers in `routes.go` itself —
   `pockets/events/inbound/http/adapter.go` is the blessed
@@ -618,7 +616,7 @@ guesses. A client binary may own its commands, its API client, its wire types
 (the client's own request/response structs — the server's HTTP+JSON
 conventions stay in `internal/inbound/wire`), and the interfaces its command
 packages declare over that client — the reference's
-`cmd/gps360/{cli,client,exit,read,write}`, whose command packages declare
+`cmd/<binary>/{cli,client,exit,read,write}`, whose command packages declare
 narrow ports over the client exactly as consumers are taught to above. It
 still contains no SQL statement literal. Every other `cmd/<binary>/` is a
 composition root and keeps the no-interface clause. `cmd/<binary>/views/` (the single-binary theme override of §4)
@@ -797,7 +795,7 @@ the disagreement is recorded here until one side moves:
 
 - **`ui/`** (`ui/{spa,ts}`) — settled by sanction: the host's `ui/` is a
   contract root (H0, H14).
-- **`manual/`, `harness/`** — stdlib-only leaves shared by `cmd/gps360` and
+- **`manual/`, `harness/`** — stdlib-only leaves shared by `cmd/<binary>` and
   `cmd/mcp`. Not sanctioned as roots: under this contract a stdlib-only leaf
   two binaries share is the host's `sdk/` root's job (`sdk/manual`,
   `sdk/harness`). H0 finding.

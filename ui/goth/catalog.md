@@ -12,7 +12,7 @@ classifications; at GOTH-0.1 it froze the exact 64 catalog IDs, and GOTH-0.3 add
 frozen API-family column mapping every entry to the grammar in [`README.md`](README.md).
 All six phases (P01–P64) are now `accepted`.
 
-`plan.md` (`.claude/plans/ui-goth/plan.md`) is the authority for scope, parity
+The milestone plan is the authority for scope, parity
 definition, per-entry acceptance emphasis, and verification. This table adds no
 entry silently: updating Shadcn later opens a separately reviewed parity task, it
 does not extend this milestone.

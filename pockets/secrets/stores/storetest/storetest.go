@@ -19,7 +19,7 @@ import (
 var base = time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 
 var (
-	gps    = vault.Owner{Type: "tenant", ID: "gps"}
+	globex = vault.Owner{Type: "tenant", ID: "globex"}
 	acme   = vault.Owner{Type: "tenant", ID: "acme"}
 	system = vault.Source{System: "storetest"}
 )
@@ -81,62 +81,62 @@ func allAudit(t *testing.T, repo vault.Repository, filter vault.AuditFilter) []v
 
 func testOwnerKeyLifecycle(t *testing.T, repo vault.Repository) {
 	ctx := context.Background()
-	if _, err := repo.GetOwnerKey(ctx, gps); !errors.Is(err, sdk.ErrNotFound) {
+	if _, err := repo.GetOwnerKey(ctx, globex); !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("absent key: want ErrNotFound, got %v", err)
 	}
-	k1 := key(gps, "k1")
-	if err := repo.CreateOwnerKey(ctx, k1, []vault.AuditRecord{record(t, base, vault.ActionOwnerKeyCreated, gps, "")}); err != nil {
+	k1 := key(globex, "k1")
+	if err := repo.CreateOwnerKey(ctx, k1, []vault.AuditRecord{record(t, base, vault.ActionOwnerKeyCreated, globex, "")}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CreateOwnerKey(ctx, key(gps, "k9"), []vault.AuditRecord{record(t, base, vault.ActionOwnerKeyCreated, gps, "")}); !errors.Is(err, sdk.ErrAlreadyExists) {
+	if err := repo.CreateOwnerKey(ctx, key(globex, "k9"), []vault.AuditRecord{record(t, base, vault.ActionOwnerKeyCreated, globex, "")}); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Fatalf("second key: want ErrAlreadyExists, got %v", err)
 	}
-	got, err := repo.GetOwnerKey(ctx, gps)
+	got, err := repo.GetOwnerKey(ctx, globex)
 	if err != nil || got != k1 {
 		t.Fatalf("get: %+v %v", got, err)
 	}
-	k2 := key(gps, "k2")
+	k2 := key(globex, "k2")
 	k2.RotatedAt = base.Add(time.Hour)
-	if err := repo.ReplaceOwnerKey(ctx, k2, "wrong", nil, []vault.AuditRecord{record(t, base, vault.ActionOwnerKeyRewrapped, gps, "")}); !errors.Is(err, sdk.ErrConflict) {
+	if err := repo.ReplaceOwnerKey(ctx, k2, "wrong", nil, []vault.AuditRecord{record(t, base, vault.ActionOwnerKeyRewrapped, globex, "")}); !errors.Is(err, sdk.ErrConflict) {
 		t.Fatalf("stale expectation: want ErrConflict, got %v", err)
 	}
 	if err := repo.ReplaceOwnerKey(ctx, key(acme, "a1"), "a0", nil, []vault.AuditRecord{record(t, base, vault.ActionOwnerKeyRewrapped, acme, "")}); !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("replace absent: want ErrNotFound, got %v", err)
 	}
-	if err := repo.ReplaceOwnerKey(ctx, k2, "k1", nil, []vault.AuditRecord{record(t, base, vault.ActionOwnerKeyRotated, gps, "")}); err != nil {
+	if err := repo.ReplaceOwnerKey(ctx, k2, "k1", nil, []vault.AuditRecord{record(t, base, vault.ActionOwnerKeyRotated, globex, "")}); err != nil {
 		t.Fatal(err)
 	}
-	if got, err = repo.GetOwnerKey(ctx, gps); err != nil || got != k2 {
+	if got, err = repo.GetOwnerKey(ctx, globex); err != nil || got != k2 {
 		t.Fatalf("after replace: %+v %v", got, err)
 	}
-	if n := len(allAudit(t, repo, vault.AuditFilter{Owner: &gps})); n != 2 {
+	if n := len(allAudit(t, repo, vault.AuditFilter{Owner: &globex})); n != 2 {
 		t.Fatalf("want 2 audit records (created, rotated), got %d", n)
 	}
 }
 
 func testReplaceReseals(t *testing.T, repo vault.Repository) {
 	ctx := context.Background()
-	if err := repo.CreateOwnerKey(ctx, key(gps, "k1"), nil); err != nil {
+	if err := repo.CreateOwnerKey(ctx, key(globex, "k1"), nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"a", "b"} {
-		if _, err := repo.PutSecret(ctx, sealed(gps, name, "k1", "ct-"+name, base), record(t, base, vault.ActionSecretPut, gps, name)); err != nil {
+		if _, err := repo.PutSecret(ctx, sealed(globex, name, "k1", "ct-"+name, base), record(t, base, vault.ActionSecretPut, globex, name)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	later := base.Add(time.Minute)
-	resealed := []vault.SealedSecret{sealed(gps, "a", "k2", "ct2-a", later), sealed(gps, "b", "k2", "ct2-b", later)}
-	ghost := append(resealed, sealed(gps, "zz", "k2", "ct2-zz", later))
-	if err := repo.ReplaceOwnerKey(ctx, key(gps, "k2"), "k1", ghost, nil); !errors.Is(err, sdk.ErrNotFound) {
+	resealed := []vault.SealedSecret{sealed(globex, "a", "k2", "ct2-a", later), sealed(globex, "b", "k2", "ct2-b", later)}
+	ghost := append(resealed, sealed(globex, "zz", "k2", "ct2-zz", later))
+	if err := repo.ReplaceOwnerKey(ctx, key(globex, "k2"), "k1", ghost, nil); !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("resealing an absent secret: want ErrNotFound, got %v", err)
 	}
-	if got, _ := repo.GetOwnerKey(ctx, gps); got.KeyID != "k1" {
+	if got, _ := repo.GetOwnerKey(ctx, globex); got.KeyID != "k1" {
 		t.Fatalf("failed replace must change nothing, key is %q", got.KeyID)
 	}
-	if err := repo.ReplaceOwnerKey(ctx, key(gps, "k2"), "k1", resealed, nil); err != nil {
+	if err := repo.ReplaceOwnerKey(ctx, key(globex, "k2"), "k1", resealed, nil); err != nil {
 		t.Fatal(err)
 	}
-	got, err := repo.ListSealedSecrets(ctx, gps)
+	got, err := repo.ListSealedSecrets(ctx, globex)
 	if err != nil || len(got) != 2 {
 		t.Fatalf("list sealed: %+v %v", got, err)
 	}
@@ -187,24 +187,24 @@ func testListOwnerKeys(t *testing.T, repo vault.Repository) {
 
 func testSecretVersions(t *testing.T, repo vault.Repository) {
 	ctx := context.Background()
-	if err := repo.CreateOwnerKey(ctx, key(gps, "k1"), nil); err != nil {
+	if err := repo.CreateOwnerKey(ctx, key(globex, "k1"), nil); err != nil {
 		t.Fatal(err)
 	}
-	ref := vault.Ref{Owner: gps, Name: "cloudflare.api_token"}
-	first, err := repo.PutSecret(ctx, sealed(gps, ref.Name, "k1", "ct1", base), record(t, base, vault.ActionSecretPut, gps, ref.Name))
+	ref := vault.Ref{Owner: globex, Name: "cloudflare.api_token"}
+	first, err := repo.PutSecret(ctx, sealed(globex, ref.Name, "k1", "ct1", base), record(t, base, vault.ActionSecretPut, globex, ref.Name))
 	if err != nil || first.Version != 1 || first.Ciphertext != "ct1" || !first.CreatedAt.Equal(base) {
 		t.Fatalf("first put: %+v %v", first, err)
 	}
 	later := base.Add(time.Minute)
-	second, err := repo.PutSecret(ctx, sealed(gps, ref.Name, "k1", "ct2", later), record(t, later, vault.ActionSecretPut, gps, ref.Name))
+	second, err := repo.PutSecret(ctx, sealed(globex, ref.Name, "k1", "ct2", later), record(t, later, vault.ActionSecretPut, globex, ref.Name))
 	if err != nil || second.Version != 2 || second.Ciphertext != "ct2" || !second.CreatedAt.Equal(base) || !second.UpdatedAt.Equal(later) {
 		t.Fatalf("second put: %+v %v", second, err)
 	}
-	got, err := repo.GetSecret(ctx, ref, []vault.AuditRecord{record(t, later, vault.ActionSecretRead, gps, ref.Name)})
+	got, err := repo.GetSecret(ctx, ref, []vault.AuditRecord{record(t, later, vault.ActionSecretRead, globex, ref.Name)})
 	if err != nil || got != second {
 		t.Fatalf("get: %+v %v", got, err)
 	}
-	meta, err := repo.ListSecrets(ctx, gps)
+	meta, err := repo.ListSecrets(ctx, globex)
 	if err != nil || len(meta) != 1 || meta[0].Version != 2 || meta[0].KeyID != "k1" || meta[0].Ref != ref {
 		t.Fatalf("list: %+v %v", meta, err)
 	}
@@ -219,7 +219,7 @@ func testSecretVersions(t *testing.T, repo vault.Repository) {
 
 func testSecretNeedsOwnerKey(t *testing.T, repo vault.Repository) {
 	ctx := context.Background()
-	_, err := repo.PutSecret(ctx, sealed(gps, "x", "k1", "ct", base), record(t, base, vault.ActionSecretPut, gps, "x"))
+	_, err := repo.PutSecret(ctx, sealed(globex, "x", "k1", "ct", base), record(t, base, vault.ActionSecretPut, globex, "x"))
 	if !errors.Is(err, sdk.ErrInvalidReference) {
 		t.Fatalf("put without owner key: want ErrInvalidReference, got %v", err)
 	}
@@ -230,17 +230,17 @@ func testSecretNeedsOwnerKey(t *testing.T, repo vault.Repository) {
 
 func testGetMissing(t *testing.T, repo vault.Repository) {
 	ctx := context.Background()
-	if err := repo.CreateOwnerKey(ctx, key(gps, "k1"), nil); err != nil {
+	if err := repo.CreateOwnerKey(ctx, key(globex, "k1"), nil); err != nil {
 		t.Fatal(err)
 	}
-	ref := vault.Ref{Owner: gps, Name: "missing"}
-	if _, err := repo.GetSecret(ctx, ref, []vault.AuditRecord{record(t, base, vault.ActionSecretRead, gps, ref.Name)}); !errors.Is(err, sdk.ErrNotFound) {
+	ref := vault.Ref{Owner: globex, Name: "missing"}
+	if _, err := repo.GetSecret(ctx, ref, []vault.AuditRecord{record(t, base, vault.ActionSecretRead, globex, ref.Name)}); !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 	if n := len(allAudit(t, repo, vault.AuditFilter{})); n != 0 {
 		t.Fatalf("missing read recorded %d audit rows", n)
 	}
-	if err := repo.DeleteSecret(ctx, ref, []vault.AuditRecord{record(t, base, vault.ActionSecretDeleted, gps, ref.Name)}); !errors.Is(err, sdk.ErrNotFound) {
+	if err := repo.DeleteSecret(ctx, ref, []vault.AuditRecord{record(t, base, vault.ActionSecretDeleted, globex, ref.Name)}); !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("delete missing: want ErrNotFound, got %v", err)
 	}
 	if err := repo.DeleteOwner(ctx, acme, nil, []vault.AuditRecord{record(t, base, vault.ActionOwnerKeyDestroyed, acme, "")}); !errors.Is(err, sdk.ErrNotFound) {
@@ -250,7 +250,7 @@ func testGetMissing(t *testing.T, repo vault.Repository) {
 
 func testDelete(t *testing.T, repo vault.Repository) {
 	ctx := context.Background()
-	for _, o := range []vault.Owner{gps, acme} {
+	for _, o := range []vault.Owner{globex, acme} {
 		if err := repo.CreateOwnerKey(ctx, key(o, "k1"), nil); err != nil {
 			t.Fatal(err)
 		}
@@ -260,29 +260,29 @@ func testDelete(t *testing.T, repo vault.Repository) {
 			}
 		}
 	}
-	if err := repo.DeleteSecret(ctx, vault.Ref{Owner: gps, Name: "a"}, []vault.AuditRecord{record(t, base, vault.ActionSecretDeleted, gps, "a")}); err != nil {
+	if err := repo.DeleteSecret(ctx, vault.Ref{Owner: globex, Name: "a"}, []vault.AuditRecord{record(t, base, vault.ActionSecretDeleted, globex, "a")}); err != nil {
 		t.Fatal(err)
 	}
-	if left, _ := repo.ListSecrets(ctx, gps); len(left) != 1 || left[0].Ref.Name != "b" {
+	if left, _ := repo.ListSecrets(ctx, globex); len(left) != 1 || left[0].Ref.Name != "b" {
 		t.Fatalf("after delete: %+v", left)
 	}
-	if got := allAudit(t, repo, vault.AuditFilter{Owner: &gps, Action: vault.ActionSecretDeleted}); len(got) != 1 || got[0].Version != 1 || got[0].KeyID != "k1" {
+	if got := allAudit(t, repo, vault.AuditFilter{Owner: &globex, Action: vault.ActionSecretDeleted}); len(got) != 1 || got[0].Version != 1 || got[0].KeyID != "k1" {
 		t.Fatalf("delete must record the version and key it removed: %+v", got)
 	}
-	if err := repo.DeleteOwner(ctx, gps, []string{"b"}, []vault.AuditRecord{record(t, base, vault.ActionSecretDeleted, gps, "b"), record(t, base, vault.ActionOwnerKeyDestroyed, gps, "")}); err != nil {
+	if err := repo.DeleteOwner(ctx, globex, []string{"b"}, []vault.AuditRecord{record(t, base, vault.ActionSecretDeleted, globex, "b"), record(t, base, vault.ActionOwnerKeyDestroyed, globex, "")}); err != nil {
 		t.Fatal(err)
 	}
-	if left, _ := repo.ListSecrets(ctx, gps); len(left) != 0 {
+	if left, _ := repo.ListSecrets(ctx, globex); len(left) != 0 {
 		t.Fatalf("owner secrets survive: %+v", left)
 	}
-	if _, err := repo.GetOwnerKey(ctx, gps); !errors.Is(err, sdk.ErrNotFound) {
+	if _, err := repo.GetOwnerKey(ctx, globex); !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("owner key survives: %v", err)
 	}
 	if left, _ := repo.ListSecrets(ctx, acme); len(left) != 2 {
 		t.Fatalf("other owner touched: %+v", left)
 	}
-	if n := len(allAudit(t, repo, vault.AuditFilter{Owner: &gps})); n != 5 {
-		t.Fatalf("gps audit: want 2 puts + 2 deletes + destroyed = 5, got %d", n)
+	if n := len(allAudit(t, repo, vault.AuditFilter{Owner: &globex})); n != 5 {
+		t.Fatalf("globex audit: want 2 puts + 2 deletes + destroyed = 5, got %d", n)
 	}
 }
 
@@ -290,37 +290,37 @@ func testDelete(t *testing.T, repo vault.Repository) {
 // checks that the change it was to accompany did not happen.
 func testAuditAtomic(t *testing.T, repo vault.Repository) {
 	ctx := context.Background()
-	created := record(t, base, vault.ActionOwnerKeyCreated, gps, "")
-	if err := repo.CreateOwnerKey(ctx, key(gps, "k1"), []vault.AuditRecord{created}); err != nil {
+	created := record(t, base, vault.ActionOwnerKeyCreated, globex, "")
+	if err := repo.CreateOwnerKey(ctx, key(globex, "k1"), []vault.AuditRecord{created}); err != nil {
 		t.Fatal(err)
 	}
 	dup := created
 	dup.Action = vault.ActionSecretPut
-	if _, err := repo.PutSecret(ctx, sealed(gps, "a", "k1", "ct", base), dup); err == nil {
+	if _, err := repo.PutSecret(ctx, sealed(globex, "a", "k1", "ct", base), dup); err == nil {
 		t.Fatal("duplicate audit id accepted")
 	}
-	if left, _ := repo.ListSecrets(ctx, gps); len(left) != 0 {
+	if left, _ := repo.ListSecrets(ctx, globex); len(left) != 0 {
 		t.Fatalf("secret written although its audit failed: %+v", left)
 	}
-	if err := repo.ReplaceOwnerKey(ctx, key(gps, "k2"), "k1", nil, []vault.AuditRecord{dup}); err == nil {
+	if err := repo.ReplaceOwnerKey(ctx, key(globex, "k2"), "k1", nil, []vault.AuditRecord{dup}); err == nil {
 		t.Fatal("duplicate audit id accepted on replace")
 	}
-	if got, _ := repo.GetOwnerKey(ctx, gps); got.KeyID != "k1" {
+	if got, _ := repo.GetOwnerKey(ctx, globex); got.KeyID != "k1" {
 		t.Fatalf("key replaced although its audit failed: %q", got.KeyID)
 	}
-	if _, err := repo.PutSecret(ctx, sealed(gps, "a", "k1", "ct", base), record(t, base, vault.ActionSecretPut, gps, "a")); err != nil {
+	if _, err := repo.PutSecret(ctx, sealed(globex, "a", "k1", "ct", base), record(t, base, vault.ActionSecretPut, globex, "a")); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.DeleteSecret(ctx, vault.Ref{Owner: gps, Name: "a"}, []vault.AuditRecord{dup}); err == nil {
+	if err := repo.DeleteSecret(ctx, vault.Ref{Owner: globex, Name: "a"}, []vault.AuditRecord{dup}); err == nil {
 		t.Fatal("duplicate audit id accepted on delete")
 	}
-	if left, _ := repo.ListSecrets(ctx, gps); len(left) != 1 {
+	if left, _ := repo.ListSecrets(ctx, globex); len(left) != 1 {
 		t.Fatalf("secret deleted although its audit failed: %+v", left)
 	}
-	if err := repo.DeleteOwner(ctx, gps, []string{"a"}, []vault.AuditRecord{dup}); err == nil {
+	if err := repo.DeleteOwner(ctx, globex, []string{"a"}, []vault.AuditRecord{dup}); err == nil {
 		t.Fatal("duplicate audit id accepted on delete owner")
 	}
-	if _, err := repo.GetOwnerKey(ctx, gps); err != nil {
+	if _, err := repo.GetOwnerKey(ctx, globex); err != nil {
 		t.Fatalf("owner destroyed although its audit failed: %v", err)
 	}
 	if n := len(allAudit(t, repo, vault.AuditFilter{})); n != 2 {
@@ -330,7 +330,7 @@ func testAuditAtomic(t *testing.T, repo vault.Repository) {
 
 func testAuditListing(t *testing.T, repo vault.Repository) {
 	ctx := context.Background()
-	if err := repo.CreateOwnerKey(ctx, key(gps, "k1"), nil); err != nil {
+	if err := repo.CreateOwnerKey(ctx, key(globex, "k1"), nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.CreateOwnerKey(ctx, key(acme, "k1"), nil); err != nil {
@@ -340,7 +340,7 @@ func testAuditListing(t *testing.T, repo vault.Repository) {
 	var want []string
 	// Written newest first to prove ordering is by time, not insertion.
 	for i := 6; i >= 0; i-- {
-		owner, src := gps, system
+		owner, src := globex, system
 		if i%2 == 1 {
 			owner, src = acme, user
 		}
@@ -391,13 +391,13 @@ func testTimes(t *testing.T, repo vault.Repository) {
 	ctx := context.Background()
 	zone := time.FixedZone("test", 3600)
 	odd := time.Date(2026, 10, 16, 13, 0, 0, 123456789, zone)
-	k := key(gps, "k1")
+	k := key(globex, "k1")
 	k.CreatedAt, k.RotatedAt = odd, odd
-	r := record(t, odd, vault.ActionOwnerKeyCreated, gps, "")
+	r := record(t, odd, vault.ActionOwnerKeyCreated, globex, "")
 	if err := repo.CreateOwnerKey(ctx, k, []vault.AuditRecord{r}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := repo.GetOwnerKey(ctx, gps)
+	got, err := repo.GetOwnerKey(ctx, globex)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +405,7 @@ func testTimes(t *testing.T, repo vault.Repository) {
 	if !got.CreatedAt.Equal(wantTime) || got.CreatedAt.Location() != time.UTC || got.RotatedAt.Location() != time.UTC {
 		t.Fatalf("owner key times: %v %v", got.CreatedAt, got.RotatedAt)
 	}
-	sec, err := repo.PutSecret(ctx, sealed(gps, "a", "k1", "ct", odd), record(t, odd, vault.ActionSecretPut, gps, "a"))
+	sec, err := repo.PutSecret(ctx, sealed(globex, "a", "k1", "ct", odd), record(t, odd, vault.ActionSecretPut, globex, "a"))
 	if err != nil || !sec.CreatedAt.Equal(wantTime) || sec.CreatedAt.Location() != time.UTC || sec.UpdatedAt.Location() != time.UTC {
 		t.Fatalf("secret times: %+v %v", sec, err)
 	}
@@ -422,7 +422,7 @@ func testAppendAuditAtomic(t *testing.T, repo vault.Repository) {
 	if err := repo.AppendAudit(ctx, nil); err != nil {
 		t.Fatalf("empty batch: %v", err)
 	}
-	good := record(t, base, vault.ActionSecretRead, gps, "a")
+	good := record(t, base, vault.ActionSecretRead, globex, "a")
 	for name, spoil := range map[string]func(r *vault.AuditRecord){
 		"no id":           func(r *vault.AuditRecord) { r.ID = "" },
 		"no action":       func(r *vault.AuditRecord) { r.Action = "" },
@@ -430,7 +430,7 @@ func testAppendAuditAtomic(t *testing.T, repo vault.Repository) {
 		"no outcome":      func(r *vault.AuditRecord) { r.Outcome = "" },
 		"unknown outcome": func(r *vault.AuditRecord) { r.Outcome = "refused" },
 	} {
-		bad := record(t, base, vault.ActionSecretRead, gps, "a")
+		bad := record(t, base, vault.ActionSecretRead, globex, "a")
 		spoil(&bad)
 		if err := repo.AppendAudit(ctx, []vault.AuditRecord{good, bad}); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("%s: want ErrInvalidInput, got %v", name, err)
@@ -442,11 +442,11 @@ func testAppendAuditAtomic(t *testing.T, repo vault.Repository) {
 	if err := repo.AppendAudit(ctx, []vault.AuditRecord{good, good}); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Fatalf("duplicate in batch: want ErrAlreadyExists, got %v", err)
 	}
-	second := record(t, base, vault.ActionSecretRead, gps, "b")
+	second := record(t, base, vault.ActionSecretRead, globex, "b")
 	if err := repo.AppendAudit(ctx, []vault.AuditRecord{good, second}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.AppendAudit(ctx, []vault.AuditRecord{record(t, base, vault.ActionSecretRead, gps, "c"), good}); !errors.Is(err, sdk.ErrAlreadyExists) {
+	if err := repo.AppendAudit(ctx, []vault.AuditRecord{record(t, base, vault.ActionSecretRead, globex, "c"), good}); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Fatalf("recorded id in batch: want ErrAlreadyExists, got %v", err)
 	}
 	if got := allAudit(t, repo, vault.AuditFilter{}); len(got) != 2 {
@@ -458,12 +458,12 @@ func testAppendAuditAtomic(t *testing.T, repo vault.Repository) {
 // filled in by GetSecret, the outcome as given, and the outcome filter.
 func testGetRecordsOutcomeAndVersion(t *testing.T, repo vault.Repository) {
 	ctx := context.Background()
-	if err := repo.CreateOwnerKey(ctx, key(gps, "k1"), nil); err != nil {
+	if err := repo.CreateOwnerKey(ctx, key(globex, "k1"), nil); err != nil {
 		t.Fatal(err)
 	}
-	ref := vault.Ref{Owner: gps, Name: "a"}
+	ref := vault.Ref{Owner: globex, Name: "a"}
 	for i := range 2 {
-		if _, err := repo.PutSecret(ctx, sealed(gps, ref.Name, "k1", "ct", base), record(t, base.Add(time.Duration(i)*time.Second), vault.ActionSecretPut, gps, ref.Name)); err != nil {
+		if _, err := repo.PutSecret(ctx, sealed(globex, ref.Name, "k1", "ct", base), record(t, base.Add(time.Duration(i)*time.Second), vault.ActionSecretPut, globex, ref.Name)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -473,12 +473,12 @@ func testGetRecordsOutcomeAndVersion(t *testing.T, repo vault.Repository) {
 	if n := len(allAudit(t, repo, vault.AuditFilter{Action: vault.ActionSecretRead})); n != 0 {
 		t.Fatalf("a read without records recorded %d rows", n)
 	}
-	read := record(t, base.Add(2*time.Second), vault.ActionSecretRead, gps, ref.Name)
+	read := record(t, base.Add(2*time.Second), vault.ActionSecretRead, globex, ref.Name)
 	got, err := repo.GetSecret(ctx, ref, []vault.AuditRecord{read})
 	if err != nil || got.Version != 2 {
 		t.Fatalf("get: %+v %v", got, err)
 	}
-	denied := record(t, base.Add(3*time.Second), vault.ActionSecretRead, gps, ref.Name)
+	denied := record(t, base.Add(3*time.Second), vault.ActionSecretRead, globex, ref.Name)
 	denied.Outcome, denied.Version, denied.KeyID = vault.OutcomeDenied, 2, "k1"
 	if err := repo.AppendAudit(ctx, []vault.AuditRecord{denied}); err != nil {
 		t.Fatal(err)
@@ -499,32 +499,32 @@ func testGetRecordsOutcomeAndVersion(t *testing.T, repo vault.Repository) {
 	}
 }
 
-// deleteOwnerFixture gives gps a key and the named secrets, and returns the
+// deleteOwnerFixture gives globex a key and the named secrets, and returns the
 // records a DeleteOwner of them would carry.
 func deleteOwnerFixture(t *testing.T, repo vault.Repository, names ...string) []vault.AuditRecord {
 	t.Helper()
 	ctx := context.Background()
-	if err := repo.CreateOwnerKey(ctx, key(gps, "k1"), nil); err != nil {
+	if err := repo.CreateOwnerKey(ctx, key(globex, "k1"), nil); err != nil {
 		t.Fatal(err)
 	}
 	var records []vault.AuditRecord
 	for _, name := range names {
-		if _, err := repo.PutSecret(ctx, sealed(gps, name, "k1", "ct", base), record(t, base, vault.ActionSecretPut, gps, name)); err != nil {
+		if _, err := repo.PutSecret(ctx, sealed(globex, name, "k1", "ct", base), record(t, base, vault.ActionSecretPut, globex, name)); err != nil {
 			t.Fatal(err)
 		}
-		records = append(records, record(t, base, vault.ActionSecretDeleted, gps, name))
+		records = append(records, record(t, base, vault.ActionSecretDeleted, globex, name))
 	}
-	return append(records, record(t, base, vault.ActionOwnerKeyDestroyed, gps, ""))
+	return append(records, record(t, base, vault.ActionOwnerKeyDestroyed, globex, ""))
 }
 
 // requireOwnerIntact checks a refused DeleteOwner removed and recorded nothing.
 func requireOwnerIntact(t *testing.T, repo vault.Repository, secrets int) {
 	t.Helper()
 	ctx := context.Background()
-	if left, _ := repo.ListSecrets(ctx, gps); len(left) != secrets {
+	if left, _ := repo.ListSecrets(ctx, globex); len(left) != secrets {
 		t.Fatalf("a conflicting delete removed secrets: %+v", left)
 	}
-	if _, err := repo.GetOwnerKey(ctx, gps); err != nil {
+	if _, err := repo.GetOwnerKey(ctx, globex); err != nil {
 		t.Fatalf("a conflicting delete removed the owner key: %v", err)
 	}
 	for _, action := range []vault.Action{vault.ActionSecretDeleted, vault.ActionOwnerKeyDestroyed} {
@@ -538,8 +538,8 @@ func requireOwnerIntact(t *testing.T, repo vault.Repository, secrets int) {
 // as when it was deleted after the caller listed it.
 func testDeleteOwnerConflictsOnShrink(t *testing.T, repo vault.Repository) {
 	records := deleteOwnerFixture(t, repo, "a", "b")
-	gone := record(t, base, vault.ActionSecretDeleted, gps, "c")
-	err := repo.DeleteOwner(context.Background(), gps, []string{"a", "b", "c"}, append(records, gone))
+	gone := record(t, base, vault.ActionSecretDeleted, globex, "c")
+	err := repo.DeleteOwner(context.Background(), globex, []string{"a", "b", "c"}, append(records, gone))
 	if !errors.Is(err, sdk.ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
@@ -550,7 +550,7 @@ func testDeleteOwnerConflictsOnShrink(t *testing.T, repo vault.Repository) {
 // when it was written after the caller listed.
 func testDeleteOwnerConflictsOnGrowth(t *testing.T, repo vault.Repository) {
 	records := deleteOwnerFixture(t, repo, "a", "b")
-	err := repo.DeleteOwner(context.Background(), gps, []string{"a"}, []vault.AuditRecord{records[0], records[2]})
+	err := repo.DeleteOwner(context.Background(), globex, []string{"a"}, []vault.AuditRecord{records[0], records[2]})
 	if !errors.Is(err, sdk.ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
@@ -562,19 +562,19 @@ func testDeleteOwnerConflictsOnGrowth(t *testing.T, repo vault.Repository) {
 func testDeleteOwnerRecordsReturnedVersion(t *testing.T, repo vault.Repository) {
 	ctx := context.Background()
 	records := deleteOwnerFixture(t, repo, "a", "b")
-	if _, err := repo.PutSecret(ctx, sealed(gps, "a", "k1", "ct", base), record(t, base, vault.ActionSecretPut, gps, "a")); err != nil {
+	if _, err := repo.PutSecret(ctx, sealed(globex, "a", "k1", "ct", base), record(t, base, vault.ActionSecretPut, globex, "a")); err != nil {
 		t.Fatal(err)
 	}
 	later := base.Add(time.Minute)
-	resealed := []vault.SealedSecret{sealed(gps, "a", "k2", "ct2-a", later), sealed(gps, "b", "k2", "ct2-b", later)}
-	if err := repo.ReplaceOwnerKey(ctx, key(gps, "k2"), "k1", resealed, nil); err != nil {
+	resealed := []vault.SealedSecret{sealed(globex, "a", "k2", "ct2-a", later), sealed(globex, "b", "k2", "ct2-b", later)}
+	if err := repo.ReplaceOwnerKey(ctx, key(globex, "k2"), "k1", resealed, nil); err != nil {
 		t.Fatal(err)
 	}
 	records[0].Version, records[0].KeyID = 1, "k1"
-	if err := repo.DeleteOwner(ctx, gps, []string{"b", "a"}, records); err != nil {
+	if err := repo.DeleteOwner(ctx, globex, []string{"b", "a"}, records); err != nil {
 		t.Fatal(err)
 	}
-	deleted := allAudit(t, repo, vault.AuditFilter{Owner: &gps, Action: vault.ActionSecretDeleted})
+	deleted := allAudit(t, repo, vault.AuditFilter{Owner: &globex, Action: vault.ActionSecretDeleted})
 	want := map[string]int{"a": 2, "b": 1}
 	if len(deleted) != 2 {
 		t.Fatalf("want two deletion records, got %+v", deleted)
@@ -584,7 +584,7 @@ func testDeleteOwnerRecordsReturnedVersion(t *testing.T, repo vault.Repository) 
 			t.Fatalf("deletion of %s recorded version %d key %q, want version %d key k2", r.Name, r.Version, r.KeyID, want[r.Name])
 		}
 	}
-	destroyed := allAudit(t, repo, vault.AuditFilter{Owner: &gps, Action: vault.ActionOwnerKeyDestroyed})
+	destroyed := allAudit(t, repo, vault.AuditFilter{Owner: &globex, Action: vault.ActionOwnerKeyDestroyed})
 	if len(destroyed) != 1 || destroyed[0].Version != 0 || destroyed[0].KeyID != "" {
 		t.Fatalf("the destruction record must be stored as given: %+v", destroyed)
 	}
@@ -595,14 +595,14 @@ func testDeleteOwnerRecordsReturnedVersion(t *testing.T, repo vault.Repository) 
 // job, so a 129-byte id reaching the store is kept whole.
 func testCorrelationRoundTrip(t *testing.T, repo vault.Repository) {
 	ctx := context.Background()
-	created := record(t, base, vault.ActionOwnerKeyCreated, gps, "")
+	created := record(t, base, vault.ActionOwnerKeyCreated, globex, "")
 	created.RequestID, created.TraceID = "req-01J9ZK3Q7M8N", "4bf92f3577b34da6a3ce929d0e0e4736"
-	if err := repo.CreateOwnerKey(ctx, key(gps, "k1"), []vault.AuditRecord{created}); err != nil {
+	if err := repo.CreateOwnerKey(ctx, key(globex, "k1"), []vault.AuditRecord{created}); err != nil {
 		t.Fatal(err)
 	}
-	long := record(t, base.Add(time.Second), vault.ActionSecretRead, gps, "a")
+	long := record(t, base.Add(time.Second), vault.ActionSecretRead, globex, "a")
 	long.RequestID = strings.Repeat("r", 129)
-	plain := record(t, base.Add(2*time.Second), vault.ActionSecretRead, gps, "a")
+	plain := record(t, base.Add(2*time.Second), vault.ActionSecretRead, globex, "a")
 	if err := repo.AppendAudit(ctx, []vault.AuditRecord{long, plain}); err != nil {
 		t.Fatal(err)
 	}

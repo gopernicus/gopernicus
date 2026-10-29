@@ -16,8 +16,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-// The user-administration and fenced-session-mint conformance cases
-// (coordination-hub-auth-upstream CHAU-1.3 / CHAU-1.4). Both ports are OPTIONAL,
+// The user-administration and fenced-session-mint conformance cases.
+// Both ports are OPTIONAL,
 // so their groups skip LOUDLY when unwired — a silent green would falsely claim
 // lifecycle conformance for a store that implements none of it.
 //
@@ -381,7 +381,7 @@ func seedLifecycleUser(t *testing.T, repos auth.Repositories) (user.User, []sess
 	return u, sessions
 }
 
-// testLifecycleDeactivate is the core CHAU-1.4 case: ONE transition writes the
+// testLifecycleDeactivate is the core lifecycle-deactivation case: ONE transition writes the
 // status, increments auth_revision exactly once, and deletes every session and
 // grant.
 func testLifecycleDeactivate(t *testing.T, repos auth.Repositories) {

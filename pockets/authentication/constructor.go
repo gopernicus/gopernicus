@@ -155,7 +155,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		return nil, err
 	}
 	// The bundled user-administration routes mount ONLY on an explicit host
-	// authorization decision (CHAU-1.1), and only when the wiring can actually
+	// authorization decision, and only when the wiring can actually
 	// honor a deactivation: the administration repository supplies the atomic
 	// transition, and the fenced session mint closes the deactivate-versus-login
 	// race. A host that sets the check without both would ship a revocation
@@ -402,7 +402,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	}
 
 	// Provision-on-consumption turns a magic link into an account-CREATION
-	// credential (CHAU-6.1). Every dependency that makes that safe is required, and
+	// credential. Every dependency that makes that safe is required, and
 	// a half-wired configuration fails here rather than creating accounts through a
 	// path that cannot guarantee atomicity.
 	//
@@ -429,7 +429,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		}
 	}
 
-	// The password-reset landing URL (CHAU-5.1). It is validated whenever the
+	// The password-reset landing URL. It is validated whenever the
 	// challenge-backed forgot/reset rail is actually wired — a host with no reset
 	// rail is never asked for it.
 	//

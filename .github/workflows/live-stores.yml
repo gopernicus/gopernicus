@@ -15,7 +15,7 @@
 # how this one does not. If a run goes dark-red, jrazmi is the one paged.
 #
 # Turso token (repo secret TURSO_AUTH_TOKEN): owner jrazmi, scoped to the
-# gps-impact CMS playground DB; expiry UNKNOWN. Rotation is one action — update
+# CMS playground DB; expiry UNKNOWN. Rotation is one action — update
 # the repo secret TURSO_AUTH_TOKEN, nothing else in this file changes. The paired
 # TURSO_DATABASE_URL secret pins EXACTLY the authorized playground URL (RH3/RH4),
 # honoring the standing destructive-run rule — the conformance suites truncate,

@@ -217,7 +217,7 @@ func (s *Service) initPasswordReset(ctx context.Context, cmd delivery.Envelope) 
 	if err != nil {
 		return delivery.Envelope{}, false, err
 	}
-	// Build the landing link from the CONFIGURED URL only (CHAU-5.2). This runs in
+	// Build the landing link from the CONFIGURED URL only. This runs in
 	// the worker, off the request path, so no request header is even reachable
 	// here — which is exactly the property that makes a Host-derived reset link
 	// impossible rather than merely discouraged.

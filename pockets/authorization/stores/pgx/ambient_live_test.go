@@ -1,4 +1,4 @@
-// The segovia-shaped ambient-transaction proof (plan
+// The host-shaped ambient-transaction proof (plan
 // authorization-stores-ambient-transaction, D4 last paragraph): a host's OWN
 // application row and the authorization tuple that projects it are written
 // inside one connector-owned Transact, and they commit or roll back TOGETHER.

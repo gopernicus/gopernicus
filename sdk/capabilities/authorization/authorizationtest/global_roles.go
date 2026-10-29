@@ -2,7 +2,7 @@ package authorizationtest
 
 import "github.com/gopernicus/gopernicus/sdk"
 
-// GPSGlobal is a role-heavy model with global roles. Global roles are the
+// GlobalRoles is a role-heavy model with global roles. Global roles are the
 // relations role_<label> on the global resource platform:global; every
 // resource whose permission has a global branch carries a link tuple
 // <type>:<id>#platform@platform:global; scoped role labels are declared
@@ -10,8 +10,8 @@ import "github.com/gopernicus/gopernicus/sdk"
 //
 // client_hub:org3 deliberately has no link tuple: a member still finds it, a
 // global steward does not through a vendor (asserted as a divergence).
-func GPSGlobal() Fixture {
-	f := Fixture{Name: "gps-global", Global: &GlobalResource{Type: "platform", ID: "global", RelationPrefix: "role_"}}
+func GlobalRoles() Fixture {
+	f := Fixture{Name: "global-roles", Global: &GlobalResource{Type: "platform", ID: "global", RelationPrefix: "role_"}}
 	link := func(resourceType, id string) Fact { return fact(resourceType, id, "platform", "platform", "global") }
 	f.Facts = []Fact{
 		fact("platform", "global", "role_steward", "user", "stella"),
@@ -31,8 +31,8 @@ func GPSGlobal() Fixture {
 		fact("page", "contact-proposals", "viewer", "user", "pv"),
 		fact("page", "mailbox-scan", "viewer", "user", "pv"),
 		fact("page", "contact-proposals", "viewer", "user", "half"),
-		fact("ledger", "gps", "editor", "user", "led"),
-		fact("ledger", "gps", "viewer", "user", "lev"),
+		fact("ledger", "main", "editor", "user", "led"),
+		fact("ledger", "main", "viewer", "user", "lev"),
 	}
 	platform := res("platform", "global")
 	bot := sdk.Principal{Type: "service_account", ID: "bot"}
@@ -64,9 +64,9 @@ func GPSGlobal() Fixture {
 		check("section firmwide denied", user("fern"), "enter", res("section", "operations"), false),
 		check("hyphenated section id", user("mo"), "enter", res("section", "data-operations"), true),
 		check("page view", user("pv"), "view", res("page", "mailbox-scan"), true),
-		check("ledger edit editor", user("led"), "edit", res("ledger", "gps"), true),
-		check("ledger has no steward bypass", user("stella"), "view", res("ledger", "gps"), false),
-		check("ledger view viewer", user("lev"), "view", res("ledger", "gps"), true),
+		check("ledger edit editor", user("led"), "edit", res("ledger", "main"), true),
+		check("ledger has no steward bypass", user("stella"), "view", res("ledger", "main"), false),
+		check("ledger view viewer", user("lev"), "view", res("ledger", "main"), true),
 		checkErr("undeclared role relation", user("stella"), "role_janitor", platform, sdk.ErrInvalidInput),
 	}
 	f.Lookups = []LookupCase{
@@ -76,7 +76,7 @@ func GPSGlobal() Fixture {
 			Req:  lookupReq(user("stella"), "view", "client_hub", 10), Want: Expect{Err: sdk.ErrUnavailable},
 			Diverge: map[string]Expect{Authzed: {IDs: []string{"org1", "org2"}}, OpenFGA: {IDs: []string{"org1", "org2"}}},
 		},
-		lookup("ledger lookup", user("lev"), "view", "ledger", 10, "gps"),
+		lookup("ledger lookup", user("lev"), "view", "ledger", 10, "main"),
 	}
 	return f
 }

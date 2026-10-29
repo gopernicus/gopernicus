@@ -13,9 +13,9 @@ import (
 func testOriginPolicy(t *testing.T) OriginPolicy {
 	t.Helper()
 	p, err := NewOriginPolicy(OriginPolicyConfig{
-		Exact: []string{"https://accounts.flight.deck.example.com", "http://localhost:5173"},
+		Exact: []string{"https://accounts.portal.apps.example.com", "http://localhost:5173"},
 		Namespaces: []OriginNamespace{
-			{Scheme: "https", Suffix: "flight.deck.example.com", Reserved: []string{"accounts", "API"}},
+			{Scheme: "https", Suffix: "portal.apps.example.com", Reserved: []string{"accounts", "API"}},
 			{Scheme: "https", Suffix: "staging.example.com", Ports: []int{8443}},
 		},
 	})
@@ -40,49 +40,49 @@ func TestOriginPolicy_AllowsRequest(t *testing.T) {
 		origin []string
 		want   bool
 	}{
-		{"one label", []string{"https://acme.flight.deck.example.com"}, true},
-		{"digits and inner hyphen", []string{"https://client-42.flight.deck.example.com"}, true},
-		{"punycode label", []string{"https://xn--bcher-kva.flight.deck.example.com"}, true},
-		{"63-char label", []string{"https://" + string(make63('a')) + ".flight.deck.example.com"}, true},
-		{"uppercase normalized", []string{"HTTPS://ACME.Flight.Deck.Example.COM"}, true},
+		{"one label", []string{"https://acme.portal.apps.example.com"}, true},
+		{"digits and inner hyphen", []string{"https://client-42.portal.apps.example.com"}, true},
+		{"punycode label", []string{"https://xn--bcher-kva.portal.apps.example.com"}, true},
+		{"63-char label", []string{"https://" + string(make63('a')) + ".portal.apps.example.com"}, true},
+		{"uppercase normalized", []string{"HTTPS://ACME.Portal.Apps.Example.COM"}, true},
 		{"exact entry", []string{"http://localhost:5173"}, true},
-		{"reserved label admitted by exact entry", []string{"https://accounts.flight.deck.example.com"}, true},
+		{"reserved label admitted by exact entry", []string{"https://accounts.portal.apps.example.com"}, true},
 		{"explicit allowed port", []string{"https://acme.staging.example.com:8443"}, true},
-		{"bracketed namespace host", []string{"https://[acme.flight.deck.example.com]"}, false},
+		{"bracketed namespace host", []string{"https://[acme.portal.apps.example.com]"}, false},
 		{"bracketed namespace host with allowed port", []string{"https://[acme.staging.example.com]:8443"}, false},
 
 		{"missing origin", nil, false},
-		{"repeated origin", []string{"https://acme.flight.deck.example.com", "https://acme.flight.deck.example.com"}, false},
+		{"repeated origin", []string{"https://acme.portal.apps.example.com", "https://acme.portal.apps.example.com"}, false},
 		{"null", []string{"null"}, false},
 		{"empty", []string{""}, false},
-		{"bare suffix", []string{"https://flight.deck.example.com"}, false},
-		{"extra label", []string{"https://a.b.flight.deck.example.com"}, false},
-		{"empty label", []string{"https://.flight.deck.example.com"}, false},
-		{"lookalike prefix", []string{"https://evilflight.deck.example.com"}, false},
-		{"lookalike suffix", []string{"https://x.flight.deck.example.com.evil.com"}, false},
-		{"trailing dot", []string{"https://acme.flight.deck.example.com."}, false},
-		{"reserved label", []string{"https://api.flight.deck.example.com"}, false},
-		{"wrong scheme", []string{"http://acme.flight.deck.example.com"}, false},
-		{"unexpected port", []string{"https://acme.flight.deck.example.com:8443"}, false},
-		{"explicit default port", []string{"https://acme.flight.deck.example.com:443"}, false},
+		{"bare suffix", []string{"https://portal.apps.example.com"}, false},
+		{"extra label", []string{"https://a.b.portal.apps.example.com"}, false},
+		{"empty label", []string{"https://.portal.apps.example.com"}, false},
+		{"lookalike prefix", []string{"https://evilportal.apps.example.com"}, false},
+		{"lookalike suffix", []string{"https://x.portal.apps.example.com.evil.com"}, false},
+		{"trailing dot", []string{"https://acme.portal.apps.example.com."}, false},
+		{"reserved label", []string{"https://api.portal.apps.example.com"}, false},
+		{"wrong scheme", []string{"http://acme.portal.apps.example.com"}, false},
+		{"unexpected port", []string{"https://acme.portal.apps.example.com:8443"}, false},
+		{"explicit default port", []string{"https://acme.portal.apps.example.com:443"}, false},
 		{"default port where only 8443 allowed", []string{"https://acme.staging.example.com"}, false},
 		{"leading zero port", []string{"https://acme.staging.example.com:08443"}, false},
-		{"empty port", []string{"https://acme.flight.deck.example.com:"}, false},
-		{"userinfo", []string{"https://user@acme.flight.deck.example.com"}, false},
-		{"path", []string{"https://acme.flight.deck.example.com/"}, false},
-		{"query", []string{"https://acme.flight.deck.example.com?x=1"}, false},
-		{"fragment", []string{"https://acme.flight.deck.example.com#x"}, false},
-		{"backslash", []string{"https://acme.flight.deck.example.com\\x"}, false},
-		{"percent-encoded", []string{"https://acme%2e.flight.deck.example.com"}, false},
-		{"leading hyphen", []string{"https://-acme.flight.deck.example.com"}, false},
-		{"trailing hyphen", []string{"https://acme-.flight.deck.example.com"}, false},
-		{"underscore", []string{"https://ac_me.flight.deck.example.com"}, false},
-		{"unicode label", []string{"https://bücher.flight.deck.example.com"}, false},
-		{"64-char label", []string{"https://" + string(make63('a')) + "a.flight.deck.example.com"}, false},
-		{"no scheme", []string{"acme.flight.deck.example.com"}, false},
-		{"other scheme", []string{"ftp://acme.flight.deck.example.com"}, false},
-		{"wildcard literal", []string{"https://*.flight.deck.example.com"}, false},
-		{"comma-joined list", []string{"https://acme.flight.deck.example.com, https://evil.com"}, false},
+		{"empty port", []string{"https://acme.portal.apps.example.com:"}, false},
+		{"userinfo", []string{"https://user@acme.portal.apps.example.com"}, false},
+		{"path", []string{"https://acme.portal.apps.example.com/"}, false},
+		{"query", []string{"https://acme.portal.apps.example.com?x=1"}, false},
+		{"fragment", []string{"https://acme.portal.apps.example.com#x"}, false},
+		{"backslash", []string{"https://acme.portal.apps.example.com\\x"}, false},
+		{"percent-encoded", []string{"https://acme%2e.portal.apps.example.com"}, false},
+		{"leading hyphen", []string{"https://-acme.portal.apps.example.com"}, false},
+		{"trailing hyphen", []string{"https://acme-.portal.apps.example.com"}, false},
+		{"underscore", []string{"https://ac_me.portal.apps.example.com"}, false},
+		{"unicode label", []string{"https://bücher.portal.apps.example.com"}, false},
+		{"64-char label", []string{"https://" + string(make63('a')) + "a.portal.apps.example.com"}, false},
+		{"no scheme", []string{"acme.portal.apps.example.com"}, false},
+		{"other scheme", []string{"ftp://acme.portal.apps.example.com"}, false},
+		{"wildcard literal", []string{"https://*.portal.apps.example.com"}, false},
+		{"comma-joined list", []string{"https://acme.portal.apps.example.com, https://evil.com"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -131,8 +131,8 @@ func TestOriginPolicy_ExactIPOrigins(t *testing.T) {
 func TestOriginPolicy_IgnoresForwardedHeaders(t *testing.T) {
 	p := testOriginPolicy(t)
 	r := originRequest("https://evil.com")
-	r.Header.Set("X-Forwarded-Host", "acme.flight.deck.example.com")
-	r.Header.Set("Forwarded", "host=acme.flight.deck.example.com")
+	r.Header.Set("X-Forwarded-Host", "acme.portal.apps.example.com")
+	r.Header.Set("Forwarded", "host=acme.portal.apps.example.com")
 	if p.AllowsRequest(r) {
 		t.Fatal("policy consulted a forwarded header")
 	}
@@ -229,16 +229,16 @@ func TestOriginPolicy_HasNamespace(t *testing.T) {
 func TestOriginPolicy_AllowsMatchesAllowsRequest(t *testing.T) {
 	p := testOriginPolicy(t)
 	for _, origin := range []string{
-		"https://acme.flight.deck.example.com",
-		"HTTPS://ACME.Flight.Deck.Example.COM",
+		"https://acme.portal.apps.example.com",
+		"HTTPS://ACME.Portal.Apps.Example.COM",
 		"http://localhost:5173",
-		"https://accounts.flight.deck.example.com",
+		"https://accounts.portal.apps.example.com",
 		"https://acme.staging.example.com:8443",
-		"https://api.flight.deck.example.com",
-		"https://flight.deck.example.com",
+		"https://api.portal.apps.example.com",
+		"https://portal.apps.example.com",
 		"https://acme.staging.example.com",
-		"https://acme.flight.deck.example.com:443",
-		"https://acme.flight.deck.example.com/",
+		"https://acme.portal.apps.example.com:443",
+		"https://acme.portal.apps.example.com/",
 		"null",
 		"",
 	} {
@@ -296,11 +296,11 @@ func TestNewOriginPolicy_DoesNotAliasInput(t *testing.T) {
 }
 
 func TestParseOriginNamespace(t *testing.T) {
-	ns, err := ParseOriginNamespace("HTTPS://*.Flight.Deck.Example.com")
+	ns, err := ParseOriginNamespace("HTTPS://*.Portal.Apps.Example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ns.Scheme != "https" || ns.Suffix != "flight.deck.example.com" || ns.Ports != nil {
+	if ns.Scheme != "https" || ns.Suffix != "portal.apps.example.com" || ns.Ports != nil {
 		t.Errorf("got %+v", ns)
 	}
 	ns, err = ParseOriginNamespace("http://*.localtest.me:5173")

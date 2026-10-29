@@ -45,8 +45,7 @@ schedule. The runtime role needs DELETE on `iam_operations` and nothing more: th
 0006 trigger refuses deleting a fenced row, and expiry takes no row lock, so the
 posture that revokes UPDATE stays. An S0 host that revoked DELETE grants it back
 (`GRANT DELETE ON iam_operations TO runtime;`), as
-[the S2 handoff](../../../plans/soc2-s2-audit-completeness-handoff.md) and
-"`iam_operations` keeps DELETE" under Adopting 0005 below say. The first runs on
+"`iam_operations` keeps DELETE" under Adopting 0005 below says. The first runs on
 an old ledger are a sustained DELETE load: keep the limit modest and the cadence
 steady.
 
@@ -451,8 +450,7 @@ must stop ledger-dependent acceptance retries before using a ledger-free writer.
 
 Third-party mutation stores must implement atomic operation binding and run the
 new `OperationLedger` conformance family. Calls with an empty OperationID keep
-their prior behavior. These versions are published; the release record is
-[the implementation plan](../../../plans/invitation-grant-operation-ledger.md).
+their prior behavior. These versions are published; see `RELEASING.md`.
 
 ## Adopting the outcome cleanup (v0.22.0)
 

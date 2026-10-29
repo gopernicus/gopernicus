@@ -81,9 +81,7 @@ these are smoke baselines, not isolated performance comparisons with older runs.
 | turso | 1 | 77.7 | 69.7–78.1 | 4,370 |
 | turso | 8 | 496.7 | 474.1–668.5 | 4,371 |
 
-All 20 samples passed. Raw samples and commands are retained in the
-[integrity verification record](../../plans/authorization-integrity-policy-verification.json).
-The historical matrix below retains its original workload and measurements.
+All 20 samples passed. The historical matrix below retains its original workload and measurements.
 
 ## What the suite proves
 
@@ -140,9 +138,6 @@ Run from `pockets/authorization`:
 ```sh
 go test -run '^$' -bench '^(BenchmarkDecisionLogging|BenchmarkComposableGuard)$' -benchmem -benchtime=1s -count=3 ./logic/decisions ./inbound/http
 ```
-
-All raw samples, source hashes, verification commands and limits are in
-[the verification record](../../plans/authorization-host-policy-verification.json).
 
 ## Run verification
 
@@ -235,8 +230,6 @@ These samples use the final single-middleware API and fresh canonical SQL schema
 including PostgreSQL SMALLINT scope kinds. All 109 workloads completed five
 one-second samples with `-count=5 -benchtime=1s -benchmem` (545 samples). The
 runner rejected missing cases and incomplete samples; fixture cleanup passed.
-Raw samples, commands and the tested source digest are retained in
-[the benchmark record](../../plans/authorization-one-middleware-benchmarks.json).
 
 Apple M4 Pro, darwin/arm64, Go 1.26.1, default GOMAXPROCS 14, Redis 8.4.0 on
 private Unix sockets, PostgreSQL 17.4 (`en_US.UTF-8`) over loopback TCP, and
@@ -571,5 +564,5 @@ serialized. These are architectural tradeoffs, not performance promises.
 ## Historical HTTP benchmark record
 
 The initial three-shape HTTP measurements preceded middleware consolidation and
-are retained in `plans/authorization-composable-guards-verification.json`.
+are superseded by the results above.
 Current mounted HTTP results are included in the 109-case matrix above.

@@ -106,7 +106,7 @@ func productionBaseline(t *testing.T) (authenticationConfig, auth.Repositories) 
 	cfg.BodySenders = map[string]delivery.BodySender{sdk.AddressKindPhone: prodNotifier{kind: sdk.AddressKindPhone}}
 	cfg.RateLimiter = durableLimiter{}
 	cfg.PublicAuthBaseURL = "https://auth.example.com/auth/magic"
-	// Production requires an HTTPS reset landing route (CHAU-5.1); the host's own
+	// Production requires an HTTPS reset landing route; the host's own
 	// default is derived from callbackBase(), which is plain http in the demo.
 	cfg.PasswordResetURL = "https://auth.example.com/auth/password/reset"
 	// run() wires the generic-jobs dispatcher; reproduce it so jobs mode has its queue

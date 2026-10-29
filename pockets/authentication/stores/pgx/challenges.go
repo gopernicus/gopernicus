@@ -78,7 +78,7 @@ func (s *ChallengeStore) Replace(ctx context.Context, c challenge.Challenge) (ch
 		c.Version = 1
 	}
 	// The row is unique under the SUBJECT KEY, which defaults to the user id for
-	// every purpose that predates the field (CHAU-6.1).
+	// every purpose that predates the field.
 	subjectKey := c.ResolvedSubjectKey()
 	args := pgx.NamedArgs{
 		"subject_key": subjectKey, "user_id": c.UserID, "purpose": c.Purpose,

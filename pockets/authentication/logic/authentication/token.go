@@ -94,7 +94,7 @@ func (s *Service) IssueToken(ctx context.Context, emailAddr, password string) (T
 
 	pair, err := s.mintSession(ctx, u.ID, u.AuthRevision, s.primaryAuthentication(session.MethodPassword))
 	if err != nil {
-		// A deactivated account is denied as ordinary bad credentials (CHAU-1.5).
+		// A deactivated account is denied as ordinary bad credentials.
 		if errors.Is(err, session.ErrUserNotActive) {
 			s.recordCredentialOutcome(ctx, securityevent.TypeTokenIssued, u.ID, err, nil)
 		}

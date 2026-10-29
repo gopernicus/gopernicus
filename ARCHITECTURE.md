@@ -134,7 +134,7 @@ The crypto package name is `pkg/cryptids`, meaning "cryptography tidbits",
 by owner choice (2026-09-10). A small package may retain a deliberate name;
 clarity is judged from its documented responsibility, not naming formality.
 Root SDK now includes pointer/slug/ID/identity primitives by owner decision
-(2026-09-10), recorded in [sdk-root-promotion.md](plans/sdk-root-promotion.md).
+(2026-09-10).
 Package boundaries serve API clarity rather than a minimum size or one-operation
 rule. A root addition must be stdlib-only, broadly useful, clearly named without
 a subsystem qualifier, and free of application/transport lifecycle. Shared
@@ -187,10 +187,10 @@ changes. Context remains an explicit first argument where supported for startup
 I/O, never a `WithContext` option or stored request context.
 
 This owner-approved convention replaces pockets FS6's blanket Config-only rule.
-The reviewed families, migration scope and retained exceptions are recorded in
-[constructor-options.md](plans/constructor-options.md).
+The reviewed families, migration scope and retained exceptions were set by the
+owner.
 Its retained pocket Config exceptions are superseded by the owner's
-[pocket constructor follow-up](plans/pocket-constructor-options.md).
+pocket constructor follow-up.
 
 ## Protocols and pocket relationships (sdk-work-protocol, 2026-07-13)
 
@@ -270,8 +270,7 @@ other engine or resolver errors → 500). The opposition is intentional — do n
 ## Host HTML cross-origin posture (CSRF, ratified 2026-07-20)
 
 How host-rendered HTML mutations are protected against cross-origin request
-forgery. Ratified from the first `ui/goth` adopter's upstream trip (Segovia
-flag #11); the decisions are D1–D4 in that trip's plan.
+forgery. Ratified from the first `ui/goth` adopter's upstream trip; the decisions are D1–D4 of that trip.
 
 **The posture (D1): host HTML forms are origin-checked, not token-carrying.**
 A host mounts Go's `net/http.CrossOriginProtection` (Go 1.25+) on its
@@ -334,8 +333,8 @@ CSP, and other host defaults while letting handlers override them.
 
 ## Kinds of module — the taxonomy
 
-Seven kinds of thing live in this ecosystem (ratified 2026-07-02, R6 —
-`.claude/plans/roadmap/00-intersections.md` §1; amended 2026-07-07,
+Seven kinds of thing live in this ecosystem (ratified 2026-07-02, R6;
+amended 2026-07-07,
 feature-standard FS3, adding the views-module row; amended 2026-07-09,
 workshop-v2-scaffolding W5, adding the workshop row; amended 2026-07-17,
 ui-goth GOTH-0.2, adding the UI-implementation row):

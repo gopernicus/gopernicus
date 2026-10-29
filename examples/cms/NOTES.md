@@ -59,5 +59,5 @@ order vocabulary stayed on already-indexed created_at).
 
 **Sequencing:** authorization-v1 Z2a/Z2b now execute against these
 standards (dated notes on its files); its own Q1–Q5 ratification still
-owed. Plans housekeeping: `.claude/plans/pgx-crud-v1/` →
+owed. Plans housekeeping: pgx-crud-v1 moved to
 `.claude/past/pgx-crud-v1/` this session, README table updated.

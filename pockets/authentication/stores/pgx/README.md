@@ -434,7 +434,7 @@ connection revocation do not advance that fence.
 add no table.** `0015` adds `challenges.subject_key`, backfills it from `user_id`,
 and moves the single-active claim from `(user_id, purpose)` to
 `(subject_key, purpose)` — every pre-existing purpose is unchanged, while an email
-magic link gains a key that exists without a user (CHAU-6.1).
+magic link gains a key that exists without a user.
 
 **`0014_user_status.sql` is APPEND-ONLY and adds no table.** `0001_users.sql` is
 tagged and immutable, so the account-lifecycle work arrives as ALTERs on `users`:

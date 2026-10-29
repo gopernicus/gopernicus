@@ -115,7 +115,7 @@ func TestRegisterRejectsTypedNilRouterWhenRoutesConfigured(t *testing.T) {
 }
 
 func TestPermissionGatesRejectInvalidInputsAtMount(t *testing.T) {
-	components := newGPSHost(t, memory.New(), gpsRoleModel())
+	components := newRolesOnlyHost(t, memory.New(), productRoleModel())
 	for name, mount := range map[string]func(){
 		"nil resolver": func() {
 			components.HTTP.Require(authorizationhttp.Can("view", authorizationhttp.Resource("page", nil)))

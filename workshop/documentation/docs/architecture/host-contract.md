@@ -18,7 +18,7 @@ The word *pocket* appears at two scopes, and the import path — never a second 
 
 A thin host has no local `pockets/` at all. A host pocket exists only when the host writes code against a pocket's ports or rim; mounting a framework pocket with its bundled store and views is `cmd` wiring and nothing else.
 
-The reference host is **gps-360-go**, a private production application built on this framework, whose layout the rules generalize from. Where the contract and the reference disagree, the disagreement is a finding to be settled, not a style choice.
+The reference host is a private production application built on this framework, whose layout the rules generalize from. Where the contract and the reference disagree, the disagreement is a finding to be settled, not a style choice.
 
 ## The fifteen rules
 

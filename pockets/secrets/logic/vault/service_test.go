@@ -16,8 +16,8 @@ import (
 )
 
 var (
-	gps    = vault.Owner{Type: "tenant", ID: "gps"}
-	token  = vault.Ref{Owner: gps, Name: "cloudflare.api_token"}
+	globex = vault.Owner{Type: "tenant", ID: "globex"}
+	token  = vault.Ref{Owner: globex, Name: "cloudflare.api_token"}
 	staff  = vault.Source{ActorType: "user", ActorID: "u1", Reason: "paste token"}
 	worker = vault.Source{System: "deploy"}
 )
@@ -81,7 +81,7 @@ func TestPutGetDeleteAreAudited(t *testing.T) {
 		t.Fatalf("after delete: %v", err)
 	}
 
-	audit, _, err := svc.Audit(ctx, vault.AuditFilter{Owner: &gps}, "", 0)
+	audit, _, err := svc.Audit(ctx, vault.AuditFilter{Owner: &globex}, "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestValuesAreBoundToTheirReference(t *testing.T) {
 	ctx := context.Background()
 	repo := memory.New()
 	svc := newVault(t, repo, ring(t, "m1", "m1"))
-	other := vault.Ref{Owner: gps, Name: "other"}
+	other := vault.Ref{Owner: globex, Name: "other"}
 	if _, err := svc.Put(ctx, token, []byte("one"), staff); err != nil {
 		t.Fatal(err)
 	}
@@ -135,20 +135,20 @@ func TestDeleteOwnerShredsEverything(t *testing.T) {
 	repo := memory.New()
 	svc := newVault(t, repo, ring(t, "m1", "m1"))
 	for _, name := range []string{"a", "b"} {
-		if _, err := svc.Put(ctx, vault.Ref{Owner: gps, Name: name}, []byte(name), staff); err != nil {
+		if _, err := svc.Put(ctx, vault.Ref{Owner: globex, Name: name}, []byte(name), staff); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := svc.DeleteOwner(ctx, gps, staff); err != nil {
+	if err := svc.DeleteOwner(ctx, globex, staff); err != nil {
 		t.Fatal(err)
 	}
-	if left, _ := svc.List(ctx, gps); len(left) != 0 {
+	if left, _ := svc.List(ctx, globex); len(left) != 0 {
 		t.Fatalf("secrets survive: %+v", left)
 	}
-	if err := svc.DeleteOwner(ctx, gps, staff); !errors.Is(err, sdk.ErrNotFound) {
+	if err := svc.DeleteOwner(ctx, globex, staff); !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("second delete: %v", err)
 	}
-	audit, _, _ := svc.Audit(ctx, vault.AuditFilter{Owner: &gps}, "", 0)
+	audit, _, _ := svc.Audit(ctx, vault.AuditFilter{Owner: &globex}, "", 0)
 	var deleted, destroyed int
 	for _, r := range audit {
 		switch r.Action {
@@ -192,11 +192,11 @@ func TestValidation(t *testing.T) {
 	svc := newVault(t, memory.New(), ring(t, "m1", "m1"))
 	for name, call := range map[string]func() error{
 		"bad owner type": func() error {
-			_, e := svc.Put(ctx, vault.Ref{Owner: vault.Owner{Type: "Tenant", ID: "gps"}, Name: "a"}, []byte("v"), staff)
+			_, e := svc.Put(ctx, vault.Ref{Owner: vault.Owner{Type: "Tenant", ID: "globex"}, Name: "a"}, []byte("v"), staff)
 			return e
 		},
 		"bad name": func() error {
-			_, e := svc.Put(ctx, vault.Ref{Owner: gps, Name: "has space"}, []byte("v"), staff)
+			_, e := svc.Put(ctx, vault.Ref{Owner: globex, Name: "has space"}, []byte("v"), staff)
 			return e
 		},
 		"empty value": func() error { _, e := svc.Put(ctx, token, nil, staff); return e },
@@ -259,7 +259,7 @@ func TestNothingLogsPlaintext(t *testing.T) {
 	log.Info("put", "err", err)
 	_, err = svc.Get(ctx, token, vault.Source{})
 	log.Info("get", "err", err)
-	_, err = svc.Put(ctx, vault.Ref{Owner: gps, Name: "bad name"}, []byte(sentinel), staff)
+	_, err = svc.Put(ctx, vault.Ref{Owner: globex, Name: "bad name"}, []byte(sentinel), staff)
 	log.Info("put", "err", err)
 	if strings.Contains(buf.String(), sentinel) {
 		t.Fatalf("plaintext in log: %s", buf.String())
@@ -268,7 +268,7 @@ func TestNothingLogsPlaintext(t *testing.T) {
 
 func mustSealed(t *testing.T, repo vault.Repository) []vault.SealedSecret {
 	t.Helper()
-	sealed, err := repo.ListSealedSecrets(context.Background(), gps)
+	sealed, err := repo.ListSealedSecrets(context.Background(), globex)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func mustSealed(t *testing.T, repo vault.Repository) []vault.SealedSecret {
 
 func mustKey(t *testing.T, repo vault.Repository) vault.OwnerKey {
 	t.Helper()
-	key, err := repo.GetOwnerKey(context.Background(), gps)
+	key, err := repo.GetOwnerKey(context.Background(), globex)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +493,7 @@ func TestDeleteOwnerRetriesConflicts(t *testing.T) {
 		if _, err := svc.Put(ctx, token, []byte("v"), staff); err != nil {
 			t.Fatal(err)
 		}
-		err := svc.DeleteOwner(ctx, gps, staff)
+		err := svc.DeleteOwner(ctx, globex, staff)
 		if (c.want == nil && err != nil) || (c.want != nil && !errors.Is(err, c.want)) || repo.calls != c.calls {
 			t.Fatalf("%d conflicts: err %v after %d calls, want %v after %d", c.conflicts, err, repo.calls, c.want, c.calls)
 		}
@@ -501,7 +501,7 @@ func TestDeleteOwnerRetriesConflicts(t *testing.T) {
 }
 
 func TestCorrelate(t *testing.T) {
-	r, err := vault.NewAuditRecord(time.Now(), vault.ActionSecretRead, gps, token.Name, 0, "", worker)
+	r, err := vault.NewAuditRecord(time.Now(), vault.ActionSecretRead, globex, token.Name, 0, "", worker)
 	if err != nil {
 		t.Fatal(err)
 	}

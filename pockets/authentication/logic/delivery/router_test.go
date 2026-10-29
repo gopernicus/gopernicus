@@ -447,7 +447,7 @@ func TestDeliverNotifierHonorsCancellation(t *testing.T) {
 // carry Brand.Name where the unset default falls back to "Your Company".
 func TestRenderEmailBranding(t *testing.T) {
 	r, err := NewRouter(&stubSender{},
-		WithTemplates(TemplatesConfig{Branding: &email.Branding{Name: "GPS Impact"}}),
+		WithTemplates(TemplatesConfig{Branding: &email.Branding{Name: "Example Co"}}),
 		WithMailFrom("no-reply@example.test"))
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
@@ -462,7 +462,7 @@ func TestRenderEmailBranding(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	for name, body := range map[string]string{"text": env.Body, "html": env.HTML} {
-		if !strings.Contains(body, "GPS Impact") {
+		if !strings.Contains(body, "Example Co") {
 			t.Errorf("%s body missing Brand.Name: %q", name, body)
 		}
 		if strings.Contains(body, "Your Company") {

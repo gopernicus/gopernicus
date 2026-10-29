@@ -12,7 +12,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 )
 
-// CHAU-5.2 / CHAU-5.3 — the password-reset link rail.
+// The password-reset link rail.
 
 // TestBuildPasswordResetURL is the pure-helper table. Every row is something a
 // host can actually configure or a user can actually type.

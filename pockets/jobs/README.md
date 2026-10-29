@@ -6,7 +6,7 @@ schedules (cron or fixed interval) coordinated across runtime instances through
 atomic admission of pending occurrences and stable job IDs. Pending work retries
 after queue failures or scheduler restarts, including with separate stores.
 Built on `sdk/pkg/workers` (the pool/runner
-facility). Design of record: `.claude/plans/roadmap/jobs-pocket-design.md`.
+facility).
 
 ## Layout
 

@@ -72,25 +72,25 @@ func TestProbeTables(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("all_present", func(t *testing.T) {
-		pq := &probeQuerier{have: map[string]bool{"plans": true, "gps.tiles": true, "reports": true}}
-		if err := ProbeTables(ctx, pq, "plans", "gps.tiles", "reports"); err != nil {
+		pq := &probeQuerier{have: map[string]bool{"plans": true, "app.tiles": true, "reports": true}}
+		if err := ProbeTables(ctx, pq, "plans", "app.tiles", "reports"); err != nil {
 			t.Fatalf("ProbeTables: %v", err)
 		}
-		if got := strings.Join(pq.probed, ","); got != "plans,gps.tiles,reports" {
+		if got := strings.Join(pq.probed, ","); got != "plans,app.tiles,reports" {
 			t.Fatalf("probed = %q, want the tables in order", got)
 		}
 	})
 
 	t.Run("first_absent_names_it_and_stops", func(t *testing.T) {
 		pq := &probeQuerier{have: map[string]bool{"plans": true, "reports": true}}
-		err := ProbeTables(ctx, pq, "plans", "gps.tiles", "reports")
+		err := ProbeTables(ctx, pq, "plans", "app.tiles", "reports")
 		if !errors.Is(err, sdk.ErrNotFound) {
 			t.Fatalf("err = %v, want ErrNotFound", err)
 		}
-		if !strings.Contains(err.Error(), "gps.tiles") {
+		if !strings.Contains(err.Error(), "app.tiles") {
 			t.Fatalf("err = %v, want the first failing table named", err)
 		}
-		if got := strings.Join(pq.probed, ","); got != "plans,gps.tiles" {
+		if got := strings.Join(pq.probed, ","); got != "plans,app.tiles" {
 			t.Fatalf("probed = %q, want probing to stop at the first failure", got)
 		}
 	})

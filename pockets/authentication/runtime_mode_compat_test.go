@@ -13,7 +13,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
-// This file is the CHAU-3.3 compatibility proof for moving the runtime-posture
+// This file is the compatibility proof for moving the runtime-posture
 // vocabulary to sdk/pkg/environment. It is an EXTERNAL test package, so
 // everything here is reachable by a host through exported API only.
 //
@@ -21,7 +21,7 @@ import (
 // with NO authentication import at all — lives in the sdk itself
 // (sdk/capabilities/notify/email/posture_test.go and
 // sdk/capabilities/notify/posture_test.go). Those packages cannot import a
-// pocket, which is exactly the guarantee coordination-hub's generic
+// pocket, which is exactly the guarantee a host's generic
 // internal/integrations/mailer needs: it drops its pockets/authentication
 // import and names environment.Mode + notify.CheckTransport instead.
 

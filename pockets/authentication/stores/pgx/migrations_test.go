@@ -30,11 +30,11 @@ var canonicalMigrations = []string{
 	"0011_challenges.sql",
 	"0012_contact_changes.sql",
 	"0013_authentication_grants.sql",
-	// CHAU-1.2: append-only account-lifecycle columns on users. It adds no table,
+	// Append-only account-lifecycle columns on users. It adds no table,
 	// so expectedTables is unchanged; expectedColumns/expectedIndexes below carry
 	// its assertions.
 	"0014_user_status.sql",
-	// CHAU-6.1: append-only challenge subject keys. It adds no table; the column
+	// Append-only challenge subject keys. It adds no table; the column
 	// and the replacement unique index are asserted below.
 	"0015_challenge_subject_keys.sql",
 	// invitation-metadata: append-only opaque host metadata column on invitations.
@@ -102,9 +102,9 @@ var expectedIndexes = []string{
 	"idx_challenges_purpose_secret_digest",
 	"idx_contact_changes_user_kind",
 	"idx_authentication_grants_session_purpose_context",
-	// CHAU-1.2: the operator directory's contractual (created_at, id) keyset.
+	// The operator directory's contractual (created_at, id) keyset.
 	"idx_users_created_at_id",
-	// CHAU-6.1: the challenge single-active claim moves to (subject_key, purpose).
+	// The challenge single-active claim moves to (subject_key, purpose).
 	"idx_challenges_subject_purpose",
 	// SOC 2 S3: the purge predicates' access paths (0023).
 	"idx_sessions_expires_at", "idx_authentication_grants_expires_at", "idx_contact_changes_expires_at",
@@ -124,9 +124,9 @@ var expectedColumns = []string{
 	"authenticated_at",       // sessions
 	"authentication_methods", // sessions
 	"assurance_level",        // sessions
-	"status",                 // users (CHAU-1.2)
-	"status_changed_at",      // users (CHAU-1.2)
-	"subject_key",            // challenges (CHAU-6.1)
+	"status",                 // users
+	"status_changed_at",      // users
+	"subject_key",            // challenges
 	"metadata",               // invitations (invitation-metadata)
 	"request_id",             // security_events (0021)
 	"trace_id",               // security_events (0021)

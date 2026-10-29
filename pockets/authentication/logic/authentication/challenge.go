@@ -132,8 +132,8 @@ func withStoredContext(v any) challengeOption {
 	return func(o *challengeOptions) { o.context = v; o.hasContext = true }
 }
 
-// withSubjectKey overrides the key the issued challenge is unique under
-// (CHAU-6.1). Unset — the case for every purpose that predates it — the row keys
+// withSubjectKey overrides the key the issued challenge is unique under.
+// Unset — the case for every purpose that predates it — the row keys
 // on the user id exactly as before.
 //
 // It also scopes step-up codes to a session, channel and operation.

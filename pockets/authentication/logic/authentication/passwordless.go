@@ -290,7 +290,7 @@ func (s *Service) VerifyPasswordless(ctx context.Context, kind, identifierValue,
 	pair, err := s.mintSession(ctx, ident.UserID, u.AuthRevision, s.primaryAuthentication(passwordlessCodeMethod(kind)))
 	if err != nil {
 		// A deactivated account joins every other rejection under the one generic
-		// passwordless failure (CHAU-1.5).
+		// passwordless failure.
 		if errors.Is(err, session.ErrUserNotActive) {
 			s.recordPasswordlessLogin(ctx, ident.UserID, kind, purpose, securityevent.StatusFailure)
 		}
@@ -356,7 +356,7 @@ func (s *Service) RedeemPasswordless(ctx context.Context, token string) (TokenPa
 	}
 	// With provision-on-consumption wired, the WHOLE redemption — token consume,
 	// identity decision, any revocation, and the session insert — is ONE store
-	// transaction (CHAU-6.5). It has to be: creating an account as a side effect of
+	// transaction. It has to be: creating an account as a side effect of
 	// consuming a token cannot be two steps without leaving a half-provisioned user
 	// behind a failure, and two concurrent redeems of one link must produce exactly
 	// one session.
@@ -373,7 +373,7 @@ func (s *Service) RedeemPasswordless(ctx context.Context, token string) (TokenPa
 		// exactly as a password registration or an OAuth provisioning does —
 		// best-effort, after the domain commit: a provision and an adoption of an
 		// unverified identifier both verify it; a login of an already verified one
-		// does not re-run resolution (CHAU-6.6, S7 every-verification rule).
+		// does not re-run resolution (S7 every-verification rule).
 		if (res.Provisioned || res.Outcome == passwordless.OutcomeVerifyAndAdoptExistingUnverified) && holdsClaim(res.Identifier) {
 			s.resolvePendingInvitations(ctx, string(res.Identifier.Kind), res.Identifier.NormalizedValue, res.User.ID)
 		}
@@ -399,7 +399,7 @@ func (s *Service) RedeemPasswordless(ctx context.Context, token string) (TokenPa
 	// its identifier changed underneath it (design §4.1). This post-consume reload is
 	// the token twin of the OTP path's withExpectedContext binding check — the redeem
 	// request supplies no identifier to pass as the expected context.
-	// The stored binding is the versioned passwordless.Binding (CHAU-6.1). A
+	// The stored binding is the versioned passwordless.Binding. A
 	// version this build does not know is a generic failure, never a silent
 	// fallback: the binding is what carries provisioning intent, and guessing at it
 	// could create an account nobody asked for.
@@ -432,7 +432,7 @@ func (s *Service) RedeemPasswordless(ctx context.Context, token string) (TokenPa
 	pair, err := s.mintSession(ctx, ident.UserID, *binding.AuthRevision, s.primaryAuthentication(method))
 	if err != nil {
 		// A deactivated account joins every other rejection under the one generic
-		// passwordless failure (CHAU-1.5).
+		// passwordless failure.
 		if errors.Is(err, session.ErrUserNotActive) {
 			s.recordPasswordlessLogin(ctx, ident.UserID, binding.Kind, purpose, securityevent.StatusFailure)
 		}
@@ -529,7 +529,7 @@ func (s *Service) initPasswordlessLink(ctx context.Context, kind string, cmd del
 		return delivery.Envelope{}, false, err
 	}
 	// With provision-on-consumption enabled for the EMAIL LINK rail, an address
-	// that resolves to nothing is still deliverable (CHAU-6.4): the link is sent,
+	// that resolves to nothing is still deliverable: the link is sent,
 	// and the account is created only if and when the link is CONSUMED. Sending
 	// creates no user row and no identifier row — there is nothing to clean up if
 	// it is never clicked.

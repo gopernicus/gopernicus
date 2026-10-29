@@ -1,5 +1,4 @@
-// Package passwordless is the atomic magic-link redemption domain
-// (coordination-hub-auth-upstream CHAU-6.1).
+// Package passwordless is the atomic magic-link redemption domain.
 //
 // It exists for one reason: consuming a magic-link token and establishing the
 // resulting identity cannot be two steps. challenge.Repository.ConsumeToken is
@@ -35,7 +34,7 @@ const BindingVersion = 2
 
 // Version 2 rejects all older links because v1 could omit an existing owner.
 
-// Binding is the stored, versioned magic-link binding (CHAU-6.1). It is written
+// Binding is the stored, versioned magic-link binding. It is written
 // into the challenge row's Context at issue and read back verbatim at redemption.
 //
 // The intent is captured AT ISSUE and never re-derived from current

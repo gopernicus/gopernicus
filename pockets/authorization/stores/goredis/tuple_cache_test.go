@@ -615,7 +615,7 @@ func TestTupleCacheConstructor(t *testing.T) {
 		}
 	}
 	const binding = "protocol:2/pgx:schema.v1/max-staleness:1000000000"
-	for _, namespace := range []string{"segovia-v2:dev:authorization", "App_1.2/relationships", "app:build:123"} {
+	for _, namespace := range []string{"acme-v2:dev:authorization", "App_1.2/relationships", "app:build:123"} {
 		cache, err := NewTupleCache(client, WithNamespace(namespace))
 		if err != nil {
 			t.Fatalf("readable namespace %q: %v", namespace, err)
@@ -745,15 +745,15 @@ func TestTupleCacheKeyLayout(t *testing.T) {
 func TestTupleCacheReadableNamespaces(t *testing.T) {
 	client, _ := startRedis(t, "", false)
 	ctx := t.Context()
-	// The previous adapter's hash for namespace "segovia" is a different key.
-	const legacy = "gopernicus:tuplecache:{c2Vnb3ZpYQ}:mirror"
+	// The previous adapter's hash for namespace "acme" is a different key.
+	const legacy = "gopernicus:tuplecache:{YWNtZQ}:mirror"
 	if err := client.HSet(ctx, legacy, "sentinel", "old").Err(); err != nil {
 		t.Fatal(err)
 	}
 	state := tuplecache.State{Binding: "store", Receipt: "initial"}
 	var caches []*TupleCache
 	var wantKeys []string
-	namespaces := []string{"segovia", "segovia-v2:dev:authorization", "segovia-v2.dev.authorization", "my-app/relationships"}
+	namespaces := []string{"acme", "acme-v2:dev:authorization", "acme-v2.dev.authorization", "my-app/relationships"}
 	for _, namespace := range namespaces {
 		cache, err := NewTupleCache(client, WithNamespace(namespace))
 		if err != nil {

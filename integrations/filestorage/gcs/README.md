@@ -48,7 +48,7 @@ hosts should account for this when sharing a custom HTTP client.
 
 Keys are relative UTF-8 slash-separated names. Leading/trailing or repeated
 slashes, dot/dot-dot segments, backslashes and NUL are rejected. Spaces, Unicode,
-`.segovia` and names containing literal `..` remain unchanged. Configured `Prefix`
+`.app` and names containing literal `..` remain unchanged. Configured `Prefix`
 is a complete directory key; `List` takes a literal prefix that can end in a
 partial component, including `.`. It materializes caller-facing keys, removes the
 configured directory prefix, excludes provider folder markers, and has no ordering
