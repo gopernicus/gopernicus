@@ -1,6 +1,6 @@
 # Releasing gopernicus modules
 
-## Neutral authorization fixtures (sdk v0.26.0 — UNRELEASED)
+## Neutral authorization fixtures (sdk v0.26.0 — published 2026-10-29)
 
 **MINOR (breaking in the test-helper package only).** `sdk/capabilities/authorization/authorizationtest`
 renames the two fixtures that were named after hosts:
@@ -13,9 +13,14 @@ Inside the fixtures, the team relation is now `staff_team` and the link permissi
 unchanged. No production package changes.
 
 **Migration:** a host that calls these constructors or looks fixtures up by name renames
-those calls. Release order: tag `sdk/v0.26.0`, then repin `pockets/authorization` and its
-`stores/*` modules. Their tests look the fixtures up by the new names, so their next tags
-must require `sdk >= v0.26.0`.
+those calls.
+
+**Release:** `sdk/v0.26.0` is an annotated tag on the #302 squash-merge commit `fdcc0f3c`. It
+was cut after a green `live-stores` dispatch on `main`, confirmed on origin and on the proxy,
+and cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache, the renamed
+fixtures resolved). `pockets/authorization` now requires `sdk v0.26.0` (#303) because its tests
+look the fixtures up by the new names. That is a test-only need, so it has no tag; the
+`stores/*` modules don't use the fixtures.
 
 ## Cleanup sweep: escaped-redaction refusal and the sprint's residual inventory (SOC 2 slice S9 — published 2026-10-29)
 
