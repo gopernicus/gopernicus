@@ -19,6 +19,7 @@ type oauthRefreshRecord struct {
 type refOAuth2 struct{ *reference }
 
 var _ oauth2.Repository = refOAuth2{}
+var _ oauth2.CodeAuthenticationRepository = refOAuth2{}
 var _ session.ManagementRepository = refOAuth2{}
 
 func (r refOAuth2) PutClient(ctx context.Context, c oauth2.Client) error {
@@ -50,11 +51,22 @@ func (r refOAuth2) GetClient(ctx context.Context, id string) (oauth2.Client, err
 }
 
 func (r refOAuth2) CreateCode(ctx context.Context, c oauth2.Code, approvingSessionID string) error {
+	return r.createCode(ctx, c, approvingSessionID, false)
+}
+
+// CreateCodeWithAuthentication copies the approving session's Authentication
+// under the same lock that checks it, as a SQL store copies the locked row.
+func (r refOAuth2) CreateCodeWithAuthentication(ctx context.Context, c oauth2.Code, approvingSessionID string) error {
+	return r.createCode(ctx, c, approvingSessionID, true)
+}
+
+func (r refOAuth2) createCode(ctx context.Context, c oauth2.Code, approvingSessionID string, withAuthentication bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	c.Authentication = session.AuthenticationMetadata{}
 	u, ok := r.users[c.UserID]
 	w, exists := r.sessions[approvingSessionID]
 	if !ok || !u.Active() || u.AuthRevision != c.AuthRevision || !exists || w.UserID != c.UserID || !w.FirstParty() || w.Expired(time.Now()) || c.Hash == "" || !c.ExpiresAt.After(time.Now()) || c.Delegation.AuthRevision != c.AuthRevision {
@@ -63,11 +75,25 @@ func (r refOAuth2) CreateCode(ctx context.Context, c oauth2.Code, approvingSessi
 	if _, exists := r.oauthCodes[c.Hash]; exists {
 		return sdk.ErrAlreadyExists
 	}
+	if withAuthentication {
+		c.Authentication = w.Authentication
+		c.Authentication.Methods = slices.Clone(w.Authentication.Methods)
+	}
 	r.oauthCodes[c.Hash] = c
 	return nil
 }
 
+// GetCode never reads the recorded Authentication, as a store without
+// migration 0030 cannot.
 func (r refOAuth2) GetCode(ctx context.Context, hash string) (oauth2.Code, error) {
+	c, err := r.GetCodeWithAuthentication(ctx, hash)
+	c.Authentication = session.AuthenticationMetadata{}
+	return c, err
+}
+
+func (r refOAuth2) ProbeSchema(ctx context.Context) error { return ctx.Err() }
+
+func (r refOAuth2) GetCodeWithAuthentication(ctx context.Context, hash string) (oauth2.Code, error) {
 	if err := ctx.Err(); err != nil {
 		return oauth2.Code{}, err
 	}
@@ -77,6 +103,7 @@ func (r refOAuth2) GetCode(ctx context.Context, hash string) (oauth2.Code, error
 	if !ok || hash == "" {
 		return oauth2.Code{}, oauth2.ErrInvalidGrant
 	}
+	c.Authentication.Methods = slices.Clone(c.Authentication.Methods)
 	return c, nil
 }
 

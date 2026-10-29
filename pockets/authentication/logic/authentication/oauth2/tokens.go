@@ -25,7 +25,11 @@ func (s *Service) RedeemCode(ctx context.Context, req CodeRequest) (_ TokenRespo
 	if !slices.Contains(client.RedirectURIs, req.RedirectURI) {
 		return TokenResponse{}, ErrInvalidGrant
 	}
-	code, err := s.repos.OAuth2.GetCode(ctx, hashSecret(req.Code))
+	getCode := s.repos.OAuth2.GetCode
+	if s.codeAuth != nil {
+		getCode = s.codeAuth.GetCodeWithAuthentication
+	}
+	code, err := getCode(ctx, hashSecret(req.Code))
 	if err != nil {
 		return TokenResponse{}, invalidGrantError(err)
 	}
@@ -37,6 +41,7 @@ func (s *Service) RedeemCode(ctx context.Context, req CodeRequest) (_ TokenRespo
 	proposed, _ := session.NewSession(code.UserID, s.config.SessionTTL, now)
 	proposed.Profile = session.ProfileDelegated
 	proposed.Delegation = code.Delegation
+	proposed.Authentication = code.Authentication
 	rawRefresh := session.NewDelegatedRefreshToken()
 	proposed.RefreshTokenHash = hashSecret(rawRefresh)
 	response, err := s.signAccess(proposed, false, time.Time{})
@@ -133,7 +138,7 @@ func (s *Service) Introspect(ctx context.Context, proof ClientProof, raw string)
 		s.auditGrantFailure(ctx, proof.clientID, ErrInvalidClient)
 		return Introspection{}, ErrInvalidClient
 	}
-	token, _, err := s.liveAccess(ctx, raw)
+	token, sess, err := s.liveAccess(ctx, raw)
 	if err != nil {
 		if errors.Is(err, ErrInvalidGrant) || errors.Is(err, ErrInvalidClient) {
 			s.auditGrantFailure(ctx, proof.clientID, err)
@@ -147,8 +152,12 @@ func (s *Service) Introspect(ctx context.Context, proof ClientProof, raw string)
 		s.auditGrantFailure(ctx, proof.clientID, ErrInvalidGrant)
 		return Introspection{Active: false}, nil
 	}
-	return Introspection{Active: true, TokenType: "Bearer", Subject: "user:" + token.UserID, UserID: token.UserID,
-		SessionID: token.SessionID, Issuer: token.Issuer, Audience: token.Audience, ClientID: token.ClientID, ExpiresAt: token.ExpiresAt.Unix()}, nil
+	out := Introspection{Active: true, TokenType: "Bearer", Subject: "user:" + token.UserID, UserID: token.UserID,
+		SessionID: token.SessionID, Issuer: token.Issuer, Audience: token.Audience, ClientID: token.ClientID, ExpiresAt: token.ExpiresAt.Unix()}
+	if level, kinds, ok := s.recordedAssurance(sess); ok {
+		out.Assurance, out.Methods = level, kinds
+	}
+	return out, nil
 }
 
 func (s *Service) Revoke(ctx context.Context, req RevokeRequest) error {

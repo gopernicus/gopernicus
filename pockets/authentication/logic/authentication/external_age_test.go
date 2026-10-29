@@ -220,3 +220,97 @@ func TestExternalAuthenticationAgeDenialRecordedOncePerToken(t *testing.T) {
 		}
 	})
 }
+
+// TestExternalRequireAuthenticationTime pins
+// ExternalProvider.RequireAuthenticationTime: under a bound, an identity whose
+// AuthenticatedAt is the iat fallback is denied authenticated_at_unasserted
+// before the subject resolves, every request, recorded once per token; an
+// asserted one passes; a missing time still reads missing, an over-age
+// asserted one still reads exceeded; without the flag the same unasserted
+// token passes (token-age bound only); the flag without a bound refuses at
+// construction; and the lifetime boot line names the posture.
+func TestExternalRequireAuthenticationTime(t *testing.T) {
+	required := func(c *ExternalConfig) {
+		c.Providers[0].MaxAuthenticationAge = 10 * time.Minute
+		c.Providers[0].RequireAuthenticationTime = true
+	}
+	identity := func(h *extHarness, subject string, asserted bool, age time.Duration) string {
+		return h.token(h.providerA, sdkauth.Identity{Subject: subject, Email: subject + "@example.test", EmailVerified: true,
+			AuthenticatedAt: h.clock.Now().Add(-age), AuthTimeAsserted: asserted, ExpiresAt: h.clock.Now().Add(30 * time.Minute)})
+	}
+	reasons := func(h *extHarness) []any {
+		var out []any
+		for _, e := range h.eventsOf(securityevent.TypeExternalSubjectDenied) {
+			out = append(out, e.Details["reason"])
+			if e.Details["provider"] != "alpha" {
+				t.Fatalf("denial details = %v, want provider alpha", e.Details)
+			}
+		}
+		return out
+	}
+
+	t.Run("unasserted denied once per token", func(t *testing.T) {
+		h := newExtHarness(t, required)
+		raw := identity(h, "s1", false, time.Minute)
+		for i := range 3 {
+			if _, _, err := h.engine.Verify(context.Background(), raw, TransportHeader); !errors.Is(err, ErrExternalSubjectDenied) || !errors.Is(err, sdk.ErrUnauthorized) {
+				t.Fatalf("Verify #%d = %v, want the 401 denial", i+1, err)
+			}
+		}
+		if got := reasons(h); len(got) != 1 || got[0] != externalReasonAuthTimeUnasserted {
+			t.Fatalf("denials = %v, want one %s", got, externalReasonAuthTimeUnasserted)
+		}
+		if h.store.provisionCalls.Load() != 0 {
+			t.Fatal("an unasserted token provisioned a user")
+		}
+	})
+
+	t.Run("asserted passes", func(t *testing.T) {
+		h := newExtHarness(t, required)
+		if _, _, err := h.engine.Verify(context.Background(), identity(h, "s1", true, time.Minute), TransportHeader); err != nil {
+			t.Fatalf("asserted Verify = %v, want a pass", err)
+		}
+	})
+
+	t.Run("order", func(t *testing.T) {
+		h := newExtHarness(t, required)
+		missing := extToken(h.providerA.issuer, "s-missing")
+		h.providerA.identities[missing] = sdkauth.Identity{Issuer: h.providerA.issuer, Subject: "s-missing"}
+		for _, raw := range []string{missing, identity(h, "s-old", true, time.Hour), identity(h, "s-old-iat", false, time.Hour)} {
+			_, _, _ = h.engine.Verify(context.Background(), raw, TransportHeader)
+		}
+		want := []any{externalReasonAuthTimeMissing, externalReasonAgeExceeded, externalReasonAuthTimeUnasserted}
+		if got := reasons(h); len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+			t.Fatalf("reasons = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("off admits the iat fallback", func(t *testing.T) {
+		h := newExtHarness(t, func(c *ExternalConfig) { c.Providers[0].MaxAuthenticationAge = 10 * time.Minute })
+		if _, _, err := h.engine.Verify(context.Background(), identity(h, "s1", false, time.Minute), TransportHeader); err != nil {
+			t.Fatalf("unasserted Verify without the flag = %v, want a pass", err)
+		}
+	})
+
+	t.Run("needs a bound, logs its posture", func(t *testing.T) {
+		build := func(p ExternalProvider) (string, error) {
+			var buf bytes.Buffer
+			s := newExtStore()
+			p.Name, p.Provider, p.RequireMFA = "idp", &extProvider{issuer: extIssuerA}, true
+			_, err := NewExternalAuthenticator(ExternalRepositories{Users: extUsers{s}, Identifiers: extIdentifiers{s}, ExternalSubjects: extSubjects{s}},
+				ExternalConfig{Providers: []ExternalProvider{p}}, environment.ModeDevelopment, WithExternalLogger(slog.New(slog.NewTextHandler(&buf, nil))))
+			return buf.String(), err
+		}
+		if _, err := build(ExternalProvider{RequireAuthenticationTime: true}); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("RequireAuthenticationTime without a bound = %v, want sdk.ErrInvalidInput", err)
+		}
+		logs, err := build(ExternalProvider{RequireAuthenticationTime: true, MaxAuthenticationAge: time.Hour})
+		if err != nil || !strings.Contains(logs, `max_authentication_age=1h0m0s revocation_checker=none fail_open=false authentication_time=asserted_required`) {
+			t.Fatalf("boot line: err = %v, logs:\n%s", err, logs)
+		}
+		logs, _ = build(ExternalProvider{MaxAuthenticationAge: time.Hour})
+		if !strings.Contains(logs, `fail_open=false authentication_time=any`) {
+			t.Fatalf("boot line without the flag:\n%s", logs)
+		}
+	})
+}

@@ -256,8 +256,9 @@ func TestIssueTokenRequireVerifiedEmailAllowsVerified(t *testing.T) {
 // --- bearer verification through the middleware trio ---
 
 // TestAccessTokenAssuranceClaim pins the aal claim: signed from the session's
-// level, omitted for a row that recorded none, only aal1/aal2 admitted on a
-// first-party token, and refused on a delegated one.
+// level, omitted for a row that recorded none, and only aal1/aal2 admitted on
+// either profile — a delegated token carrying a valid level is admitted with
+// it (S4d part 4), any other value refuses the token.
 func TestAccessTokenAssuranceClaim(t *testing.T) {
 	h := newHarness(t, nil)
 	for level, want := range map[session.AssuranceLevel]bool{session.AssuranceAAL1: true, session.AssuranceAAL2: true, session.AssuranceUnknown: false} {
@@ -289,9 +290,20 @@ func TestAccessTokenAssuranceClaim(t *testing.T) {
 	if _, _, ok := (&Service{}).parseAccessClaims(delegated); !ok {
 		t.Fatal("the delegated fixture does not parse")
 	}
-	delegated["aal"] = "aal2"
-	if _, _, ok := (&Service{}).parseAccessClaims(delegated); ok {
-		t.Error("a delegated token carrying aal was admitted")
+	if _, cred, _ := (&Service{}).parseAccessClaims(delegated); cred.Assurance != session.AssuranceUnknown {
+		t.Errorf("a delegated token without aal parsed as %q, want unknown", cred.Assurance)
+	}
+	for _, level := range []session.AssuranceLevel{session.AssuranceAAL1, session.AssuranceAAL2} {
+		delegated["aal"] = string(level)
+		if _, cred, ok := (&Service{}).parseAccessClaims(delegated); !ok || cred.Assurance != level || cred.Profile != session.ProfileDelegated {
+			t.Errorf("delegated aal %q parsed as %q %q, %v", level, cred.Assurance, cred.Profile, ok)
+		}
+	}
+	for _, bad := range []any{"aal3", "AAL2", "", 2, nil} {
+		delegated["aal"] = bad
+		if _, _, ok := (&Service{}).parseAccessClaims(delegated); ok {
+			t.Errorf("delegated aal %#v admitted", bad)
+		}
 	}
 
 	h.mustRegister(t, "aal@example.com", "password123456789")
@@ -314,8 +326,8 @@ func TestAccessTokenAssuranceClaim(t *testing.T) {
 // TestAccessTokenMethodsClaim pins the methods claim: signed from the session
 // row's method kinds (each once, in order), omitted for a row that recorded
 // none, parsed into Credential.Methods, refused when it names an unknown,
-// duplicate or external kind or is not a non-empty string array, and refused on
-// a delegated token.
+// duplicate or external kind or is not a non-empty string array — on a
+// delegated token exactly as on a first-party one (S4d part 4).
 func TestAccessTokenMethodsClaim(t *testing.T) {
 	h := newHarness(t, nil)
 	pw, _ := session.DescribeMethod(session.MethodPassword)
@@ -353,9 +365,15 @@ func TestAccessTokenMethodsClaim(t *testing.T) {
 	}
 	delegated := map[string]any{"user_id": "u1", "session_id": "s1", "session_profile": "delegated",
 		"exp": float64(time.Now().Add(time.Minute).Unix()), "iss": "https://as.example.test", "client_id": "client", "aud": "https://rs.example.test",
-		"methods": []any{"password"}}
-	if _, _, ok := (&Service{}).parseAccessClaims(delegated); ok {
-		t.Error("a delegated token carrying methods was admitted")
+		"aal": "aal2", "methods": []any{"password", "passkey"}}
+	if _, cred, ok := (&Service{}).parseAccessClaims(delegated); !ok || !slices.Equal(cred.Methods, []session.MethodKind{session.MethodPassword, session.MethodPasskey}) {
+		t.Errorf("delegated methods parsed as %v, %v", cred.Methods, ok)
+	}
+	for _, bad := range []any{[]any{}, []any{"sms_push"}, []any{"external"}, []any{"totp", "totp"}, []any{2}, "totp", nil} {
+		delegated["methods"] = bad
+		if _, _, ok := (&Service{}).parseAccessClaims(delegated); ok {
+			t.Errorf("delegated methods %#v admitted", bad)
+		}
 	}
 
 	h.mustRegister(t, "methods@example.com", "password123456789")

@@ -24,16 +24,16 @@ const (
 	// app-minted id (§1.1); the Live() tier and the logout fallback read it.
 	tokenClaimSessionID = "session_id"
 	tokenClaimProfile   = "session_profile"
-	// tokenClaimAssurance is the first-party access JWT's authenticator
-	// assurance (aal1 or aal2), signed from the session row's assurance_level.
-	// A row that recorded none signs no claim; a delegated token never carries
-	// one.
+	// tokenClaimAssurance is the access JWT's authenticator assurance (aal1 or
+	// aal2), signed from the session row's assurance_level. A row that recorded
+	// none signs no claim; a delegated token carries one only when its issuer
+	// set OAuth2 DelegatedAssurance and the grant's approval recorded a level.
 	tokenClaimAssurance = "aal"
-	// tokenClaimMethods is the first-party access JWT's method kinds (password,
-	// passkey, totp, …), signed from the session row's authentication methods,
-	// so an MFAConfig.Methods gate can tell which factor produced its AAL2. A
-	// row that recorded none signs no claim; a delegated token never carries
-	// one.
+	// tokenClaimMethods is the access JWT's method kinds (password, passkey,
+	// totp, …), signed from the session row's authentication methods, so an
+	// MFAConfig.Methods gate can tell which factor produced its AAL2. A row
+	// that recorded none signs no claim; a delegated token carries the
+	// approving session's, as for tokenClaimAssurance.
 	tokenClaimMethods = "methods"
 )
 
@@ -109,6 +109,8 @@ func (s *Service) verifyAccessClaims(raw string) (string, Credential, bool) {
 // parseAccessClaims reads verified claims. A first-party token must carry
 // exactly the configured iss and aud (SessionsConfig.Issuer/Audience) and no
 // other delegation claim; with neither configured it must carry no iss or aud.
+// Both profiles admit aal and methods under the same rules: an unknown value
+// refuses the token, an absent one reads AssuranceUnknown and no methods.
 func (s *Service) parseAccessClaims(claims map[string]any) (string, Credential, bool) {
 	userID, ok := claimString(claims[tokenClaimUserID])
 	if !ok {
@@ -128,8 +130,9 @@ func (s *Service) parseAccessClaims(claims map[string]any) (string, Credential, 
 		}
 		cred.Profile = session.Profile(profile)
 	}
-	rawAssurance, hasAssurance := claims[tokenClaimAssurance]
-	rawMethods, hasMethods := claims[tokenClaimMethods]
+	if cred.Assurance, cred.Methods, ok = claimAssurance(claims); !ok {
+		return "", Credential{}, false
+	}
 	if cred.Profile == session.ProfileFirstParty {
 		for _, name := range firstPartyDelegationMarkers {
 			if _, present := claims[name]; present {
@@ -139,26 +142,9 @@ func (s *Service) parseAccessClaims(claims map[string]any) (string, Credential, 
 		if !s.firstPartyIssuerMatches(claims) {
 			return "", Credential{}, false
 		}
-		if hasAssurance {
-			level, valid := claimString(rawAssurance)
-			switch session.AssuranceLevel(level) {
-			case session.AssuranceAAL1, session.AssuranceAAL2:
-			default:
-				valid = false
-			}
-			if !valid {
-				return "", Credential{}, false
-			}
-			cred.Assurance = session.AssuranceLevel(level)
-		}
-		if hasMethods {
-			if cred.Methods, ok = claimMethods(rawMethods); !ok {
-				return "", Credential{}, false
-			}
-		}
 		return userID, cred, true
 	}
-	if cred.Profile != session.ProfileDelegated || cred.SessionID == "" || hasAssurance || hasMethods {
+	if cred.Profile != session.ProfileDelegated || cred.SessionID == "" {
 		return "", Credential{}, false
 	}
 	if cred.accessExpiresAt, ok = claimExpiry(claims["exp"]); !ok {
@@ -211,6 +197,35 @@ func (s *Service) firstPartyIssuerMatches(claims map[string]any) bool {
 	}
 	audiences, ok := claimAudiences(rawAudience)
 	return hasAudience && ok && audiences[0] == s.tokenAudience
+}
+
+// claimAssurance reads the optional aal and methods claims: aal is aal1 or
+// aal2, methods as claimMethods. A present claim of any other shape refuses the
+// token (false); absent claims read AssuranceUnknown and no methods.
+func claimAssurance(claims map[string]any) (session.AssuranceLevel, []session.MethodKind, bool) {
+	var (
+		level session.AssuranceLevel
+		kinds []session.MethodKind
+	)
+	if raw, present := claims[tokenClaimAssurance]; present {
+		value, valid := claimString(raw)
+		level = session.AssuranceLevel(value)
+		switch level {
+		case session.AssuranceAAL1, session.AssuranceAAL2:
+		default:
+			valid = false
+		}
+		if !valid {
+			return "", nil, false
+		}
+	}
+	if raw, present := claims[tokenClaimMethods]; present {
+		var ok bool
+		if kinds, ok = claimMethods(raw); !ok {
+			return "", nil, false
+		}
+	}
+	return level, kinds, true
 }
 
 // claimMethods reads the methods claim: a non-empty array of distinct known

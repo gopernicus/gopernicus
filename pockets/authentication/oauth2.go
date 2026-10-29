@@ -16,6 +16,17 @@ type OAuth2Config struct {
 	Views   inbound.OAuthViews
 	// CapabilityDescription is trusted host copy describing the exposed tools.
 	CapabilityDescription string
+	// DelegatedAssurance (opt-in, SOC 2 S4d part 4) signs the approving
+	// session's aal and methods on delegated access tokens, so a grant approved
+	// at AAL2 passes RequireMFA on a route that admits its audience; the
+	// bundled admin and machine routes never admit a delegated token. New
+	// refuses it unless Repositories.OAuth2 implements
+	// oauth2.CodeAuthenticationRepository (ErrDelegatedAssuranceRequires) over
+	// migration 0030 (ErrDelegatedAssuranceSchemaMissing). It sets
+	// Server.DelegatedAssurance; see that field for the rollout and rollback.
+	// Every process that verifies delegated tokens must run a core that admits
+	// the claims before it is set.
+	DelegatedAssurance bool
 }
 
 // WithOAuth2 opts into a separate delegated session lifecycle. Omitting this
@@ -25,6 +36,7 @@ func WithOAuth2(value OAuth2Config) Option {
 	return func(c *constructorConfig) {
 		copy := value
 		copy.Server.ConfidentialSecretHashes = slices.Clone(value.Server.ConfidentialSecretHashes)
+		copy.Server.DelegatedAssurance = copy.Server.DelegatedAssurance || copy.DelegatedAssurance
 		c.OAuth2 = &copy
 	}
 }

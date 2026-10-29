@@ -260,8 +260,9 @@ const (
 	TypeExternalSubjectCollision = "external_subject_collision"
 	// TypeExternalSubjectDenied is a verified subject refused by policy. Details
 	// carry the reason: tenant, sign_in_method, unverified_email, no_identifier,
-	// invalid_identifier, inactive, revoked, authentication_age_exceeded or
-	// authenticated_at_missing (ExternalProvider.MaxAuthenticationAge).
+	// invalid_identifier, inactive, revoked, authentication_age_exceeded,
+	// authenticated_at_missing (ExternalProvider.MaxAuthenticationAge) or
+	// authenticated_at_unasserted (ExternalProvider.RequireAuthenticationTime).
 	TypeExternalSubjectDenied = "external_subject_denied"
 	// TypeExternalRevocationUnavailable is recorded once per provider outage
 	// episode, not once per affected request.

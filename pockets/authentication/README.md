@@ -131,6 +131,41 @@ Retain spent hashes through session expiry; host maintenance may call
 `repos.OAuth2.Prune(ctx, now)` afterward. Security events are best-effort and contain
 identifiers, never codes, tokens, state, verifier values or secrets.
 
+### OAuth2 delegated assurance (v0.37.0)
+
+`OAuth2Config{DelegatedAssurance: true}` (opt-in, default off) makes a delegated
+token carry the approving session's authentication: approval copies the browser
+session's `aal`, methods and authentication time into the code, redemption
+persists them on the delegated session, and every token minted from it —
+redeem, refresh and exchange — signs `aal` (`aal1` or `aal2`) and `methods` as a
+first-party token does. `POST /auth/oauth2/introspect` reports the same as `aal`
+and `methods`, only when recorded. A grant approved at AAL2 then passes
+`RequireMFA()` on a route that admits its audience (`Audience`,
+`DelegatedAudience`), and `MFAConfig.Methods` judges the approval's factor. **An
+MCP grant never reaches admin:** the bundled admin and machine groups name no
+audience, so admission refuses a delegated token before any MFA check.
+
+- **Store.** `Repositories.OAuth2` must implement
+  `oauth2.CodeAuthenticationRepository` over migration
+  `0030_oauth_code_authentication.sql` (three nullable columns on
+  `oauth_authorization_codes`); `New` refuses otherwise
+  (`ErrDelegatedAssuranceRequires`, `ErrDelegatedAssuranceSchemaMissing`; any
+  other probe failure is `sdk.ErrUnavailable`, naming only its kind). A host
+  without the flag is never probed. `storetest.RunOAuth2CodeAuthentication` is
+  the conformance runner (it skips a store without the interface).
+- **Fixed at approval.** Refresh never re-reads the level and exchange copies it,
+  never raises it, so AAL2 on a grant lasts as long as the grant
+  (`OAuth2Config.Server.SessionTTL`). Grants approved before the flag carry no
+  level (`AssuranceUnknown`) until the user re-consents.
+- **Verifiers first.** Since v0.37.0 every verifier admits `aal`/`methods` on a
+  delegated token (an unknown value refuses it); an older one refuses such a
+  token. Run every process that verifies delegated tokens on v0.37.0 or later
+  before setting the flag.
+- **Rollback.** Signing is gated on the flag too: turn it off, wait one
+  `AccessTTL` (no new token carries a level), then downgrade. Rolling back with
+  it on 401s delegated routes for at most `AccessTTL`.
+- Boot logs `auth: oauth2 delegated_assurance=on|off`.
+
 Production CIMD uses an explicit exact URL allowlist, HTTPS, bounded fetch/cache,
 no redirects or environment proxy, and connection-time nonpublic-address
 rejection. `WithClientTrust` adds a policy checked even on cache hits. Custom
@@ -2175,8 +2210,10 @@ unrecognised level ranks as unknown).
   other native method (password, codes, links, OAuth, a presence-only passkey)
   is AAL1. A token minted before `v0.26.0`, or from a row with an empty
   `assurance_level`, carries no claim and reads `AssuranceUnknown` until its next
-  refresh. An unknown `aal` value is refused, and so is a delegated token
-  carrying the claim. API keys stay `AssuranceUnknown`.
+  refresh. An unknown `aal` value is refused. A delegated token carries its
+  approving session's level only under `OAuth2Config.DelegatedAssurance`
+  ([OAuth2 delegated assurance](#oauth2-delegated-assurance-v0370)) and is
+  otherwise `AssuranceUnknown`. API keys stay `AssuranceUnknown`.
 - **A host's own `CredentialService`** must stamp `Assurance` the same way (AAL2
   when `Identity.MFA`, else AAL1) on external tokens, or every MFA gate denies
   them. Implementing `authenticationhttp.MFADenialRecorder` makes its denials
@@ -2642,7 +2679,8 @@ Access tokens carry a `methods` claim (the session's method kinds); a token
 minted before it existed has no source and is denied under a non-empty `Methods`
 until it refreshes — leave `Methods` empty through the rollout. A host that
 refuses a possession code composed onto a passwordless or OAuth primary sets
-`Methods: [passkey, idp]`. Delegated tokens refuse the claim. `Methods` also
+`Methods: [passkey, idp]`. A delegated token carries its approving session's
+kinds under `OAuth2Config.DelegatedAssurance`, read the same way. `Methods` also
 binds the second-factor gate: under a restriction its AAL2 tier accepts only a
 proof from an allowed source, and only factors of allowed sources count as
 held (a TOTP-only user under `[passkey]` adds a passkey at the bootstrap tier).
@@ -2954,26 +2992,34 @@ provider asserts it and `iat` otherwise. It is checked on every request, never
 through the login-record cache, after the tenant, email and MFA gates and
 before the subject resolves (a denied token never provisions), with a 60 s skew
 leeway: older → `external_subject_denied reason=authentication_age_exceeded`;
-no authentication time at all → `reason=authenticated_at_missing`; both carry
-`provider` and answer the provider's 401. Every request is denied, but the
-denial event is recorded once per token (keyed by its SHA-256 in the
-`LoginRecordCache` store, until the token expires; a cache fault records it
-again).
+no authentication time at all → `reason=authenticated_at_missing`; under
+`RequireAuthenticationTime`, a time that is only the `iat` fallback →
+`reason=authenticated_at_unasserted` (checked in that order: missing,
+unasserted, exceeded); each carries `provider` and answers the provider's 401.
+Every request is denied, but the denial event is recorded once per token (keyed
+by its SHA-256 in the `LoginRecordCache` store, until the token expires; a cache
+fault records it again).
 
-| Provider | What `MaxAuthenticationAge` bounds |
-|---|---|
-| Firebase (`auth_time` always asserted, the original sign-in) | an absolute cap on the provider session — the control that bounds "an external admin's IdP session survives revoke-all" |
-| go-oidc | `auth_time` when the IdP sends it (request it with `max_age`), else `iat` — then only the token's age, which `exp` already bounds |
-| auth0 | as go-oidc: an `auth_time` cap only when the tenant asserts it |
-| a provider sending neither claim | every token is denied (`authenticated_at_missing`); boot cannot detect it |
+| Provider | What `MaxAuthenticationAge` bounds | with `RequireAuthenticationTime` |
+|---|---|---|
+| Firebase (`auth_time` always asserted, the original sign-in) | an absolute cap on the provider session — the control that bounds "an external admin's IdP session survives revoke-all" | unchanged: always asserted |
+| go-oidc | `auth_time` when the IdP sends it (request it with `max_age`), else `iat` — then only the token's age, which `exp` already bounds | denied (`authenticated_at_unasserted`) unless the IdP sends `auth_time` — request it with `max_age` or `prompt` |
+| auth0 | as go-oidc: an `auth_time` cap only when the tenant asserts it | as go-oidc |
+| a provider sending neither claim | every token is denied (`authenticated_at_missing`); boot cannot detect it | the same |
+| a host-written `Provider` | as its `AuthenticatedAt` | denied unless it sets `Identity.AuthTimeAsserted` |
 
-The core cannot tell an asserted `auth_time` from the `iat` fallback; the sdk
-field that would (`Identity.AuthTimeAsserted`) is a later slice. In production a
+`ExternalProvider.RequireAuthenticationTime` (opt-in, default off) is how a
+bound becomes a sign-in bound only: the core reads
+`sdkauth.Identity.AuthTimeAsserted` (sdk v0.24.0), which the sdk's `OIDC`
+provider and Firebase set when `auth_time` was asserted and leave false on the
+`iat` fallback. Set without a positive `MaxAuthenticationAge` it is
+`sdk.ErrInvalidInput` at construction. Do not set it on a Google-ID-token
+issuer that does not request `auth_time`: every token is denied. In production a
 provider with no `RevocationChecker` and no bound WARNs
 `external_authentication_age=unbounded provider=<name> revocation_checker=none`.
 Each provider logs `auth: external provider lifetime provider=<name>
 max_authentication_age=off|<d> revocation_checker=wired|none
-fail_open=<bool>`, and production `RevocationFailOpen` is now the waiver line
+fail_open=<bool> authentication_time=asserted_required|any`, and production `RevocationFailOpen` is now the waiver line
 `auth: production posture requirement waived posture_waiver=RevocationFailOpen
 provider=<name>` (re-key log alerts on the old "external provider revocation
 fails open on the default liveness tier" text).

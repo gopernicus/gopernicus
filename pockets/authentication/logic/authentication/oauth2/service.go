@@ -22,6 +22,15 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
+const (
+	// claimAssurance and claimMethods are the delegated access token's
+	// authentication claims — the first-party names, read by the same verifier.
+	claimAssurance = "aal"
+	claimMethods   = "methods"
+	// delegatedAssuranceProbeTimeout bounds New's migration-0030 probe.
+	delegatedAssuranceProbeTimeout = 5 * time.Second
+)
+
 type Service struct {
 	repos    Repositories
 	signer   cryptids.JWTSigner
@@ -31,6 +40,9 @@ type Service struct {
 	now      func() time.Time
 	logger   *slog.Logger
 	events   *securityevent.Recorder
+	// codeAuth is Repositories.OAuth2 as a CodeAuthenticationRepository, set
+	// only under Config.DelegatedAssurance.
+	codeAuth CodeAuthenticationRepository
 }
 
 func New(repos Repositories, signer cryptids.JWTSigner, resolver ClientResolver, verifier TokenVerifier, mode environment.Mode, cfg Config, opts ...Option) (*Service, error) {
@@ -94,13 +106,56 @@ func New(repos Repositories, signer cryptids.JWTSigner, resolver ClientResolver,
 		return nil, fmt.Errorf("oauth2: access lifetime exceeds session lifetime: %w", sdk.ErrInvalidInput)
 	}
 	cfg.ConfidentialSecretHashes = slices.Clone(cfg.ConfidentialSecretHashes)
+	codeAuth, err := delegatedAssurance(repos, cfg)
+	if err != nil {
+		return nil, err
+	}
 	events := o.recorder
 	if events == nil {
 		// The zero generator selects the record-class default (UUIDv7) inside
 		// NewRecorder; a host wanting its own ids supplies WithSecurityEventRecorder.
 		events = securityevent.NewRecorder(repos.SecurityEvents, sdk.IDGenerator{}, o.now, o.logger)
 	}
-	return &Service{repos: repos, signer: signer, resolver: resolver, verifier: verifier, config: cfg, now: o.now, logger: o.logger, events: events}, nil
+	return &Service{repos: repos, signer: signer, resolver: resolver, verifier: verifier, config: cfg, now: o.now, logger: o.logger, events: events, codeAuth: codeAuth}, nil
+}
+
+// delegatedAssurance checks a set Config.DelegatedAssurance against the wiring:
+// Repositories.OAuth2 must implement CodeAuthenticationRepository, whose schema
+// probe runs under a bounded deadline. Only a probe reporting sdk.ErrNotFound
+// means migration 0030 is absent; any other failure is sdk.ErrUnavailable,
+// naming the error kind only, never the store's text. Without the flag nothing
+// here runs, so an unmigrated store boots.
+func delegatedAssurance(repos Repositories, cfg Config) (CodeAuthenticationRepository, error) {
+	if !cfg.DelegatedAssurance {
+		return nil, nil
+	}
+	codeAuth, ok := repos.OAuth2.(CodeAuthenticationRepository)
+	if !ok {
+		return nil, ErrDelegatedAssuranceRequires
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), delegatedAssuranceProbeTimeout)
+	defer cancel()
+	if err := codeAuth.ProbeSchema(ctx); err != nil {
+		if errors.Is(err, sdk.ErrNotFound) {
+			return nil, ErrDelegatedAssuranceSchemaMissing
+		}
+		return nil, fmt.Errorf("oauth2: probing the delegated-assurance schema (%s): %w", probeErrorKind(err), sdk.ErrUnavailable)
+	}
+	return codeAuth, nil
+}
+
+// probeErrorKind names a probe failure without its text, which a driver may
+// fill with a DSN or database URL.
+func probeErrorKind(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, sdk.ErrUnavailable):
+		return "unavailable"
+	}
+	return "store_error"
 }
 
 func (s *Service) Metadata() Metadata {
@@ -253,6 +308,12 @@ func (s *Service) signAccess(sess session.Session, exchanged bool, limit time.Ti
 	}
 	claims["aud"] = []string{audience}
 	claims["client_id"] = clientID
+	if level, kinds, ok := s.recordedAssurance(sess); ok {
+		claims[claimAssurance] = level
+		if len(kinds) > 0 {
+			claims[claimMethods] = kinds
+		}
+	}
 	raw, err := s.signer.Sign(claims, expires)
 	if err != nil {
 		return TokenResponse{}, err
@@ -262,6 +323,29 @@ func (s *Service) signAccess(sess session.Session, exchanged bool, limit time.Ti
 		response.IssuedTokenType = AccessTokenType
 	}
 	return response, nil
+}
+
+// recordedAssurance returns the delegated session's recorded level (aal1 or
+// aal2) and method kinds, each once in order. It reports false with the flag
+// off — so turning Config.DelegatedAssurance off stops new tokens carrying a
+// level — and for a session that recorded none or any other level.
+func (s *Service) recordedAssurance(sess session.Session) (string, []string, bool) {
+	auth := sess.Authentication
+	if !s.config.DelegatedAssurance || !auth.Recorded() {
+		return "", nil, false
+	}
+	switch auth.Assurance {
+	case session.AssuranceAAL1, session.AssuranceAAL2:
+	default:
+		return "", nil, false
+	}
+	var kinds []string
+	for _, m := range auth.Methods {
+		if m.Kind != "" && !slices.Contains(kinds, string(m.Kind)) {
+			kinds = append(kinds, string(m.Kind))
+		}
+	}
+	return string(auth.Assurance), kinds, true
 }
 
 func (s *Service) validDelegation(d session.Delegation) bool {

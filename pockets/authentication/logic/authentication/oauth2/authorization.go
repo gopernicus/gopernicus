@@ -69,7 +69,11 @@ func (s *Service) Approve(ctx context.Context, consentToken, userID, webSessionI
 		RedirectURI: approved.Request.RedirectURI, CodeChallenge: approved.Request.CodeChallenge,
 		CreatedAt: now, ExpiresAt: now.Add(s.config.CodeTTL),
 	}
-	if err := s.repos.OAuth2.CreateCode(ctx, code, webSessionID); err != nil {
+	create := s.repos.OAuth2.CreateCode
+	if s.codeAuth != nil {
+		create = s.codeAuth.CreateCodeWithAuthentication
+	}
+	if err := create(ctx, code, webSessionID); err != nil {
 		return AuthorizationResult{}, err
 	}
 	s.audit(ctx, TypeConsentApproved, userID, webSessionID, approved.Request.ClientID)
