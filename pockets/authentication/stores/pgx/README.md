@@ -43,7 +43,7 @@ option — SQLite has no schemas** (a host switches dialect by one import + one
 
 | member | shape |
 |---|---|
-| `Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repositories, error)` | the full bundle including `OAuth2` and `SessionManagement`, no migration side effects — probes canonical tables and ALTER-added columns in migration order, and errors (`sdk.ErrNotFound`, naming the table or column + the `authentication` migration source) when one is missing; an infrastructure/query failure is never misreported as a missing table; it refuses a database without the `0024` functions the same way, naming the file; it never probes `0025`, `0026`, `0027` or `0029` (see [Passkeys](#passkeys-0025), [TOTP](#totp-0026), [Service-account status](#service-account-status-0027) and [Session activity](#session-activity-0029)). Last it runs `db.ProbeAppendOnly(ctx, AuditTables(opts...)...)` under the `RuntimeMode` `db` was opened with (see [Audit rail](#audit-rail-0021-and-0022) and [Retention](#retention-0023-and-0024)). The bundle fills `Maintenance` (`NewMaintenanceStore`) and `UserErasure` (`NewErasureStore`); `ServiceAccountStore` implements `serviceaccount.CascadeDeleter` |
+| `Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repositories, error)` | the full bundle including `OAuth2` and `SessionManagement`, no migration side effects — probes canonical tables and ALTER-added columns in migration order, and errors (`sdk.ErrNotFound`, naming the table or column + the `authentication` migration source) when one is missing; an infrastructure/query failure is never misreported as a missing table; it refuses a database without the `0024` functions the same way, naming the file; it never probes `0025`, `0026`, `0027`, `0029` or `0030` (see [Passkeys](#passkeys-0025), [TOTP](#totp-0026), [Service-account status](#service-account-status-0027), [Session activity](#session-activity-0029) and [OAuth2 code authentication](#oauth2-code-authentication-0030)). Last it runs `db.ProbeAppendOnly(ctx, AuditTables(opts...)...)` under the `RuntimeMode` `db` was opened with (see [Audit rail](#audit-rail-0021-and-0022) and [Retention](#retention-0023-and-0024)). The bundle fills `Maintenance` (`NewMaintenanceStore`) and `UserErasure` (`NewErasureStore`); `ServiceAccountStore` implements `serviceaccount.CascadeDeleter` |
 | `AuditTables(opts ...Option) []pgxdb.AppendOnlyTable` | the append-only tables this store owns — `security_events`, schema-qualified under `WithSchema`, verified against the trigger function `0022` ships, with the one `DefinerFunction` `0024` ships (`security_events_purge_before(pg_catalog.timestamptz, pg_catalog.int4)`). A migrator preflights the runtime role with `pgxdb.InspectTablePrivileges(ctx, q, role, pgx.AuditTables(opts...)...)`, deciding exactly as the boot probe will |
 | `Option` | construction option, accepted by `Repositories` and by every `NewXStore(db, opts ...Option)` constructor, so a host composing its own bundle gets the same seam |
 | `WithSchema(s pgxdb.Schema) Option` | places every table these stores touch in `s`; the zero `Schema` is the default and renders today's unqualified SQL byte-for-byte. It never panics — validation happened in `pgxdb.NewSchema` at the host |
@@ -90,7 +90,7 @@ change outside this option. With a schema set the probe IS scoped to it.
 ## Migrations
 
 `migrations/*.sql` carry the **identical version (filename) set** as the turso
-tree — `0001`–`0029` with `0017` and `0028` absent (twenty-one tables; auth owns no delivery table). Same filename
+tree — `0001`–`0030` with `0017` and `0028` absent (twenty-one tables; auth owns no delivery table). Same filename
 = same logical schema step; content is per-dialect. After export, the host owns
 the final migration stream and applies it pre-boot through its own ledger.
 
@@ -188,6 +188,43 @@ DISTINCT FROM` the observed stamp, and the observed `rotation_count`. All four
 run on the pool, never on a transaction the context carries. The only
 supported manual write is the grandfather reset, `UPDATE sessions SET
 last_rotated_at = NULL …`; never backfill a value.
+
+### OAuth2 code authentication (`0030`)
+
+**`0030_oauth_code_authentication.sql` ships; it is required only when
+`OAuth2Config.DelegatedAssurance` is set** — apply it ahead of time to turn
+delegated assurance on later. It begins with `SET LOCAL lock_timeout = '5s'` and
+adds three nullable columns to `oauth_authorization_codes` in the `sessions`
+encodings — `authenticated_at TIMESTAMPTZ`, `authentication_methods TEXT` (the
+JSON method array) and `assurance_level TEXT` — each `ADD COLUMN IF NOT EXISTS`,
+NULL for every existing row. No index: the table holds only short-lived codes
+and is pruned. **On lock timeout, re-run `make migrate`** (the file applies
+whole or not at all). `Repositories` never probes it, and every other statement
+names its columns explicitly, so an older binary keeps working on a migrated
+table. `OAuth2Store` implements `oauth2.CodeAuthenticationRepository`; the
+pocket calls its `ProbeSchema` only when the flag is set, and a database
+without the columns then refuses the boot with
+`ErrDelegatedAssuranceSchemaMissing`, naming the file. The probe resolves the
+table exactly as the store's statements do (the qualified name under
+`WithSchema`, else the `search_path`). `CreateCodeWithAuthentication` is
+`CreateCode`'s transaction — the `users` row lock, then the approving `sessions`
+row `FOR UPDATE` — and copies that locked row's authentication columns into the
+code row it inserts: no second lock and no new lock order, so a concurrent
+refresh rotation of the approving session never deadlocks against it. A part
+the session did not record is written NULL. `GetCodeWithAuthentication` reads
+the code and the copy in one `SELECT` over a wired-only column list (NULL reads
+back as zero). Plain `CreateCode` and `GetCode` never name the columns.
+`RedeemCode` is unchanged: the core carries the copy onto the delegated session
+it persists. `storetest.RunOAuth2CodeAuthentication` is its conformance suite.
+
+**Rollout (in this order).** (1) Every process that verifies delegated tokens
+— the issuing binary and any separate resource server or sidecar — runs
+`pockets/authentication` ≥ v0.37.0, which admits `aal`/`methods` on delegated
+tokens; (2) apply `0030`; (3) set `OAuth2Config.DelegatedAssurance`. Grants
+approved before the flag keep NULL columns and stay `AssuranceUnknown` until the
+user re-consents. **Rollback:** turn the flag off, wait one `AccessTTL`, then
+downgrade. A `--posture` host that bumps to this store version copies `0030`
+into its ledger (byte-identical, guard P9) even with the flag off.
 
 ### Rehash on login
 
