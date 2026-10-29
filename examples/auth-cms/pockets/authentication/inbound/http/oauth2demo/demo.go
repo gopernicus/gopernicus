@@ -59,6 +59,10 @@ type identityResult struct {
 	ClientID       string `json:"client_id"`
 	OriginClientID string `json:"origin_client_id,omitempty"`
 	ActorID        string `json:"actor_id,omitempty"`
+	// Assurance and Methods are the grant's recorded authentication as
+	// introspection reports it (OAuth2Config.DelegatedAssurance).
+	Assurance string   `json:"aal,omitempty"`
+	Methods   []string `json:"methods,omitempty"`
 }
 
 func New(config Config, authenticator *authhttp.Adapter, identity IdentityReader) (*Demo, error) {
@@ -89,6 +93,10 @@ func (d *Demo) Register(mount pockets.Mount) {
 	r.Handle(http.MethodGet, prefix+"/mcp", d.mcp)
 	r.Handle(http.MethodGet, prefix+"/api", d.api, d.auth.RequirePrincipal(authhttp.Audience(d.config.BaseURL+prefix+"/api"), authhttp.Transports(authhttp.TransportHeader)))
 }
+
+// MCPResource is the resource identifier the demo client's tokens are issued
+// for: the audience a host route admits to accept the MCP connection's token.
+func (d *Demo) MCPResource() string { return d.config.BaseURL + prefix + "/mcp" }
 
 func (d *Demo) metadata(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"client_id": d.config.ClientID, "client_name": "Local MCP demo", "redirect_uris": []string{d.config.BaseURL + prefix + "/callback"},
@@ -232,7 +240,11 @@ func (d *Demo) call(w http.ResponseWriter, r *http.Request) {
 		d.render(w, r, "This connection was refused. Reconnect if it was revoked or expired.")
 		return
 	}
-	d.render(w, r, fmt.Sprintf("API call succeeded as %s using connection %s.", identity.UserID, identity.SessionID))
+	assurance := identity.Assurance
+	if assurance == "" {
+		assurance = "not recorded"
+	}
+	d.render(w, r, fmt.Sprintf("API call succeeded as %s using connection %s (assurance %s, methods %s).", identity.UserID, identity.SessionID, assurance, strings.Join(identity.Methods, ", ")))
 }
 
 func (d *Demo) refresh(w http.ResponseWriter, r *http.Request) {
@@ -299,6 +311,7 @@ func (d *Demo) mcp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Connection identity mismatch.", http.StatusBadGateway)
 		return
 	}
+	identity.Assurance, identity.Methods = active.Assurance, active.Methods
 	writeJSON(w, identity)
 }
 

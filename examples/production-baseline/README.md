@@ -50,7 +50,13 @@ runner) and `workshop/`. There is no `internal/`.
    `PUBLIC_BASE_URL`, the one external provider with `MaxAuthenticationAge`
    from `IDP_MAX_AUTHENTICATION_AGE` (default 12 h: a token whose holder signed
    in at the provider longer ago is 401 on every request; this host wires no
-   native sessions, so `AUTH_IDLE_TIMEOUT` is not read), and
+   native sessions, so `AUTH_IDLE_TIMEOUT` is not read) and
+   `RequireAuthenticationTime` from `IDP_REQUIRE_AUTHENTICATION_TIME` (default
+   false: the bound ages a token by its `auth_time`, else its `iat`; true
+   refuses a token without `auth_time` with 401
+   `authenticated_at_unasserted`, so the bound is a sign-in bound; true with a
+   zero bound refuses boot, and the provider lifetime line says
+   `authentication_time=asserted_required|any`), and
    `WithAuditWriteObserver` logging lost security-event rows at ERROR,
    throttled to one line a minute; `WithAdministration` with a
    `UserAdminCheck` admitting the global `admin` role and
@@ -124,6 +130,7 @@ never migrates. Its files are the host's:
 | `0033_totp.sql` | `pockets/authentication/stores/pgx/migrations` `0026`, renumbered; required only when `WithTOTP` is wired (applied here ahead of time, so TOTP can be toggled on later) |
 | `0034_service_account_status.sql` | `pockets/authentication/stores/pgx/migrations` `0027`, renumbered; required only when `AdministrationConfig.ServiceAccountStatus` is set (applied here ahead of time, so the service-account status can be turned on later) |
 | `0035_session_activity.sql` | `pockets/authentication/stores/pgx/migrations` `0029`, renumbered; required only when `SessionsConfig.IdleTimeout` is wired (this host wires none: it signs users in at the provider and mints no native sessions, so `AUTH_IDLE_TIMEOUT` is not read; the copy keeps the ledger whole for a host that does; on lock timeout, re-run `make migrate`) |
+| `0036_oauth_code_authentication.sql` | `pockets/authentication/stores/pgx/migrations` `0030`, renumbered; required only when `OAuth2Config.DelegatedAssurance` is set (this host wires no OAuth2 server; the copy keeps the ledger whole, and guard P9 wants it once the pgx pin is v0.19.0; on lock timeout, re-run `make migrate`) |
 
 When a store ships a new migration, copy it in as the next number. Never
 renumber a file once it is applied: the filename is its ledger identity.

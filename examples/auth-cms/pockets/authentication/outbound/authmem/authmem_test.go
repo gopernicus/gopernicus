@@ -82,3 +82,11 @@ func TestPasswordHashUpgrade(t *testing.T) {
 		return New().Repositories()
 	})
 }
+
+// TestOAuth2CodeAuthentication runs the delegated-assurance suite, separate
+// from Run, against authmem.
+func TestOAuth2CodeAuthentication(t *testing.T) {
+	storetest.RunOAuth2CodeAuthentication(t, func(t *testing.T) auth.Repositories {
+		return New().Repositories()
+	})
+}

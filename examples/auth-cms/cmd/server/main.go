@@ -407,8 +407,12 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 		if !ok {
 			return fmt.Errorf("OAuth demo requires consent and session views")
 		}
+		// DelegatedAssurance rides the demo flag: authmem implements
+		// oauth2.CodeAuthenticationRepository and has no migration 0030 to miss,
+		// so a grant carries the approving session's aal/methods.
 		authOptions = append(authOptions, auth.WithOAuth2(auth.OAuth2Config{Server: oauthFixture.Config(), Clients: oauthFixture, Views: oauthViews,
-			CapabilityDescription: "Read your user and connection identifiers through the local MCP demonstration. This demo does not change application data."}))
+			CapabilityDescription: "Read your user and connection identifiers through the local MCP demonstration. This demo does not change application data.",
+			DelegatedAssurance:    true}))
 	}
 	// AUTH_EXTERNAL_DEMO=1 (development only) wires a dev identity provider beside
 	// the native credentials and mounts the hybrid routes after the pocket (demo.go).
@@ -478,6 +482,7 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 			return err
 		}
 		demo.Register(mount)
+		registerOAuth2MFADemoRoute(router, authSvc.HTTP, authSvc.Authentication, demo.MCPResource())
 		log.InfoContext(ctx, "Local OAuth connection demo enabled", "url", srv.Origin()+"/oauth-demo")
 	}
 	if external != nil {
@@ -1140,6 +1145,12 @@ func buildAuthConfig(log *slog.Logger, mode environment.Mode, granter invitation
 			// and can never remove the pocket-owned fixed protections (ui-goth GOTH-7.2).
 
 			HTMLPolicy: authViews.HTMLPolicy(),
+			// This host mounts the native /auth/login, so it names it explicitly: a
+			// Browser() set that also admits external tokens (the OAuth2 authorize
+			// page under AUTH_OAUTH2_DEMO + AUTH_EXTERNAL_DEMO) refuses the implicit
+			// default, which an external-only host would not serve.
+
+			BrowserLoginPath: "/auth/login",
 		},
 		InvitationsConfig: auth.InvitationsConfig{
 			// AccessTokenTTL / RefreshTTL are left zero: AUTH_ACCESS_TOKEN_TTL and

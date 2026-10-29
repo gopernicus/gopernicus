@@ -452,13 +452,15 @@ sources the gates admit.
   passkey sign-in or step-up, or after a TOTP or recovery-code step-up (since
   v0.28.0); password, code, magic-link and OAuth sessions are AAL1. A token minted before the upgrade carries no `aal` and reads `unknown`
   until it refreshes; a legacy session row without an assurance level omits
-  the claim; an unknown `aal` value is rejected; a delegated token
-  carrying `aal` is refused. API keys stay `unknown` (S4d).
+  the claim; an unknown `aal` value is rejected. Since v0.37.0 a delegated
+  token may carry `aal` too, signed only under
+  [`OAuth2Config.DelegatedAssurance`](#added-by-s4d-part-4-delegated-assurance-and-asserted-authentication-time);
+  without it a delegated token reads `unknown`. API keys stay `unknown` (S4d).
 - **The `methods` claim** (since v0.28.0). Every native mint also signs
   `methods`, the session row's method kinds (`password`, `passkey`, `totp`,
   `recovery_code`, …), beside `aal`, and `Credential.Methods` reads it. An
-  unknown kind is rejected, and a delegated token carrying `methods` is
-  refused, as for `aal`. An external token's source is `idp`.
+  unknown kind is rejected. A delegated token carries `methods` under the same
+  rule as `aal` (since v0.37.0). An external token's source is `idp`.
 - **`MFAConfig.Methods`** (since v0.28.0) restricts the AAL2 sources every MFA
   gate admits: `MFAMethodPasskey`, `MFAMethodTOTP` (recovery codes count under
   it) and `MFAMethodIdP`. Empty admits any source. A first-party AAL2 token
@@ -835,7 +837,8 @@ floor under an overridden sensitive group. With the defaults (idle off, access 1
   `external_subject_denied reason=authentication_age_exceeded`, or
   `reason=authenticated_at_missing` when the token carries neither claim. The event is
   recorded once per token. On a provider that asserts `auth_time` (Firebase) it caps the
-  provider's session; on an `iat`-only provider it bounds token age only. In production a
+  provider's session; on an `iat`-only provider it bounds token age only (since v0.37.0,
+  `RequireAuthenticationTime` refuses such tokens instead; see S4d part 4 below). In production a
   provider with no `RevocationChecker` and no bound WARNs `external_authentication_age=unbounded`.
 - **Boot lines.** `auth: session lifetime access_token_ttl=… refresh_ttl=… idle_timeout=off|<d>
   idle_source=config|default activity=refresh_rotation idle_scope=first_party
@@ -950,6 +953,66 @@ cost, and a host setting only the single key variables is unchanged.
 The pocket README's "Key rings and the `auth: keys` boot line (SOC 2 S4d part 3)" and "Host
 password policy" sections are the reference.
 
+## Added by S4d part 4 (delegated assurance and asserted authentication time)
+
+Authentication v0.37.0 with sdk v0.24.0, firebase v0.3.0 and stores pgx v0.19.0 / Turso v0.18.0
+(SOC 2 slice S4d part 4; views/goth is unchanged). Both controls are host opt-in. The one
+unconditional change is on the verifier side, and it only admits: v0.37.0 accepts `aal` and
+`methods` on a delegated token, a shape nobody mints until a host sets the flag.
+
+- **Delegated assurance.** `OAuth2Config{DelegatedAssurance: true}` makes an MCP grant carry
+  the approving browser session's authentication. Approval copies the session's `aal`, methods
+  and authentication time into the authorization code, in the same transaction that already
+  locks the session. Redemption persists them on the delegated session. Every token minted from
+  that session (redeem, refresh, exchange) signs `aal` and `methods` as a first-party token
+  does, and `POST /auth/oauth2/introspect` reports them as `aal` and `methods`, only when
+  recorded. A grant approved at AAL2 then passes `RequireMFA()` on a route that admits its
+  audience (`Audience`, `DelegatedAudience`); `MFAConfig.Methods` judges the approval's factor.
+  **An MCP grant never reaches admin:** the bundled admin and machine groups name no audience,
+  so admission refuses a delegated token before any MFA check.
+- **Store and migration.** `Repositories.OAuth2` must implement the optional
+  `oauth2.CodeAuthenticationRepository`, and the database must carry migration
+  `0030_oauth_code_authentication.sql` (three nullable columns on `oauth_authorization_codes`;
+  additive, NULL on every existing row). With the flag set, `New` refuses a store without the
+  interface (`ErrDelegatedAssuranceRequires`) or without the columns
+  (`ErrDelegatedAssuranceSchemaMissing`, naming 0030); any other probe failure is
+  `sdk.ErrUnavailable`. A host without the flag is never probed. `--posture` hosts copy 0030
+  into their ledger when the pgx pin reaches v0.19.0, even with the flag off (guard P9).
+  `storetest.RunOAuth2CodeAuthentication` is the conformance runner (outside `Run`; it skips a
+  store without the interface). The auth-cms memory store implements it.
+- **Fixed at approval (R-4).** A delegated grant's level is the approving session's at consent.
+  Refresh never re-reads it and exchange copies it, never raises it, so an AAL2 grant stays AAL2
+  for as long as the grant lives, `OAuth2Config.Server.SessionTTL` (thirty days by default). No
+  age bound applies yet (follow-up: `DelegatedAssuranceMaxAge`). A host that needs a shorter
+  window shortens `SessionTTL`. Grants approved before the flag carry no level
+  (`AssuranceUnknown`) until the user re-consents.
+- **Rollout and rollback.** Verifiers first, then 0030, then the flag, then re-consent; turning
+  it back off stops new tokens carrying a level, so wait one `AccessTTL` before a downgrade
+  (*Operations runbooks*, "Enable delegated assurance"). Boot logs
+  `auth: oauth2 delegated_assurance=on|off`.
+- **Asserted authentication time.** `sdkauth.Identity.AuthTimeAsserted` (sdk v0.24.0) says
+  whether `AuthenticatedAt` came from `auth_time` (or the provider's own sign-in instant) or
+  only from the `iat` fallback. The sdk's `OIDC` provider sets it when `auth_time` is present
+  and valid. Firebase v0.3.0 always sets it. A host-written `Provider` leaves it false unless it
+  sets it, and an unkeyed `Identity{...}` literal stops compiling.
+- **`ExternalProvider.RequireAuthenticationTime`** (opt-in, default off, R-5) turns a
+  `MaxAuthenticationAge` bound into a sign-in bound: an identity whose time is only the `iat`
+  fallback is denied before the subject resolves, with one
+  `external_subject_denied reason=authenticated_at_unasserted provider=<name>` row per token
+  (the same once-per-token dedupe as the age reasons). Set without a positive bound it is
+  `sdk.ErrInvalidInput` at construction. The provider lifetime boot line gains
+  `authentication_time=asserted_required|any`. Firebase hosts may set it at once. A
+  Google-ID-token or other `iat`-only issuer must request `auth_time` (`max_age`) first, or
+  every token is denied. production-baseline reads it from `IDP_REQUIRE_AUTHENTICATION_TIME`.
+- **`FreshAuth` and `iat` (R-6).** `FreshAuth(within)` is unchanged: it still reads
+  `AuthenticatedAt` including the `iat` fallback, so on a provider that omits `auth_time` a
+  freshly issued token passes it however long ago the person signed in. Set
+  `RequireAuthenticationTime` (with a bound) on that provider to refuse such tokens before any
+  route option runs. A `FreshAuth` mode that honours the flag is a follow-up.
+
+The pocket README's "OAuth2 delegated assurance (v0.37.0)" and "External authentication age"
+sections are the reference.
+
 ## Production posture
 
 Production has no implicit mode and fails closed on incomplete security wiring. Among other requirements:
@@ -1062,7 +1125,7 @@ honor the same field. Its zero value keeps the existing password form.
 
 ## Not shipped
 
-There is no native `MFAConfig.Required` `all` and no enrollment grace yet (the follow-on `s4c2-native-all`); no `aal` or `methods` on delegated tokens, no API keys under MFA gates and no re-sealing of TOTP secrets on ring rotation (S4d); no SHA-256 or 8-digit TOTP, no push or SMS second factor, and TOTP is never a sign-in method; no username-first passkey sign-in; and no attestation or AAGUID allow-list. MFA that an external identity provider asserted is enforced (see [Assurance and MFA](#assurance-and-mfa)).
+There is no native `MFAConfig.Required` `all` and no enrollment grace yet (the follow-on `s4c2-native-all`); no age bound on a delegated grant's `aal` (it is fixed at approval; S4d part 4), no API keys under MFA gates and no re-sealing of TOTP secrets on ring rotation (S4d); no SHA-256 or 8-digit TOTP, no push or SMS second factor, and TOTP is never a sign-in method; no username-first passkey sign-in; and no attestation or AAGUID allow-list. MFA that an external identity provider asserted is enforced (see [Assurance and MFA](#assurance-and-mfa)).
 
 ## OAuth client transports and trust
 

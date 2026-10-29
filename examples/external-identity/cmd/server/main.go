@@ -107,6 +107,11 @@ func newHandler(ctx context.Context, origin string, trustedProxyCount int, mode 
 	// MaxAuthenticationAge is left zero (unbounded) here; a real provider
 	// would set it, e.g. MaxAuthenticationAge: 12 * time.Hour, to cap how long
 	// ago the token's holder signed in at the provider (auth_time, else iat).
+	// Adding RequireAuthenticationTime: true beside a bound refuses a token
+	// without auth_time (authenticated_at_unasserted), so the bound is a
+	// sign-in bound rather than a token-age one. An OIDC provider must send
+	// auth_time when the sign-in requests max_age, so request it before setting
+	// the flag.
 	store := memstore.New(log)
 	engine, err := authlogic.NewExternalAuthenticator(store.Repositories(), authlogic.ExternalConfig{
 		Providers: []authlogic.ExternalProvider{

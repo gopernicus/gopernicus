@@ -260,6 +260,51 @@ func TestProductionLegacyJWTKeyWarns(t *testing.T) {
 	}
 }
 
+// TestProductionRequireAuthenticationTime reads IDP_REQUIRE_AUTHENTICATION_TIME
+// the way run does: unset is off (the lifetime line says authentication_time=any),
+// true under the 12h bound boots with no WARN and says asserted_required, and
+// true with a zero bound refuses boot with sdk.ErrInvalidInput.
+func TestProductionRequireAuthenticationTime(t *testing.T) {
+	for _, tc := range []struct {
+		name, require, age string
+		want               string
+		refused            bool
+	}{
+		{name: "default", require: "", age: "", want: "authentication_time=any"},
+		{name: "on", require: "true", age: "", want: "authentication_time=asserted_required"},
+		{name: "on without a bound", require: "true", age: "0", refused: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			c := productionBaseline(t)
+			t.Setenv("IDP_REQUIRE_AUTHENTICATION_TIME", tc.require)
+			t.Setenv("IDP_MAX_AUTHENTICATION_AGE", tc.age)
+			var age authenticationAgeConfig
+			if err := environment.ParseEnvTags("", &age); err != nil {
+				t.Fatal(err)
+			}
+			c.maxAuthenticationAge, c.requireAuthenticationTime = age.MaxAuthenticationAge, age.RequireAuthenticationTime
+			c.log = slog.New(slog.NewTextHandler(&logs, nil))
+			_, err := mount(web.NewWebHandler(), c)
+			if tc.refused {
+				if !errors.Is(err, sdk.ErrInvalidInput) || !strings.Contains(err.Error(), "RequireAuthenticationTime") {
+					t.Fatalf("mount = %v, want sdk.ErrInvalidInput naming RequireAuthenticationTime", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("production baseline: %v", err)
+			}
+			if !strings.Contains(logs.String(), `msg="auth: external provider lifetime" provider=`+providerName+` max_authentication_age=12h0m0s`) || !strings.Contains(logs.String(), tc.want) {
+				t.Errorf("the provider lifetime line lacks %q:\n%s", tc.want, logs.String())
+			}
+			if strings.Contains(logs.String(), "level=WARN") {
+				t.Errorf("production logs a WARN:\n%s", logs.String())
+			}
+		})
+	}
+}
+
 // TestProductionRefusesEachOmission breaks one production input of the
 // baseline at a time and asserts the refusal by its stable error.
 func TestProductionRefusesEachOmission(t *testing.T) {

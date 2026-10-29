@@ -20,6 +20,7 @@ type oauth2Repo struct{ *data }
 
 var _ oauth2.Repository = oauth2Repo{}
 var _ session.ManagementRepository = oauth2Repo{}
+var _ oauth2.CodeAuthenticationRepository = oauth2Repo{}
 
 func (r oauth2Repo) PutClient(ctx context.Context, c oauth2.Client) error {
 	if err := ctx.Err(); err != nil {
@@ -50,6 +51,17 @@ func (r oauth2Repo) GetClient(ctx context.Context, id string) (oauth2.Client, er
 }
 
 func (r oauth2Repo) CreateCode(ctx context.Context, c oauth2.Code, approvingSessionID string) error {
+	return r.createCode(ctx, c, approvingSessionID, false)
+}
+
+// CreateCodeWithAuthentication is CreateCode plus the approving session's
+// Authentication, copied under the same lock that checks the session.
+// c.Authentication is ignored.
+func (r oauth2Repo) CreateCodeWithAuthentication(ctx context.Context, c oauth2.Code, approvingSessionID string) error {
+	return r.createCode(ctx, c, approvingSessionID, true)
+}
+
+func (r oauth2Repo) createCode(ctx context.Context, c oauth2.Code, approvingSessionID string, withAuthentication bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -62,6 +74,10 @@ func (r oauth2Repo) CreateCode(ctx context.Context, c oauth2.Code, approvingSess
 	}
 	if _, exists := r.oauthCodes[c.Hash]; exists {
 		return sdk.ErrAlreadyExists
+	}
+	c.Authentication = session.AuthenticationMetadata{}
+	if withAuthentication {
+		c.Authentication = cloneSession(w).Authentication
 	}
 	r.oauthCodes[c.Hash] = c
 	return nil
@@ -77,8 +93,28 @@ func (r oauth2Repo) GetCode(ctx context.Context, hash string) (oauth2.Code, erro
 	if !ok || hash == "" {
 		return oauth2.Code{}, oauth2.ErrInvalidGrant
 	}
+	c.Authentication = session.AuthenticationMetadata{}
 	return c, nil
 }
+
+// GetCodeWithAuthentication is GetCode plus the recorded Authentication (zero
+// when the code was created without it).
+func (r oauth2Repo) GetCodeWithAuthentication(ctx context.Context, hash string) (oauth2.Code, error) {
+	if err := ctx.Err(); err != nil {
+		return oauth2.Code{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	c, ok := r.oauthCodes[hash]
+	if !ok || hash == "" {
+		return oauth2.Code{}, oauth2.ErrInvalidGrant
+	}
+	c.Authentication.Methods = append([]session.AuthenticationMethod(nil), c.Authentication.Methods...)
+	return c, nil
+}
+
+// ProbeSchema always succeeds: memory has no migration 0030 to miss.
+func (r oauth2Repo) ProbeSchema(context.Context) error { return nil }
 
 func (r oauth2Repo) RedeemCode(ctx context.Context, expected oauth2.Code, proposed session.Session, now time.Time) (session.Session, error) {
 	if err := ctx.Err(); err != nil {
