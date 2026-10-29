@@ -6261,3 +6261,54 @@ against the live Auth emulator.
   gated), by the owner in a browser (2026-10-29), and from the tag in the record PR
   (`GOWORK=off`, `go version -m` v0.38.0). Known limitation: #288 (the enrol page's
   "expired setup" 410 and dropped `return_to`).
+
+## AUDIT-063: Percent-encoded `[redacted]` refused before I/O (`sdk.ContainsRedacted`); pgxdb session-zone exact name; the SOC 2 sweep
+
+- **Status:** released 2026-10-29:
+  - `sdk` v0.25.0 (`950e175e`, #290);
+  - `integrations/datastores/pgxdb` v0.18.0 and `integrations/datastores/turso` v0.11.0
+    (`8bc9404e`, #292);
+  - `workshop/gopernicus` v0.10.3 (`236141c6`, #293, scaffold pins);
+  - hygiene with no tag: #291 (closes #226).
+  - Record: `RELEASING.md`, "Cleanup sweep: escaped-redaction refusal and the sprint's residual
+    inventory (SOC 2 slice S9)"; executed plan `plans/s9-cleanup-sweep.md`.
+- **Modules:** the above. Untouched: every pocket, store and view, goredis, ui/goth (gofmt
+  only), `pockets`. No migration. The examples are repinned (go.mod/go.sum only).
+- **Old behavior:**
+  - The loud-failure check from S6 matched only the literal `[redacted]`. A Secret rendered
+    into a URL component (`url.UserPassword`, `url.Values.Encode`, `url.PathEscape`) carries
+    `%5Bredacted%5D`. That value passed pgxdb `Open`, turso `Open` and SMTP `Probe`/`Send`, then
+    failed at the wire: pgxdb and SMTP failed at the dial or on authentication, and turso at
+    its first statement.
+  - pgxdb `hasSessionTimeZone` was a substring test, so `-c log_timezone=…` or `-c
+    app.timezone=…` in `options` suppressed the UTC session default.
+- **New behavior:**
+  - `sdk.ContainsRedacted(s)` reports the literal, or `%5Bredacted%5D` in any hex case. It is a
+    pattern match, not a decode, so a real password containing `%` is accepted.
+  - pgxdb (`DSN`/`Password`), turso (`URL`/`AuthToken`) and `email.NewSMTP` (`Password`) refuse
+    either form with `sdk.ErrRedactedSecret`, naming the field, before any I/O.
+  - Still not detected: double-encoded, base64 or JSON-escaped values. goredis and the other
+    integrations render a Secret but do not refuse one (R-2).
+  - `hasSessionTimeZone` uses the exact-name `options` parser.
+  - A fresh `init` pins the fixed versions.
+
+**Migration:**
+- None. Repin (explicit `GOWORK=off go get`, then tidy). A host whose credential was composed
+  from a printed Secret through `net/url` now fails at boot instead of at the wire: compose
+  from `Reveal()` and wrap the result in `sdk.Secret(…)`.
+
+**Verification:**
+- Unit tables for the helper (literal, `%5B`, `%5b`, mixed case, the three `net/url`
+  compositions, negatives, and a pin against `url.QueryEscape`/`PathEscape`). Escaped cases at
+  each of the three sites.
+- Bite proofs: the old expressions fail the new cases (#290, #292).
+- Real binaries before and after: the released pins reach the dial (`connection refused`), or
+  for turso the first `Exec`. The tags refuse at `Open`/`Probe`.
+- The tz fix live (`-c app.timezone=` → session `UTC`). `log_timezone` is proven by unit test
+  only: the server refuses it at connect (`55P02`).
+- `live-stores` green on `main` before each tag. Cold verification: sdk alone; the pgx and
+  turso store sets each select sdk v0.25.0; the gps-three-sixty shape; a cold `go install
+  @v0.10.3` with `init --db pgx|turso`, then verify, build, vet and `guard --posture` clean.
+- From the tags (this record): every example at `GOWORK=off`; auth-cms boot (`/auth/me` 401);
+  production-baseline two-role bootstrap on PostgreSQL 18.6; an escaped `DB_URL` refused with
+  no server-side authentication attempt.

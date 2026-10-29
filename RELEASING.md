@@ -1,5 +1,260 @@
 # Releasing gopernicus modules
 
+## Cleanup sweep: escaped-redaction refusal and the sprint's residual inventory (SOC 2 slice S9 — published 2026-10-29)
+
+Four annotated tags (not signed) on four modules, in three trains (sdk, then the connectors,
+then the workshop). Each was cut at its PR's squash-merge commit after a green `live-stores`
+dispatch on `main`. Each was then pushed, confirmed on origin, polled on the proxy and
+cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache,
+`proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build ./...`, `go 1.26.10`). Claude
+cuts and pushes the tags; the owner merges. No migration, no pocket tag, no store tag. Design
+and rulings: `plans/s9-cleanup-sweep.md` (ratified 2026-10-29, "good with your recs": R-1..R-8
+all at the recommendations; executed copy in `plans/`). The audit entry is **AUDIT-063**. This
+section is the whole record: there is no handoff file and no manifest. The operator surface
+is the docs site's *Production posture* ("Added by S6" table and "A composed secret fails
+loudly") and *Database posture*. The reference is `sdk/README.md` and the pgxdb and turso
+READMEs.
+
+This slice closes the SOC 2 sprint. It closes the S6 residual "the redacted-secret check
+matches a literal `[redacted]` only" (control-map row "Secrets never in logs/errors", CC6.1)
+and issue **#226**. Every follow-up the sprint left open is now classified as built, corrected
+here, filed as an issue, or dropped with a reason (the inventory below).
+
+**What changed.**
+- **sdk v0.25.0: `sdk.ContainsRedacted(s string) bool`** (#290, PR-1). It reports whether `s`
+  contains `sdk.Redacted`, either literally or percent-encoded (`%5Bredacted%5D` in any hex
+  case). `net/url` emits that form when a rendered Secret is composed through
+  `url.UserPassword`, `url.Values.Encode` or `url.PathEscape`. It is a pattern check, not a
+  decode, so a real password containing a raw `%` is still accepted. `email.NewSMTP` uses it,
+  so `Probe` and `Send` refuse an escaped composed `Password` with `sdk.ErrRedactedSecret`
+  before dialing. Docs on `Secret`, `ErrRedactedSecret`, `SMTPConfig.Password`, `Probe`,
+  `Send` and the `sdk/README.md` rows name the percent-encoded form. No signature changes.
+- **pgxdb v0.18.0 and turso v0.11.0: `Open` refuses the escaped form** (#292, PR-2). Both
+  `refuseRedactedSecrets` call the helper: pgxdb on `DSN`/`Password`, turso on
+  `URL`/`AuthToken`. The error names the field and wraps `sdk.ErrRedactedSecret`. Both modules
+  repin sdk v0.18.0 → v0.25.0 (that is the only go.mod change).
+- **pgxdb v0.18.0: `hasSessionTimeZone` matches the exact parameter name** (#292, R-4). It
+  now calls `namesRuntimeParam`, the S5 exact-name `options` parser. Before, it was a
+  substring test on `timezone=`, so `-c log_timezone=…` or a custom `-c app.timezone=…` in
+  `options` suppressed the UTC session default. The orphaned `timeZoneOptionMarker` const is
+  gone.
+- **workshop/gopernicus v0.10.3: scaffold pins** (#293, PR-4, R-5). `init` pins sdk v0.25.0
+  and pgxdb v0.18.0 or turso v0.11.0. `new pocket` pins sdk v0.25.0, pgxdb v0.18.0, turso
+  v0.11.0 and pgx v5.9.2 (was v5.8.0). The scaffold README, the workshop README and the
+  docs-site `commands.md` run `@v0.10.3`. A template pin is a PATCH (the v0.6.1 precedent).
+- **Hygiene, no tag** (#291, PR-3):
+  - **#226:** production-baseline's README now says `cmd/bootstrap` connects as the runtime
+    role (`baseline_app`), never the owner. Only `make migrate` holds the owner credential.
+    The Makefile change is comment-only (owner, after #291).
+  - **gofmt:** `gofmt -w` on three `ui/goth` primitives (hand-written Go, not generated).
+  - **Module rows:** the missing README and `ARCHITECTURE.md` module rows were added (auth0,
+    firebase, external-identity, views/goth, ui/goth, goth-showcase).
+- **This PR:**
+  - the record;
+  - the two docs-site guide sentences;
+  - every example repinned (below).
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| — | none | `d4981c02` | #291 (PR-3, hygiene; closes #226) | — | — |
+| 1 | `sdk/v0.25.0` | `684f7d47` → `950e175e` | #290 (PR-1) | 40930336355 @ `d4981c02` (contains `950e175e`) | OK: sdk alone |
+| 2 | `integrations/datastores/pgxdb/v0.18.0` | `48a34aa4` → `8bc9404e` | #292 (PR-2) | 40934968698 @ `8bc9404e` | OK: the pgx store set, the gps-three-sixty shape |
+| 2 | `integrations/datastores/turso/v0.11.0` | `7a17d63e` → `8bc9404e` | #292 (PR-2) | 40934968698 @ `8bc9404e` | OK: the turso store set |
+| 3 | `workshop/gopernicus/v0.10.3` | `6bdca30b` → `236141c6` | #293 (PR-4) | 40939306973 @ `236141c6` | OK: cold `go install` + `init --db pgx` / `--db turso` |
+
+Every module ships MINOR under the v0 convention (R-1), except the workshop, which is a PATCH.
+The tag table matches `git ls-remote --tags origin`. **Not tagged:** every pocket and store,
+views/goth, ui/goth (gofmt only), goredis, `pockets` and the examples. Nothing retracts.
+
+**The MVS sets.** Each set was built from its own empty module cache. Each reported `all
+modules verified` and built.
+- **Step 1:** sdk v0.25.0 alone.
+- **Step 2, pgx:** pgxdb v0.18.0 beside authentication stores/pgx v0.19.0, authorization pgx
+  v0.24.0, cms pgx v0.6.0, events pgx v0.4.0, jobs pgx v0.9.0 and secrets pgx v0.2.1. MVS
+  selects sdk v0.25.0.
+- **Step 2, turso:** turso v0.11.0 beside authentication stores/turso v0.18.0, authorization
+  turso v0.23.0, cms turso v0.4.0, events turso v0.3.0 and jobs turso v0.8.0. MVS selects sdk
+  v0.25.0.
+- **Step 2, gps-three-sixty shape:** authentication core, stores/pgx, authorization goredis
+  v0.6.0 and pgxdb v0.18.0 (sdk v0.25.0).
+- **Step 3:** cold `go install …/workshop/gopernicus@v0.10.3`, then `init --db pgx` and `init
+  --db turso`. Each passed `go mod verify`, `go build ./...`, `go vet ./...` and `guard
+  --posture` clean (25 rules). The pins were sdk v0.25.0 plus pgxdb v0.18.0 or turso v0.11.0.
+- **This PR:** every example at `GOWORK=off` on the repins (below).
+
+**Upgrade notes.** No host action is needed beyond the repin. A DSN, URL, password or token
+composed from a printed Secret now fails at `Open` (or at SMTP `Probe`/`Send`) in its
+percent-encoded form too, not only as the literal `[redacted]`.
+
+> **Read first:** `grep -rnE 'url\.(UserPassword|Values|PathEscape|QueryEscape)|fmt\.Sprint.*Secret|Secret\(.*\+' --include='*.go'`.
+> - **Pins:** sdk **v0.25.0**, pgxdb **v0.18.0**, turso **v0.11.0**, workshop **v0.10.3** (`guard --posture`). A host on a
+>   released store gets the connector by MVS at its next repin; no store retag. Repin with explicit
+>   `GOWORK=off go get <module>@<tag>`, then `GOWORK=off go mod tidy`; never `go work sync`.
+
+| # | Flip | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | `%5Bredacted%5D` (any hex case) refused like `[redacted]` | an `Open` that dialed and then failed authentication now fails before any I/O with `sdk.ErrRedactedSecret`, naming `Config.DSN`/`Password`/`URL`/`AuthToken` | none: compose from `Reveal()` | pgxdb@v0.18.0, turso@v0.11.0 |
+| 2 | same at `email.NewSMTP` | `Probe`/`Send` refuse before dialing; production hosts probe at boot | none | sdk@v0.25.0 |
+| 3 | `sdk.ContainsRedacted` exported | additive; a host that builds its own credentialed client can apply the same check | — | sdk@v0.25.0 |
+| 4 | `hasSessionTimeZone` exact-name | a DSN whose `options` set `-c log_timezone=…` or another `*timezone=` parameter (but not `TimeZone`) now gets the UTC session default it was meant to get | set `TimeZone` explicitly | pgxdb@v0.18.0 |
+
+A real password that happens to contain the text `%5bredacted%5d` is refused at boot. That is
+accepted (Risks): the error names the field, and the check is a substring match. Values that
+are transformed further (double percent-encoding, base64, JSON `\u` escapes) cannot be detected
+by inspection. They still fail at the wire, on authentication.
+
+**Upgrade notes by host shape.**
+- **gps-three-sixty / battleboardhq** (pgx): row 1 at the pgxdb repin; row 4 only if their
+  DSN `options` name a `*timezone` parameter. No code change. Their hand-offs are the next
+  planning item (L26).
+- **gps-360-go:** the same as gps-three-sixty at its next repin.
+- **segovia/v2:** deferred (owner).
+- **A freshly scaffolded host** (`init` from `@v0.10.3`) carries all four rows.
+- **Examples (this PR).** Every example moved by explicit `GOWORK=off go get`, then `GOWORK=off
+  go mod tidy`; only the go.mod/go.sum lines below changed:
+  - `auth-cms`: sdk v0.24.0 → v0.25.0, pgxdb v0.17.0 → v0.18.0, turso v0.10.0 → v0.11.0
+    (go.mod/go.sum only; nothing else under `examples/auth-cms` changes: #276);
+  - `production-baseline`: sdk v0.24.0 → v0.25.0, pgxdb v0.17.0 → v0.18.0;
+  - `cms`: sdk v0.22.0 → v0.25.0, turso v0.10.0 → v0.11.0;
+  - `external-identity`: sdk v0.24.0 → v0.25.0;
+  - `goth-showcase`, `jobs-minimal`, `minimal`: sdk v0.22.0 → v0.25.0 (one window, one repin).
+
+**Run and look.**
+- **#290 (a real binary, `NewSMTP(...).Probe` against `127.0.0.1:1`):** on the released sdk
+  v0.24.0, `x%5Bredacted%5D`, `x%5bredacted%5d` and `u:%5Bredacted%5D` all **reach the dial**
+  (`connection refused`). On v0.25.0 all three are refused with `sdk.ErrRedactedSecret`
+  (`email: SMTPConfig.Password: …`) before dialing. Both versions accept `p%40ss%5Bw0rd%`, which
+  reaches the dial.
+- **#292, before** (the released sdk v0.24.0, pgxdb v0.17.0 and turso v0.10.0, `GOWORK=off`):
+  - `postgres://u:%5Bredacted%5D@127.0.0.1:1/db` → `dial tcp 127.0.0.1:1: connect: connection
+    refused`, and the same for the lowercase form.
+  - turso `libsql://127.0.0.1:1?authToken=%5Bredacted%5D` → `Open` **succeeds**, then the
+    first `Exec` fails with `Post "https://127.0.0.1:1/v2/pipeline": … connection refused`.
+- **#292, after** (the branch, then the tags): every one of those fails at `Open` with
+  `errors.Is(err, sdk.ErrRedactedSecret)`. The messages are `postgres: Config.DSN: secret
+  contains [redacted], not a value; read the Secret with Reveal()` and `turso: Config.URL: …`.
+  A real `p%5B100%` password still reaches the dial.
+- **#292, the tz fix live:** a database whose default zone is `America/New_York`, with DSN
+  `options=-c app.timezone=Europe/Oslo`. Before the fix the session TimeZone stayed
+  `America/New_York`; after it, the session TimeZone is `UTC`.
+- **#291 (#226, a throwaway PostgreSQL 18.6):** `make migrate` ran as `baseline_owner`.
+  `make bootstrap` as `baseline_app` → `applied`, then `no_change` on rerun, with no
+  `append_only` line. As the owner in development: the grant lands with the
+  `append_only=unenforced … owner=table` WARN. As the owner in production (`verify-full`):
+  exit 1 and no grant. As `baseline_app` in production: exit 0.
+- **This PR, §2 from the tags:** see "Verification record".
+
+**The review record.**
+- **The plan:** IN 9, DOC 14, LATER 26 groups, DROP 9. Every item was checked against
+  `origin/main` code, not against the paragraph that named it. Recommended reviewers:
+  product-manager (the IN/LATER line), platform-sre (the tag train) and lead-backend-engineer
+  (PR-2's diff). No lead was consulted (one-function helper; the sweep is inventory).
+- **#290, #291, #292, #293:** each gated by `make guard && make check`. #290 and #292 also ran
+  `go test -race` on the touched module and `GOWORK=off` build/vet before its tag. Bite
+  proofs: putting the old SMTP expression back fails the escaped cases with `connection
+  refused` (#290). Against `origin/main`'s `postgres.go`, the new pgxdb cases fail: the escaped
+  DSNs reach the dial and `log_timezone` returns true (#292). The pgxdb live suite passed on a
+  fresh PG 18.6. The turso `-tags=integration` legs passed on the local-file driver (the
+  libSQL-server leg is waived, S4d precedent).
+
+**Owner rulings.** Ratified 2026-10-29 ("good with your recs"):
+- **R-1 (a):** MINOR connector bumps.
+- **R-2 (b):** goredis is not extended. The refusal is checked at pgxdb/turso `Open` and SMTP
+  `Probe`/`Send` only; goredis and the other integrations render a Secret but do not refuse
+  one.
+- **R-3 (b):** the `InvitationTokenInQuery` hatch is LATER (#294).
+- **R-4 (a):** the `hasSessionTimeZone` fix is bundled into PR-2.
+- **R-5 (a):** the scaffold pins and workshop v0.10.3 are in.
+- **R-6 (c):** the livedelivery test is filed (#295).
+- **R-7:** #272 was rechecked on a fresh database without `POSTGRES_TEST_SCHEMA`. Both tests
+  passed, so the lead closed it with the output.
+- **R-8:** the LATER issues are filed, and #35 is closed as superseded.
+
+At ratification, **I5 (#273, the auth-cms identifier rename to the authorization naming
+rule) was removed**: an outside contributor's PR #276 is open for it, and the owner handles it
+separately. After #291 the
+owner kept the production-baseline Makefile comment-only. At the record (2026-10-29) the owner
+moved **I7** (the auth-cms README "1-second access TTL" line) to a follow-up, because #276
+touches the same README.
+
+**As-built deviations a host can see.**
+- **turso `Open` does not dial a hosted URL.** The first statement does. The plan's "before any
+  dial" holds trivially there: before the fix, `Open` succeeded and the first `Exec` failed at
+  the wire. The fix refuses at `Open`, which is the first point anything could fail.
+- **The tz fix's live-visible case is a custom `-c app.timezone=…` setting.** The server
+  refuses `log_timezone` in the startup packet (SQLSTATE `55P02`), so that case can never reach
+  a live session; it is proven by the unit test, before and after.
+- **The pgxdb and turso repin was sdk v0.18.0 → v0.25.0**, not one minor: both connectors
+  still required v0.18.0.
+
+**Verification record.**
+- `live-stores` was green on `main` before each tag (the table). `make guard` and `make check`
+  passed on every PR.
+- **From the tags (§2, this PR):**
+  - Every example (`auth-cms`, `cms`, `external-identity`, `goth-showcase`, `jobs-minimal`,
+    `minimal`, `production-baseline`) passes `go mod verify`, `go build ./...`, `go test ./...`
+    and `go vet ./...` at `GOWORK=off` on the repins.
+  - auth-cms was built at `GOWORK=off`. `go version -m` shows sdk v0.25.0, pgxdb v0.18.0 and
+    `pockets/authentication` v0.38.0. Booted in development on a free port, it serves `/` with
+    **200** and `/auth/me` with **401**, and logs no ERROR line. The sweep changed no behaviour
+    there; this is the repin smoke.
+  - production-baseline at `GOWORK=off` against a throwaway PostgreSQL 18.6, using the
+    README's two roles:
+    - `make migrate` as the owner;
+    - `make bootstrap` as `baseline_app` → `applied` with no `append_only` line, then
+      `no_change`;
+    - as the owner in development → the grant lands with the `append_only=unenforced …
+      owner=table` WARN;
+    - `DB_URL` with `baseline_app:%5Bredacted%5D` → `postgres: Config.DSN: secret contains
+      [redacted], not a value; read the Secret with Reveal()`, exit 1. The server logged no
+      authentication attempt for it.
+  - `pnpm build` in `workshop/documentation` succeeds.
+  - The tag table matches `git ls-remote --tags origin`.
+- **This PR:** docs, the two guide sentences and the example go.mod/go.sum repins. `make guard`
+  and `make check` pass.
+
+**The sweep inventory** (verified against `origin/main`; the per-item table is the executed
+plan's "Design §3").
+- **IN 9:** I1–I3 (#290, #292), I4 (#226, #291), I6 and I8 (#291) and I9 (#293) are built.
+  **I5** (#273) was removed (contributor PR #276). **I7** (the auth-cms README TTL line:
+  golang-jwt's one-minute leeway makes the "1-second access TTL" leg stale) is a follow-up
+  tied to #276. It is not edited here, because #276 touches the same README.
+- **DOC 14:** D1–D12 are in the SOC 2 control map and roadmap (maintainer records). D14 is
+  `SECURITY.md` (sdk, pgxdb, turso and workshop rows) and AUDIT-063. D11 (the C1 "Redaction"
+  line) was already corrected by the S4c-2 record; this PR changes only its follow-up clause to
+  "closed S9". **D13 was wrong** and is corrected here instead of applied. The S3 Known line
+  "`make test-stores` needs `AUTHORIZATION_TURSO_DISPOSABLE_URL` for the authorization turso
+  leg" still holds: the variable gates `pockets/authorization/stores/turso`'s destructive
+  fixtures (`fixture_safety_test.go`), and `live-stores.yml` sets it. What was missing was only
+  the note in the Makefile's `test-stores` comment; this PR adds it, which closes the S3
+  follow-up.
+- **LATER 26 groups:**
+  - **Filed by this sweep:**
+    - **#294** (L10, remove the `InvitationTokenInQuery` hatch with the next authentication
+      minor);
+    - **#295** (L11, `jobs_delivery_live_test.go` does not compile under `-tags
+      livedelivery`);
+    - **#296** (L12, the goredis `TestOpenHonorsDeadlineAfterConnection` flake);
+    - **#297** (L13, the S5 residuals: fail-open counter, IPv6 `/64`, cms upload error text);
+    - **#298** (L21, the migration-runner advisory lock);
+    - **#299** (L22, the S3 retention follow-ups);
+    - **#300** (found at the v0.10.3 cold verify: `gopernicus version` prints `0.0.0-dev` for a
+      `go install …@<tag>` binary, a hard-coded placeholder since the CLI's first commit, not
+      a v0.10.3 regression; no LATER group fit).
+  - **Already tracked:** #271, #274, #275, #236, #229, #286, #288, #232 and #109.
+  - **Kept in the executed plan only:** L14–L20 and L23–L25 (the per-slice feature
+    follow-ups) and L26 (the post-sprint host hand-offs, the next planning item).
+- **DROP 9:** X1–X9, each with its reason in the executed plan. **#35** was closed as
+  superseded by S1 `NewKeys` and S6 `sdk.Secret`.
+
+**Known and deferred.**
+- **I7** (above), sequenced after #276.
+- **Out of scope by plan:** extending the refusal to goredis and the other eight integrations
+  (R-2); double-encoded or otherwise transformed values; any pocket or store tag.
+- **Pre-existing, still open:** #271, #273 (via #276), #274, #275, #286, #288.
+- gps-360-go's, gps-three-sixty's, battleboardhq's and segovia's repins happen in their own
+  repositories.
+
 ## Native `all` and the enrollment grace (SOC 2 slice S4c-2 — published 2026-10-29)
 
 One annotated tag (not signed) on one module. It was cut at PR-2's squash-merge commit on

@@ -82,7 +82,9 @@ test:
 # the datastore env vars set (vs `make check`/`make test`, which skip loudly and
 # stay hermetic). It fails loudly if POSTGRES_TEST_DSN is unset — this milestone's
 # proof is the live postgres run. The turso leg is `-tags=integration` and skips
-# loudly without TURSO_DATABASE_URL/TURSO_AUTH_TOKEN.
+# loudly without TURSO_DATABASE_URL/TURSO_AUTH_TOKEN. The authorization turso
+# leg resets its database, so it also requires AUTHORIZATION_TURSO_DISPOSABLE_URL
+# set to exactly TURSO_DATABASE_URL.
 #
 # Spin a local postgres, then run:
 #   docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:18

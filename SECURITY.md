@@ -43,7 +43,7 @@ each module receives fixes. Latest tags at the time of writing:
 
 | Module | Latest |
 |---|---|
-| `sdk` | v0.24.0 |
+| `sdk` | v0.25.0 |
 | `pockets/authentication` | v0.38.0 |
 | `pockets/authentication/stores/pgx` | v0.19.0 |
 | `pockets/authentication/stores/turso` | v0.18.0 |
@@ -65,8 +65,8 @@ each module receives fixes. Latest tags at the time of writing:
 | `integrations/cryptids/go-oidc` | v0.2.0 |
 | `integrations/cryptids/go-webauthn` | v0.1.0 |
 | `integrations/cryptids/golang-jwt` | v0.4.0 |
-| `integrations/datastores/pgxdb` | v0.17.0 |
-| `integrations/datastores/turso` | v0.10.0 |
+| `integrations/datastores/pgxdb` | v0.18.0 |
+| `integrations/datastores/turso` | v0.11.0 |
 | `integrations/email/sendgrid` | v0.5.0 |
 | `integrations/encoding/rsc-qr` | v0.1.0 |
 | `integrations/filestorage/gcs` | v0.3.0 |
@@ -76,7 +76,7 @@ each module receives fixes. Latest tags at the time of writing:
 | `integrations/oauth/google` | v0.3.0 |
 | `integrations/passwords/hibp` | v0.1.0 |
 | `ui/goth` | v0.2.1 |
-| `workshop/gopernicus` | v0.10.2 |
+| `workshop/gopernicus` | v0.10.3 |
 
 Every module declares `go 1.26.10`; a host that honors the pin builds with a standard
 library carrying the fixes listed in `plans/soc2-s8-toolchain-pgx-repin-handoff.md`.
