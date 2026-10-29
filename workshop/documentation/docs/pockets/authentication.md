@@ -526,7 +526,7 @@ refusals are in [Production posture](../guides/production-posture.md), under
 Since v0.26.0 (with sdk v0.20.0 and the `integrations/cryptids/go-webauthn`
 adapter v0.1.0) native users can enroll a passkey and sign in or step up with
 it. A **user-verified** passkey (the authenticator checked a PIN or biometric)
-is the only native AAL2 factor; a presence-only passkey signs in at AAL1.
+is a native AAL2 factor (beside a TOTP or recovery-code step-up); a presence-only passkey signs in at AAL1.
 Sign-in is **usernameless only**: `residentKey` is `required`, assertions are
 discoverable, and no credential id leaves the server before authentication, so
 U2F-only security keys cannot enroll. Attestation is `none`; the AAGUID is

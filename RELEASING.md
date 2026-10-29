@@ -1,5 +1,308 @@
 # Releasing gopernicus modules
 
+## Native `all` and the enrollment grace (SOC 2 slice S4c-2 — published 2026-10-29)
+
+One annotated tag (not signed) on one module. It was cut at PR-2's squash-merge commit on
+`main` after a green `live-stores` dispatch on `main`, pushed, confirmed on origin, then
+cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache,
+`proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build ./...`, `go 1.26.10`). Claude
+cuts and pushes the tag; the owner merges. No migration, no store tag, no sdk, views or
+workshop tag. Design and rulings: `plans/s4c2-native-all-enrollment-grace.md` (ratified
+2026-10-28, "all recs", R-1..R-5 all (a); amended 2026-10-29 with the build-time rulings R-6
+(a) and R-7; executed copy in `plans/`). The audit entry is **AUDIT-062**. This section is the
+whole record: there is no handoff file and no manifest. The operator surface is the docs site:
+*Operations runbooks* "Turn on MFA for everyone", *Production posture* ("Added by S4c-2") and
+the authentication pocket page ("Added by S4c-2"). Those shipped in #287 (PR-4, examples and
+docs, merged at `efd0c3d7`, no tags). The reference is the authentication README's
+"MFAConfig.Required all (native)".
+
+Closes the control-map residual "native `all` + enrollment grace [S4c-2]" (row 17, carried from
+S4c R-1 (a) and S4a) and issue **#282** (`WithOAuth2` + `WithExternal` without an explicit
+browser login path panicked at boot).
+
+**What changed.**
+- **#282: the OAuth2 authorize and sessions browser pages admit only first-party access tokens**
+  (#284, PR-1; no tag alone under R-2 (a), it ships in v0.38.0). `mountOAuth2` and
+  `mountSessionManagement` gain `Accept(CredentialAccessToken)`, the `BrowserAccount` default.
+  `FirstParty()` never cleared the default set's external kind, so `Browser()` on those two
+  sets demanded `WithBrowserLoginPath` and panicked at mount without it. A host wiring
+  `WithOAuth2` + `WithExternal` now boots without naming a login path.
+- **authentication v0.38.0: native `MFAConfig.Required: all` with the enrollment grace
+  (opt-in).** Every change below is reachable only through wiring v0.37.0 refuses at boot
+  (`Required: all` beside `WithPasskeys`/`WithTOTP`).
+  - **Config.** `MFAConfig.EnrollmentStart` (a wiring literal, never env; required under native
+    `all`, `ErrMFAEnrollmentStartRequired`) and `EnrollmentGrace` (zero →
+    `DefaultMFAEnrollmentGrace`, 7 days; negative or above `MaxMFAEnrollmentGrace`, 30 days →
+    `ErrMFAEnrollmentGraceInvalid`), every mode (R-4 (a)). A user's window closes at
+    `max(EnrollmentStart, user.CreatedAt) + EnrollmentGrace` (a zero `CreatedAt` falls back to
+    `EnrollmentStart`).
+  - **Boot.** Native `all` (`Required == all` with a native AAL2 source) lifts the two v0.37.0
+    refusals. `all` with no AAL2 source, or with a `MFAConfig.Methods` that admits neither
+    passkey nor totp, is `ErrMFAUnsatisfiable`. External-only `all` is byte-for-byte v0.37.0.
+  - **Posture (R-5 (a)).** Under native `all`, native password, passwordless and native OAuth
+    leave the production single-factor refusal; one WARN names the bounded window (`auth:
+    mfa_required=all admits single-factor sign-in for at most <grace> per user until
+    enrollment`). `SingleFactorAcknowledged` beside it WARNs as inert instead of refusing. A
+    window-closed WARN fires when `now > EnrollmentStart + EnrollmentGrace` (SRE-2). The boot
+    line reads `mfa_required=all gates=first_party_routes[,/auth/admin/users*],machine_lifecycle
+    [,oauth2_authorize][,external_tokens] … enrollment_start=<RFC 3339> enrollment_grace=<d>`;
+    each gate is printed only when its wiring is present.
+  - **Claims.** A first-party access token below AAL2 under native `all` carries either
+    `mfa_enroll_by` (unix seconds; the holder has no AAL2 factor) or `mfa_enrolled: true` (the
+    holder has one, R-6), never both, and neither at AAL2, with the floor off, or on a delegated
+    token. `parseAccessClaims` reads them on `ProfileFirstParty` only, into
+    `Credential.MFAEnrollBy` / `Credential.MFAEnrolled`; a malformed value refuses the token.
+    The snapshot (at most three reads: passkeys, TOTP, user) is computed before any session
+    write: before `createSession` on a mint, before the CAS on both refresh lanes (BE-1), so a
+    failed read never revokes a session. A factor-read error is `sdk.ErrUnavailable`, logged by
+    error kind only (SRE-6). Every refresh re-evaluates enrolment and the window.
+  - **The floor in `RequirePrincipal`** (inbound `WithMFAEnrollmentFloor`, set by the
+    constructor under native `all`), for a first-party access token below AAL2 on a set
+    without `AllowMFAEnrollment()`:
+    - inside the window → passes (explicit gates still deny);
+    - past the window → JSON **403** `mfa_enrollment_required` with `enroll_by` (RFC 3339);
+      under `Browser()` + cookie → **303** to the TOTP enrol page, else the passkeys page
+      (`return_to` validated and re-rooted; respects `MFAConfig.Methods`);
+    - `mfa_enrolled` → the `RequireMFA` step-up answer (RFC 9470 **401**; under `Browser()` the
+      step-up page redirect), so an enrolled user's AAL1 password session never loops on refresh;
+    - neither claim (a pre-flip token, or a host-written `CredentialService`) → the plain JSON
+      **401**; under `Browser()` the login redirect with `recover=1` (R-3 (a)).
+    - Denials record `mfa_required_denied gate=enrollment reason=enrollment|assurance`, once per
+      session id per process (SRE-7).
+  - **Allowlist.** OAuthLinkStart, SessionSecurityReads, CSRFBootstrap, SessionHydration,
+    CredentialManagement and BrowserAccount carry `AllowMFAEnrollment()` on their own floors; a
+    host `BundledRouteAuth` override inherits it; `/auth/sessions` carries it (BE-11). A host adds
+    it to its own enrollment or SPA-shell routes.
+  - **Grace never mints durable credentials** (BE-5/BE-6). Under native `all` the admin gate is
+    on (`admins || (native all && UserAdminCheck)`), the machine lifecycle is AAL2, and the
+    OAuth2 authorize page gains `RequireMFA()`: none admits a grace session.
+  - **JSON views.** `/auth/me` and `/auth/methods` gain `"mfa_enrollment": {"required": true,
+    "enroll_by": "<RFC 3339>"}` (`omitempty`).
+  - New API, all additive: the two `MFAConfig` fields, `DefaultMFAEnrollmentGrace`,
+    `MaxMFAEnrollmentGrace`, the two sentinels, `AllowMFAEnrollment()`,
+    `WithMFAEnrollmentFloor`/`EnrollmentFloor`, `authlogic.WithMFAEnrollment`/
+    `MFAEnrollmentConfig`, `Credential.MFAEnrollBy`/`MFAEnrolled`, `MFAGateEnrollment`,
+    `MFADenialEnrollment`. go.mod unchanged (sdk v0.24.0).
+
+| Step | Tag | Commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| — | none (R-2 (a): ships in step 1) | `f3c1db75` | #284 (PR-1, #282) | — | — |
+| 1 | `pockets/authentication/v0.38.0` | `564d7185` | #285 (PR-2; #284 included) | 40910848620 @ `564d7185` | OK; MVS selects sdk v0.24.0 |
+| — | none | `efd0c3d7` | #287 (PR-4, examples + docs) | — | set C |
+
+PR-3 (the per-user marker, migration 0028, stores pgx v0.20.0 / turso v0.19.0) was dropped
+under R-1 (a); 0028 stays reserved. Every module ships MINOR under the v0 convention. The tag
+table matches `git ls-remote --tags origin` (the tag object `362e5a46` peels to `564d7185`).
+**Not tagged:** sdk (v0.24.0), the authentication stores (pgx v0.19.0, turso v0.18.0),
+views/goth (v0.9.0), `pockets`, workshop (v0.10.2), ui/goth, pgxdb (v0.17.0), the examples, and
+every other module. Nothing retracts.
+
+**The MVS sets** (each from its own empty module cache; each reports `all modules verified` and
+builds).
+- **Step 1:** authentication v0.38.0, cold-verified at tag time (MVS selects sdk v0.24.0).
+  The views shape below puts it beside the RELEASED stores and views/goth.
+- **Set C** (#287, from the tag): auth-cms, production-baseline and external-identity at
+  `GOWORK=off` build and test.
+- **Host shapes (this PR, at the final versions):**
+  - **gps-three-sixty:** authentication v0.38.0 + authentication pgx v0.19.0 + authorization
+    v0.34.0 + authorization pgx v0.24.0 + goredis v0.6.0 + golang-jwt v0.4.0 + bcrypt v0.3.0 +
+    pgxdb v0.17.0 (MVS selects sdk v0.24.0);
+  - **battleboardhq:** authentication v0.38.0 + authentication pgx v0.19.0 + authorization
+    v0.34.0 + authorization pgx v0.24.0 + jobs v0.8.0 + jobs pgx v0.9.0 + golang-jwt v0.4.0 +
+    google-uuid v0.2.0 + sendgrid v0.5.0 + oauth/google v0.3.0 + pgxdb v0.17.0;
+  - **views:** authentication v0.38.0 + views/goth v0.9.0 + pgx v0.19.0 + turso v0.18.0.
+
+**Upgrade notes.** Nothing changes on the wire for a host wired today except the #282 row on
+the two OAuth2 browser pages. Rows 2–5 are opt-in behind native `all`. The table is the plan's.
+
+> **Read first:** `grep -rnE 'MFAConfig\{|MFARequiredAll|WithOAuth2\(|WithExternal\(|RequirePrincipal\(\)' --include='*.go'`.
+> - **Pins:** authentication **v0.38.0** (requires sdk **v0.24.0**). The stores stay **pgx v0.19.0** / **turso v0.18.0**,
+>   views/goth **v0.9.0**. Repin with explicit `GOWORK=off go get <module>@<tag>`, then `GOWORK=off go mod tidy`;
+>   never `go work sync`.
+
+| # | Flip | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | #282: the authorize and sessions-page sets stop admitting external tokens | boot no longer needs `WithBrowserLoginPath` beside `WithOAuth2`+`WithExternal`; a provider-cookie-only browser gets `recover=1` (303 either way; a provider outage there was 503, is 303) | — | authentication@v0.38.0 |
+| 2 | `MFAConfig.EnrollmentStart`/`EnrollmentGrace` | additive; read only under native `all` | — | authentication@v0.38.0 |
+| 3 | native `all` admitted at boot | opt-in; under it every first-party route but the enrollment surface refuses sub-AAL2 sessions after the window; admin, machine and authorize gates at AAL2 with no grace; native sources leave the production single-factor refusal (WARNs instead) | `admins` | authentication@v0.38.0 |
+| 4 | `mfa_enroll_by` / `mfa_enrolled` claims; `Credential.MFAEnrollBy` / `MFAEnrolled` | signed only under native `all`; v0.37.0 verifiers ignore them | — | authentication@v0.38.0 |
+| 5 | `AllowMFAEnrollment()`; `mfa_enrollment_required` 403; `/auth/me` + `/auth/methods` `mfa_enrollment` | additive; an SPA shell under `RequirePrincipal()` must carry the option or be served unauthenticated, and must route 403 `mfa_enrollment_required` → its enrollment UI, 401 + RFC 9470 → step-up, plain 401 → refresh | — | authentication@v0.38.0 |
+
+Row 4 gains `mfa_enrolled` (R-6, see the deviations). Row 3's side effects on the two #282 pages
+(BE-9): JIT provisioning and external security events no longer run there; first-party sessions
+are unchanged.
+
+**Rollout for native `all`** (the runbook "Turn on MFA for everyone" is the operator copy):
+1. Wire `WithPasskeys` and/or `WithTOTP` (their migrations 0025/0026 are already required when
+   wired).
+2. Ship the client handling of row 5.
+3. Set `Required: all`, `EnrollmentStart` to today as a code literal, and the grace.
+4. Watch the boot line and `mfa_required_denied gate=enrollment`.
+
+**Window flip on a live fleet.** Tokens minted before the flip carry no claim: plain 401 (or the
+login page's recovery) until their first refresh, at most `AccessTokenTTL` (BE-8).
+
+**Rollback (SRE-1).** Set `Required: admins` FIRST, then repin to v0.37.0. A v0.37.0 binary
+with `all` beside a native factor refuses to boot; the claims themselves are harmless to it
+(`parseAccessClaims` ignores unknown claims).
+
+**Break-glass (SRE-3).** (1) A walled sole admin self-enrols: the enrollment surface is
+allowlisted and enrolment completes at AAL1. (2) The fleet lever is "bump `EnrollmentStart`,
+redeploy", a deliberate change. (3) Redeploy with `admins`. Never `MFARequiredNone` in
+production: it needs `SingleFactorAcknowledged` and is refused. A lost device is "admin reset
+→ self-enrol" (BE-13): after `ResetUserTOTP`/`ResetUserPasskeys` the next login is walled to the
+enrollment surface at once and can enrol there.
+
+**The floor covers `RequirePrincipal` routes only.** Host middleware that verifies tokens
+itself is outside it (Risk 2).
+
+**Upgrade notes by host shape.**
+- **gps-three-sixty / battleboardhq** (native Google OAuth sign-in → first-party AAL1 sessions;
+  pgx; React SPAs; no external IdP, no OAuth2 server): rows 1, 2 and 4 at repin change nothing
+  on the wire. To adopt native `all` they wire a native factor first (passkeys and/or TOTP and
+  their migrations), then rows 3 and 5; the SPA work in row 5 is the real cost, and the shell
+  route needs `AllowMFAEnrollment()` or anonymous serving. Not in this slice. The cold shapes
+  above build. Open question for their hand-off: whether their SPAs already branch on 401 +
+  `WWW-Authenticate` for step-up.
+- **gps-360-go** (`WithOAuth2`, no `WithExternal`; old pins): row 1 is inert for it; under native
+  `all` its authorize page would require AAL2. Repin only.
+- **segovia/v2:** deferred (owner).
+- **External-IdP hosts** (the production-baseline shape): nothing; external-only `all` is
+  unchanged and the baseline stays `admins`.
+- **Examples (#287).** Every example builds and tests at `GOWORK=off` on the tag. Pins moved by
+  explicit `GOWORK=off go get`, then tidy; sdk stays v0.24.0:
+  - `auth-cms`: authentication v0.38.0. Development-only hatches
+    `AUTH_DEMO_MFA_REQUIRED=all`, `AUTH_DEMO_MFA_ENROLLMENT_GRACE` (empty → the pocket
+    default) and `AUTH_DEMO_MFA_ENROLLMENT_START` (RFC 3339; empty → boot time); any of them
+    outside development refuses boot, as does a grace or start without `REQUIRED=all`. They
+    compose with `AUTH_DEMO_API_KEYS_EXEMPT` into one `WithMFA`. Floor probes `GET /demo/floor`
+    (plain `RequirePrincipal()`, JSON) and `GET /demo/floor/page` (cookie + `Browser()`). The
+    explicit `BrowserLoginPath: "/auth/login"` stays (legitimate; its comment lost the
+    "required" sentence in #284).
+  - `production-baseline`: authentication v0.38.0; `.env.example` notes that `all` there is the
+    IdP floor, not native `all` (no native factor is wired).
+  - `external-identity`: authentication v0.38.0.
+
+**Run and look.**
+- **#284 (auth-cms in a scratch copy with the explicit login path removed, `AUTH_OAUTH2_DEMO=1
+  AUTH_EXTERNAL_DEMO=1`):** boots with no panic; anonymous authorize → **303** with `recover=1`;
+  a signed-in user → the **200** consent page; `/auth/sessions` → **200**.
+- **#285 (a real auth-cms binary with temporary local `WithMFA` wiring, reverted; curl):** in the
+  grace → **200**; past the deadline → **403** `mfa_enrollment_required` / **303** to the enrol
+  page; an enrolled user's password sign-in → the **401** challenge / **303** to step-up with no
+  refresh loop, step-up → **200**; an admin in the grace → **401**; one audit row per session.
+- **#287 §1 (auth-cms built at `GOWORK=off`, `go version -m` authentication v0.38.0 + sdk
+  v0.24.0; development, `AUTH_ACCESS_TOKEN_TTL=1m AUTH_DEMO_MFA_REQUIRED=all
+  AUTH_DEMO_MFA_ENROLLMENT_GRACE=3m`):** the boot line and the single-factor WARN; in the grace
+  `/auth/account`, `/demo/floor` and `/demo/floor/page` **200**, `/auth/me` and the JWT carry the
+  deadline, `/demo/mfa` and `/auth/admin/users` (as an admin) **401** + RFC 9470; past the window
+  and a refresh `/demo/floor/page` **303** to `/auth/account/totp/enroll?return_to=…`,
+  `/demo/floor` **403** with `enroll_by`, the allowlisted pages **200**, exactly one
+  `mfa_required_denied gate=enrollment` row per session; TOTP enrol and step-up → **303** to
+  `return_to`, the gated routes **200** at AAL2 with no claim; an enrolled user's password
+  sign-in carries `mfa_enrolled`, JSON **401** challenge / browser **303** to step-up, the same
+  after a refresh, TOTP step-up → **200**; admin TOTP reset → the session **401**, the next
+  sign-in walled at once (**403**) and re-enrolment at AAL1 (**201**); with the OAuth2 demo the
+  authorize page **303** to step-up in the grace and `/auth/sessions` **200** inside and after
+  the window; each hatch refuses boot in production; no TOTP secret or token in the log.
+- **The owner drove auth-cms by hand in a browser** (2026-10-29; the PR-4 worktree, native `all`,
+  a 2-minute grace): "works!".
+- **This PR, §3 (auth-cms built at `GOWORK=off` from the tag, `go version -m` authentication
+  v0.38.0 + sdk v0.24.0, a free port, a 2-minute grace):** see "Verification record".
+
+**The review record.**
+- **The plan** passed a two-reviewer gate on the sketch (lead-backend-engineer BE-1..BE-14 and
+  platform-sre SRE-1..SRE-14, both ship with edits), folded under "Decided by gate". The design
+  moved on: BE-1 (the snapshot before every session write, so a failed read never revokes);
+  BE-3 (separate allowlisted floors, inherited by a host override); BE-4 (a new inbound option,
+  since nothing read `MFARequired` at request time); BE-5/BE-6/SRE-5 (admin, machine and
+  authorize at AAL2 with no grace); BE-7/SRE-12 (the WARNs instead of the refusal); BE-8/SRE-4
+  (the claimless 401/recover answer); BE-9/SRE-10 (the #282 behaviour note); BE-11 (`/auth/sessions`
+  allowlisted); SRE-1/SRE-2/SRE-3 (rollback order, the literal start and window-closed WARN,
+  break-glass); SRE-6 (fail closed on a read error); SRE-7 (once-per-session dedupe).
+- **#284, #285, #287:** gated by `make guard && make check`, `go test -race` on the pocket, and
+  `GOWORK=off` build/vet on the tagged module before its tag. #284's bite proofs: reverting the
+  fix brings the panic back; with an explicit path the old behaviour returns (no `recover=1`,
+  one security event, 503 on outage); fixing only one of the two files still panics. #285 added
+  `enrollment_test.go`, `enrollment_floor_test.go`, `TestNativeAllBoot` and the claim cases in
+  `token_test.go`.
+
+**Owner rulings.** Ratified 2026-10-28 ("all recs"): **R-1 (a)** no per-user marker and no
+migration (a lost device is admin reset → self-enrol; the fleet lever is `EnrollmentStart`);
+**R-2 (a)** #282 ships first in the v0.38.0 train, no patch tag; **R-3 (a)** the claimless
+answer is a plain 401 / `recover=1`; **R-4 (a)** grace 7 days default, 30 days maximum; **R-5
+(a)** native `all` leaves the single-factor refusal with a WARN. During the build (2026-10-29):
+**R-6 (a)** the `mfa_enrolled` claim and the step-up answer; **R-7** the magic link computes the
+claim after the commit.
+
+**As-built deviations a host can see.**
+- **R-6 `mfa_enrolled`.** The PR-2 build found that an ENROLLED user's password sign-in mints
+  AAL1 with no `mfa_enroll_by` (the holder has a factor), which the R-3 claimless answer would
+  have sent round a 401 → refresh → claimless loop. Such tokens carry `mfa_enrolled: true`; the
+  floor answers with the step-up challenge and records `reason=assurance` (not `enrollment`).
+- **R-7, the magic link computes after the commit.** It cannot read factors before `Redeem`
+  creates the user. A factor-read failure there fails closed (`sdk.ErrUnavailable`, the session
+  row exists; the client retries, and refresh computes again). The owner accepted fail-closed;
+  the claimless-pair alternative is enhancement **#286** (low priority).
+- **Native `all` refuses boot when `MFAConfig.Methods` admits neither passkey nor totp**
+  (`ErrMFAUnsatisfiable`), beyond the plan's "no AAL2 source" rule.
+- **The logic option validates** (`authlogic.WithMFAEnrollment(MFAEnrollmentConfig{Start,
+  Grace})`), not only the root config.
+- **The boot-line gates follow the wiring** (`/auth/admin/users*` only with `UserAdminCheck`,
+  `oauth2_authorize` only with `WithOAuth2`, `external_tokens` only with `WithExternal`), not the
+  plan's fixed list. The machine gate is AAL2 regardless.
+- **No unexported `AllowMFAEnrollment` twin:** the bundled groups use the exported option.
+- **`mfaEnrollmentPath` respects `MFAConfig.Methods`** (no TOTP page when TOTP is not an allowed
+  method).
+- **The once-per-session dedupe is per process** (`cacher.Memory`, 10k entries, TTL
+  `min(SessionLifetime, 24h)` with a 1-minute floor): N processes can each record one row.
+
+**Verification record.**
+- `make guard` and `make check` pass on every PR. `live-stores` is green on `main` before the tag
+  (run 40910848620 @ `564d7185`: postgres-turso and redis-pgxdb).
+- **From the tag (§3, this PR):** auth-cms built at `GOWORK=off` (`go version -m`:
+  `pockets/authentication v0.38.0`, sdk v0.24.0) and driven on a free port with
+  `AUTH_DEMO_MFA_REQUIRED=all AUTH_DEMO_MFA_ENROLLMENT_GRACE=2m`, §1 (2)–(5): the boot line
+  `mfa_required=all … gates=first_party_routes,/auth/admin/users*,machine_lifecycle
+  sources=passkey,totp … enrollment_grace=2m0s` and the single-factor WARN; register, verify
+  and password login → `aal1` with `mfa_enroll_by` = `CreatedAt` + 2m; in the window
+  `/auth/account`, `/demo/floor`, `/demo/floor/page` **200**, `/auth/me` `mfa_enrollment`
+  `{required: true, enroll_by}`, `/demo/mfa` **401** + RFC 9470; a refresh inside the window
+  keeps the claim; past it and a refresh `/demo/floor/page` **303** to
+  `/auth/account/totp/enroll?return_to=%2Fdemo%2Ffloor%2Fpage`, `/demo/floor` **403**
+  `mfa_enrollment_required` with `enroll_by` (three times), `/auth/account`,
+  `/auth/account/totp`, `/auth/account/passkeys`, `/auth/methods`, `/auth/me`,
+  `/auth/step-up/mfa` **200**; TOTP enrol (**200**) and confirm (**201**), then a refresh →
+  `mfa_enrolled: true`, `/demo/floor` **401** + RFC 9470 (no refresh loop); TOTP step-up → `aal2
+  methods=[password totp]` with neither claim, `/demo/floor`, `/demo/floor/page`, `/demo/mfa`
+  **200**; neither the TOTP secret nor a JWT appears in the log. The once-per-session event
+  count was not re-read here (no admin wired in this run; #287 showed one row). The
+  gps-three-sixty, battleboardhq and views cold shapes above build from empty caches; `pnpm
+  build` in `workshop/documentation` succeeds; the tag table matches `git ls-remote --tags
+  origin`.
+- **This PR:** docs only (plus two one-sentence fixes, below); `make guard` and `make check`
+  pass.
+
+**Known and deferred.**
+- **The enrol page after the floor's redirect (#288, low priority).** The floor sends a
+  past-window browser to `/auth/account/totp/enroll`, which answers **410** "That setup expired"
+  (above its set-up button) when no setup is pending, and ignores `return_to`; a user who has
+  just enrolled is sent back to it until their session refreshes or steps up. The flow still
+  completes (set up → confirm → step up).
+- **Not shown live:** a passkey sign-in with UV under the floor (§1 (7)); the R-7 magic-link path
+  and the claimless branch were proven in process only (#285's tests).
+- **Two stale sentences fixed here:** the authentication README's Passkeys section and the docs
+  site's Passkeys section still called a user-verified passkey "the only native AAL2 factor"
+  (TOTP and recovery-code step-ups are AAL2 too; #287 fixed the README's Assurance model).
+- **Follow-ups:** #286 (above); #288 (above); a views/goth account-page banner with the deadline
+  (needs a views repin train); a `guard --posture` P5 rule noticing an inert
+  `SingleFactorAcknowledged` and an `EnrollmentStart`-literal check (workshop tag); the per-user
+  marker (R-1 (b)) if a host asks, 0028 reserved.
+- **Out of scope by plan:** any views, sdk or workshop change; revoking API keys or grants minted before the flip; host wiring.
+- **Pre-existing, still open:** #271, #272, #273, #274, #275.
+- gps-360-go's, gps-three-sixty's, battleboardhq's and segovia's repins happen in their own
+  repositories.
+
 ## Delegated assurance and asserted authentication time (SOC 2 slice S4d part 4 — published 2026-10-28)
 
 Five annotated tags (not signed) on five modules. Each tag was cut at its PR's squash-merge

@@ -6208,3 +6208,56 @@ against the live Auth emulator.
   against the tags shows aal1/aal2 delegated tokens, `RequireMFA` 401/200 on the MCP audience
   and 401 on admin; production-baseline shows the `authenticated_at_unasserted` denial and the
   zero-bound boot refusal.
+
+## AUDIT-062: Native `MFAConfig.Required: all` with the enrollment grace; OAuth2 browser pages beside external tokens (#282)
+
+- **Status:** released 2026-10-29: `pockets/authentication` v0.38.0 (`564d7185`, #285), which
+  includes the #282 fix (`f3c1db75`, #284; no patch tag, R-2 (a)). Examples and docs: #287.
+  Record: `RELEASING.md`, "Native `all` and the enrollment grace (SOC 2 slice S4c-2)"; executed
+  plan `plans/s4c2-native-all-enrollment-grace.md`.
+- **Modules:** the above. Untouched: sdk, the authentication stores, views/goth, `pockets`,
+  workshop, ui/goth, every existing port's method set. No migration.
+- **Old behavior:**
+  - `MFAConfig.Required: all` was refused at boot beside `WithPasskeys` or `WithTOTP` and
+    beside any native single-factor login, so `all` was reachable only by an IdP-only host.
+  - A host wiring `WithOAuth2` + `WithExternal` without `WithBrowserLoginPath` panicked at
+    mount: the OAuth2 authorize and sessions browser sets still admitted external tokens.
+- **New behavior:**
+  - **#282:** both sets accept first-party access tokens only. Boot no longer needs a login
+    path; a provider-cookie-only browser gets the login redirect with `recover=1` (a provider
+    outage there was 503, is 303) and external resolution no longer runs there.
+  - **Native `all`** (opt-in): boot requires `MFAConfig.EnrollmentStart` and bounds
+    `EnrollmentGrace` (default 7 days, maximum 30). A first-party access token below AAL2
+    carries `mfa_enroll_by` (no AAL2 factor held) or `mfa_enrolled` (one held), computed
+    before any session write; a factor-read error fails the mint as `sdk.ErrUnavailable`.
+  - **The floor in `RequirePrincipal`:** in the window → pass; past it → 403
+    `mfa_enrollment_required` (or 303 to the enrol page under `Browser()`); `mfa_enrolled` →
+    the step-up challenge; no claim → plain 401 / `recover=1`. The bundled enrollment surface
+    (`AllowMFAEnrollment()`) and `/auth/sessions` stay reachable. `mfa_required_denied
+    gate=enrollment reason=enrollment|assurance`, once per session per process.
+  - **No grace for durable credentials:** the admin, machine lifecycle and OAuth2 authorize
+    gates require AAL2 under native `all`.
+  - **Posture:** native sources leave the production single-factor refusal under native `all`;
+    boot WARNs name the bounded window, an inert `SingleFactorAcknowledged` and a closed
+    window. `/auth/me` and `/auth/methods` report `mfa_enrollment`.
+
+**Migration:**
+- None required: every native-`all` change is behind wiring v0.37.0 refuses. Hosts with
+  `WithOAuth2` + `WithExternal` may drop an explicit `WithBrowserLoginPath` that existed only to
+  avoid the panic.
+- To turn on native `all`: wire a native factor, ship client handling (403
+  `mfa_enrollment_required` → enrol UI, 401 + RFC 9470 → step-up, plain 401 → refresh; an SPA
+  shell carries `AllowMFAEnrollment()` or is served unauthenticated), then set `Required: all`
+  with `EnrollmentStart` as a code literal. Rollback: `Required: admins` first, then repin.
+
+**Verification:**
+- Pocket tests under `-race` (deadline math, claims across login/refresh/enrol/step-up, the
+  grace lane never revoking, the floor's answers, the allowlist incl. a host override, gates in
+  the grace, one event per session, boot rules); #284 bite proofs; `GOWORK=off` build/vet before
+  the tag; `live-stores` run 40910848620 green on `564d7185` before the tag; cold verification
+  (sdk v0.24.0 selected).
+- auth-cms driven for real in #285 and #287 (grace 200, past-window 403/303, enrolled step-up
+  without a refresh loop, admin in grace 401, admin reset → re-enrol at AAL1, OAuth2 authorize
+  gated), by the owner in a browser (2026-10-29), and from the tag in the record PR
+  (`GOWORK=off`, `go version -m` v0.38.0). Known limitation: #288 (the enrol page's
+  "expired setup" 410 and dropped `return_to`).
