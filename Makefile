@@ -553,6 +553,8 @@ check:
 	@for m in $(INTEGRATION_TAG_MODULES); do echo "== vet -tags=integration $$m =="; (cd $$m && go vet -tags=integration ./...) || exit 1; done
 	@for m in $(PROVIDER_LIVE_TAG_MODULES); do echo "== vet -tags=live $$m =="; (cd $$m && go vet -tags=live ./...) || exit 1; done
 	@for m in $(EMULATOR_TAG_MODULES); do echo "== vet -tags=emulator $$m =="; (cd $$m && go vet -tags=emulator ./...) || exit 1; done
+	@echo "== vet -tags='livedelivery integration' examples/auth-cms/cmd/server (compile-only, no DB) =="
+	@cd examples/auth-cms && go vet -tags='livedelivery integration' ./cmd/server/
 	@$(MAKE) guard
 	@echo "all checks passed"
 
