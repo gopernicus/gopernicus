@@ -348,7 +348,7 @@ func liveAdmitVerifiedForgotPassword(t *testing.T, store *liveInspectingQueue, r
 	ctx := context.Background()
 	drain := &captureSender{}
 	admit := bootDelivery(t, repos, store, drain)
-	if _, err := admit.svc.RegisterUser(ctx, addr, "correct-horse-battery-staple", "Live User"); err != nil {
+	if _, err := admit.svc.Authentication.Register(ctx, addr, "correct-horse-battery-staple", "Live User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	c0, d0 := runRuntime(admit.runtime)
@@ -362,10 +362,10 @@ func liveAdmitVerifiedForgotPassword(t *testing.T, store *liveInspectingQueue, r
 	if !ok {
 		t.Fatal("no rendered verification payload for the registered address")
 	}
-	if err := admit.svc.Verify(ctx, addr, code); err != nil {
+	if err := admit.svc.Authentication.Verify(ctx, addr, code); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if err := admit.svc.ForgotPassword(ctx, addr); err != nil {
+	if err := admit.svc.Authentication.ForgotPassword(ctx, addr); err != nil {
 		t.Fatalf("ForgotPassword: %v", err)
 	}
 	fid, ok := liveOpaqueEnqueueID(store.snapshot(), admit.enc, addr)
@@ -384,7 +384,7 @@ func liveKnownUnknownParity(t *testing.T, open liveStoreFactory) {
 
 	drain := &captureSender{}
 	setup := bootDelivery(t, repos, store, drain)
-	if _, err := setup.svc.RegisterUser(ctx, known, "correct-horse-battery-staple", "Known"); err != nil {
+	if _, err := setup.svc.Authentication.Register(ctx, known, "correct-horse-battery-staple", "Known"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	c0, d0 := runRuntime(setup.runtime)
@@ -397,15 +397,15 @@ func liveKnownUnknownParity(t *testing.T, open liveStoreFactory) {
 	if !ok {
 		t.Fatal("no rendered verification payload for the known address")
 	}
-	if err := setup.svc.Verify(ctx, known, code); err != nil {
+	if err := setup.svc.Authentication.Verify(ctx, known, code); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 
 	opaqueBefore := liveCountOpaque(store.snapshot(), setup.enc)
-	if err := setup.svc.ForgotPassword(ctx, known); err != nil {
+	if err := setup.svc.Authentication.ForgotPassword(ctx, known); err != nil {
 		t.Fatalf("ForgotPassword(known): %v", err)
 	}
-	if err := setup.svc.ForgotPassword(ctx, unknown); err != nil {
+	if err := setup.svc.Authentication.ForgotPassword(ctx, unknown); err != nil {
 		t.Fatalf("ForgotPassword(unknown): %v", err)
 	}
 	// Both starts admit exactly one opaque job with NO provider call on the request
@@ -659,7 +659,7 @@ func liveResendConvergesToLatest(t *testing.T, open liveStoreFactory) {
 	}
 	deliver := &captureSender{}
 	boot := bootDelivery(t, repos, store, deliver)
-	gen2ID, err := boot.jobs.Replace(ctx, delivery.JobKind, gen1.LogicalKey, opaqueBytes)
+	gen2ID, err := boot.jobs.Queue.Replace(ctx, delivery.JobKind, gen1.LogicalKey, opaqueBytes)
 	if err != nil {
 		t.Fatalf("Replace (resend): %v", err)
 	}
@@ -706,7 +706,7 @@ func liveStatusAndEventsNoSecrets(t *testing.T, open liveStoreFactory) {
 	em := &secretScanningEmitter{}
 	drain := &captureSender{}
 	setup := bootDeliveryEmit(t, repos, store, drain, em)
-	if _, err := setup.svc.RegisterUser(ctx, addr, "correct-horse-battery-staple", "NoSecret"); err != nil {
+	if _, err := setup.svc.Authentication.Register(ctx, addr, "correct-horse-battery-staple", "NoSecret"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	c0, d0 := runRuntime(setup.runtime)
@@ -719,10 +719,10 @@ func liveStatusAndEventsNoSecrets(t *testing.T, open liveStoreFactory) {
 	if !ok {
 		t.Fatal("no rendered verification payload")
 	}
-	if err := setup.svc.Verify(ctx, addr, code); err != nil {
+	if err := setup.svc.Authentication.Verify(ctx, addr, code); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if err := setup.svc.ForgotPassword(ctx, addr); err != nil {
+	if err := setup.svc.Authentication.ForgotPassword(ctx, addr); err != nil {
 		t.Fatalf("ForgotPassword: %v", err)
 	}
 	fid, ok := liveOpaqueEnqueueID(store.snapshot(), setup.enc, addr)
@@ -782,7 +782,7 @@ func liveStatusAndEventsNoSecrets(t *testing.T, open liveStoreFactory) {
 
 	// The status projection is lifecycle-only and resolves by the PII-free logical key
 	// (== the receipt key).
-	st, err := run.svc.DeliveryStatus(ctx, opaque.LogicalKey)
+	st, err := run.svc.Authentication.DeliveryStatus(ctx, opaque.LogicalKey)
 	if err != nil {
 		t.Fatalf("DeliveryStatus: %v", err)
 	}
@@ -841,21 +841,21 @@ func liveTerminalCleanupAndPurge(t *testing.T, open liveStoreFactory) {
 		t.Fatalf("build runtime with wrapped discard: %v", err)
 	}
 
-	bad, err := store.EnqueueOnce(ctx, job.Enqueue{Kind: delivery.JobKind, LogicalKey: "live-bad-key", Payload: json.RawMessage(`"not-ciphertext"`)})
+	badID, err := boot.jobs.Queue.EnqueueOnce(ctx, delivery.JobKind, "live-bad-key", []byte(`"not-ciphertext"`))
 	if err != nil {
 		t.Fatalf("EnqueueOnce garbage: %v", err)
 	}
 	cancel, done := runRuntime(runtime)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if j, err := store.Get(ctx, bad.JobID); err == nil && j.JobStatus == job.StatusDeadLetter {
+		if j, err := store.Get(ctx, badID); err == nil && j.JobStatus == job.StatusDeadLetter {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	stopRuntime(t, cancel, done)
 
-	dead, err := store.Get(ctx, bad.JobID)
+	dead, err := store.Get(ctx, badID)
 	if err != nil {
 		t.Fatalf("Get dead-lettered job: %v", err)
 	}
@@ -871,18 +871,18 @@ func liveTerminalCleanupAndPurge(t *testing.T, open liveStoreFactory) {
 
 	// Bounded purge (host-driven, no auth-specific SQL): a terminal generation older than
 	// the cutoff is removed; a non-terminal generation survives.
-	survivor, err := store.EnqueueOnce(ctx, job.Enqueue{Kind: delivery.JobKind, LogicalKey: "live-survivor-key", Payload: json.RawMessage(`"pending"`), ScheduledFor: time.Now().Add(time.Hour)})
+	survivorID, err := boot.jobs.Queue.EnqueueOnce(ctx, delivery.JobKind, "live-survivor-key", []byte(`"pending"`)) // no runtime is running, so it stays pending
 	if err != nil {
 		t.Fatalf("EnqueueOnce survivor: %v", err)
 	}
-	removed, err := authjobs.PurgeTerminal(ctx, boot.jobs, boot.rt, time.Now().Add(time.Minute), 100)
+	removed, err := authjobs.PurgeTerminal(ctx, boot.jobs.Queue, boot.rt, time.Now().Add(time.Minute), 100)
 	if err != nil {
 		t.Fatalf("PurgeTerminal: %v", err)
 	}
 	if removed < 1 {
 		t.Fatalf("purge removed %d, want >= 1 (the dead-lettered terminal generation)", removed)
 	}
-	if _, err := store.Get(ctx, survivor.JobID); err != nil {
+	if _, err := store.Get(ctx, survivorID); err != nil {
 		t.Fatalf("non-terminal survivor was purged: %v", err)
 	}
 }
