@@ -89,6 +89,7 @@ type fakeAPIKeys struct {
 	mu       sync.Mutex
 	m        map[string]apikey.APIKey // by ID
 	touchErr error                    // when set, TouchLastUsed fails (best-effort test)
+	onTouch  func()                   // when set, runs on every TouchLastUsed call
 	touched  int
 	// lookups counts GetByHash calls — the credential matrix asserts a nested
 	// authenticator NARROWS off the stash instead of resolving the key twice.
@@ -148,6 +149,9 @@ func (f *fakeAPIKeys) Revoke(_ context.Context, id string, revokedAt time.Time) 
 func (f *fakeAPIKeys) TouchLastUsed(_ context.Context, id string, usedAt time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.onTouch != nil {
+		f.onTouch()
+	}
 	if f.touchErr != nil {
 		return f.touchErr
 	}

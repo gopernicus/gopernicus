@@ -352,6 +352,11 @@ type MachineConfig struct {
 	// repository it is ErrServiceAccountStatusRequires; a store reporting its
 	// schema absent is ErrServiceAccountStatusSchemaMissing.
 	ServiceAccountStatus bool
+	// APIKeyLastUsedInterval is the most often a key's LastUsedAt is written:
+	// at most once per key per interval, on the request the throttle admits.
+	// Zero selects DefaultAPIKeyLastUsedInterval (24h); negative disables
+	// usage writes entirely.
+	APIKeyLastUsedInterval time.Duration
 }
 
 // WithMachine replaces the complete MachineConfig group, including zero values.
@@ -359,6 +364,7 @@ func WithMachine(value MachineConfig) Option {
 	return func(c *constructorConfig) {
 		c.APIKeyMaxTTL = value.APIKeyMaxTTL
 		c.ServiceAccountStatus = value.ServiceAccountStatus
+		c.APIKeyLastUsedInterval = value.APIKeyLastUsedInterval
 	}
 }
 

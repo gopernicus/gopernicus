@@ -624,12 +624,8 @@ func TestAPIKeyCredentialAuditRail(t *testing.T) {
 		if touches := h.keyTouches() - touchedBefore; touches != 1 {
 			t.Errorf("TouchLastUsed calls = %d, want 1", touches)
 		}
-		e := requireEvent(t, h.events, securityevent.TypeAPIKeyAuth, securityevent.StatusSuccess)
-		if e.Actor.Type != authlogic.PrincipalServiceAccount || e.Actor.ID != saID {
-			t.Errorf("actor = %+v, want {service_account, %s}", e.Actor, saID)
-		}
-		if apiKeyAuthRows(h) != 1 {
-			t.Errorf("apikey_auth rows = %d, want exactly 1 per authentication", apiKeyAuthRows(h))
+		if apiKeyAuthRows(h) != 0 {
+			t.Errorf("apikey_auth rows = %d, want none for a successful authentication (#314)", apiKeyAuthRows(h))
 		}
 	})
 

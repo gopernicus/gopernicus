@@ -1,5 +1,28 @@
 # Releasing gopernicus modules
 
+## No database write per successful API-key request (#314 — pockets/authentication v0.41.0)
+
+**Status: pending merge and tag.** **MINOR, a visible audit change.** Every successful API-key
+request used to write an `apikey_auth` `success` security-event row and `last_used_at`. Now:
+
+- **No success row.** Denial rows stay (`blocked`: revoked, disabled account, deactivated
+  subject, act-as-user refusal; `failure`: expired). Rows an action writes name the key through
+  `via_api_key_id` / `via_service_account_id` (#312).
+- **`last_used_at` at most once per key per interval.** The interval is
+  `AdministrationConfig.APIKeyLastUsedInterval` (`AUTH_API_KEY_LAST_USED_INTERVAL`). Zero means
+  **24 hours**; a negative value turns usage writes off (`AUTH_API_KEY_LAST_USED_INTERVAL=-1s`;
+  a bare `-1` is not a Go duration and fails to boot). The throttle is per process and in
+  memory: several instances each write at most once per interval, and a crash loses at most one
+  interval. A failed touch WARNs and is not retried within the interval.
+- The boot line `auth: api key lifetime` gains `last_used_interval=<d>|off`.
+
+**Upgrade note for audit consumers.** A SIEM rule, dashboard or report that counts or alerts on
+`apikey_auth` / `success` sees none after this release. For "which key did this", use the `via_*`
+keys on the action's own rows. For "is this key in use", use `last_used_at`, which is now accurate
+to the interval (24 hours by default).
+
+No store, migration, sdk or views change. AUDIT-065.
+
 ## Member-added notice opens the app, not the accept landing (#304 — pockets/authentication v0.40.0 — published 2026-11-01)
 
 **Status: released.** **MINOR.** The member-added notice ("You were added … Open it:

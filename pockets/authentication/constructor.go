@@ -607,7 +607,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		authlogic.WithPassword(authlogic.PasswordConfig{Hasher: cfg.Hasher, ValidatePassword: cfg.ValidatePassword, Compromised: cfg.CompromisedPasswordChecker, CompromisedFailOpen: cfg.CompromisedPasswordFailOpen, PasswordFlowsDisabled: cfg.PasswordFlowsDisabled, RequireVerifiedEmail: cfg.RequireVerifiedEmail}),
 		authlogic.WithSessions(authlogic.SessionsConfig{AccessTokenTTL: cfg.AccessTokenTTL, RefreshTTL: cfg.RefreshTTL, IdleTimeout: cfg.IdleTimeout, Issuer: cfg.TokenIssuer, Audience: cfg.TokenAudience}),
 		authlogic.WithIdentity(authlogic.IdentityConfig{Normalizer: cfg.IdentifierNormalizer, IdentifierKeyer: cfg.IdentifierKeyer, CredentialPolicy: cfg.CredentialPolicy, Registration: cfg.Registration}),
-		authlogic.WithMachine(authlogic.MachineConfig{APIKeyMaxTTL: cfg.APIKeyMaxTTL, ServiceAccountStatus: cfg.ServiceAccountStatus}),
+		authlogic.WithMachine(authlogic.MachineConfig{APIKeyMaxTTL: cfg.APIKeyMaxTTL, ServiceAccountStatus: cfg.ServiceAccountStatus, APIKeyLastUsedInterval: cfg.APIKeyLastUsedInterval}),
 		authlogic.WithDelivery(logicDelivery),
 		authlogic.WithOAuth(authlogic.OAuthConfig{Providers: cfg.Providers, TokenEncrypter: cfg.TokenEncrypter, OAuthCallbackBase: cfg.OAuthCallbackBase, OAuthNativeRedirectURIs: cfg.OAuthNativeRedirectURIs, TrustOAuthEmail: cfg.TrustOAuthEmail}),
 		authlogic.WithPasswordless(authlogic.PasswordlessConfig{Passwordless: cfg.Passwordless, ProvisionOnRedeem: cfg.PasswordlessProvisionOnRedeem}),
@@ -877,7 +877,14 @@ func logAccountPosture(cfg constructorConfig, repos Repositories, log *slog.Logg
 	if cfg.APIKeyMaxTTL > 0 {
 		ttl = cfg.APIKeyMaxTTL.String()
 	}
-	log.Info("auth: api key lifetime", "api_key_max_ttl", ttl, "source", cfg.apiKeyMaxTTLSource)
+	lastUsed := "off"
+	switch {
+	case cfg.APIKeyLastUsedInterval == 0:
+		lastUsed = authlogic.DefaultAPIKeyLastUsedInterval.String()
+	case cfg.APIKeyLastUsedInterval > 0:
+		lastUsed = cfg.APIKeyLastUsedInterval.String()
+	}
+	log.Info("auth: api key lifetime", "api_key_max_ttl", ttl, "source", cfg.apiKeyMaxTTLSource, "last_used_interval", lastUsed)
 	if cfg.apiKeyMaxTTLSource == "acknowledged" {
 		log.Warn("auth: production posture requirement waived", "posture_waiver", "APIKeyUnlimitedTTLAcknowledged", "runtime_mode", cfg.RuntimeMode.String())
 	}

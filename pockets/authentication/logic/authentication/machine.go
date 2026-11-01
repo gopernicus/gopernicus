@@ -481,8 +481,9 @@ func auditActor(ctx context.Context) securityevent.Principal {
 //   - expired (a set ExpiresAt in the past) → deny, recording an apikey_auth
 //     `failure` event;
 //   - valid → resolve the effective principal (ActAsUser → the human owner, else
-//     the service account itself), record an apikey_auth `success` event, and
-//     best-effort touch LastUsedAt.
+//     the service account itself) and best-effort touch LastUsedAt, at most once
+//     per key per MachineConfig.APIKeyLastUsedInterval. A success writes no
+//     audit row: the rows an action writes carry the via_* key attribution.
 //
 // Every denial is the same opaque false, so a response can never distinguish
 // unknown / revoked / expired / disabled, and a repository error denies rather
@@ -547,13 +548,9 @@ func (s *Service) verifyAPIKeyCredential(ctx context.Context, rawKey string) (Pr
 			return Principal{}, Credential{}, false, nil
 		}
 	}
-	s.recordAPIKeyAuth(ctx, key, securityevent.Principal{Type: p.Type, ID: p.ID}, securityevent.StatusSuccess, "")
-	// Best-effort: a TouchLastUsed failure must never fail authentication
-	// (design §4.1). Now that the service carries a logger (A5), the previously
-	// silently-swallowed error is logged at WARN with coarse fields only.
-	if err := s.apiKeys.TouchLastUsed(ctx, key.ID, now); err != nil {
-		s.logger.Warn("api key touch-last-used failed", "error_kind", ErrorKind(err))
-	}
+	// No success row and no per-request write (#314): LastUsedAt is throttled
+	// and best-effort; a failure never fails authentication.
+	s.touchAPIKeyLastUsed(ctx, key.ID, now)
 	return p, Credential{
 		Kind:             CredentialAPIKey,
 		Transport:        TransportHeader,
@@ -583,8 +580,7 @@ func (s *Service) recordAPIKeyAuth(ctx context.Context, key apikey.APIKey, actor
 
 // RecordActAsUserKeyRefused records the blocked apikey_auth row of an
 // act-as-user API key the inbound authenticator resolved and then refused on
-// group, the surface that refused it. The resolution-time success row stays as
-// it is; this row names the key and its account by id only — never the key, its
+// group, the surface that refused it. This row names the key and its account by id only — never the key, its
 // prefix or its hash — with the service account as Actor, and is Budgeted per
 // client IP because a key holder can drive it. A credential that is not an
 // act-as-user API key records nothing.

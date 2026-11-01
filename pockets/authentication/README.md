@@ -1823,14 +1823,13 @@ policy about the caller that is a misrepresentation — `UserAdminCheck` and
   consulted and no user-administration, erase, status-change, security-event-read
   or invitation row is written. A header bearer is authoritative, so the key
   beside a valid session cookie is refused too.
-- **On the audit rail.** The refused request leaves the resolution-time
-  `apikey_auth` success row (unchanged) plus ONE `apikey_auth` row with status
-  `blocked`, `Actor` the service account, and Details `reason=act_as_user_refused`,
+- **On the audit rail.** The refused request leaves ONE `apikey_auth` row with
+  status `blocked` (a successful key resolution writes no row, #314), `Actor` the service account, and Details `reason=act_as_user_refused`,
   `group` (the bundled slot name, or `route` for a host route carrying
   `RefuseActAsUserKeys()`), `api_key_id` and `service_account_id` — never the
   key, its prefix or its hash. It is budgeted per client IP like the other
   failure rows. It is written while the key is the request's proof, so it also
-  carries the `via_*` keys below; the success row, written before, does not.
+  carries the `via_*` keys below.
 - **Rows name the key.** Every row the pocket's recorder writes while an API key
   is the request's proof carries `via_credential`, `via_api_key_id`,
   `via_service_account_id` and `via_act_as_user` beside the effective-principal
@@ -2987,7 +2986,19 @@ untouched, and nothing warns before a key expires: find the keys that will,
 across accounts, in SQL —
 `select service_account_id, key_prefix, expires_at from api_keys where revoked_at is null and (expires_at is null or expires_at < now() + interval '30 days')`.
 The boot line is `auth: api key lifetime api_key_max_ttl=<d>|unlimited
-source=config|default|acknowledged`.
+source=config|default|acknowledged last_used_interval=<d>|off`.
+
+**Usage.** A successful key request writes nothing to the audit trail: there is no
+`apikey_auth` success row (#314). The rows an action writes name the key through
+`via_api_key_id` / `via_service_account_id` (below). `last_used_at` is written at
+most once per key per `AdministrationConfig.APIKeyLastUsedInterval`
+(`AUTH_API_KEY_LAST_USED_INTERVAL`, default 24 hours), on the request that crosses
+the interval. It is per process: several instances each write at most once per
+interval, last write wins, and a crash loses at most one interval. A negative
+interval (`AUTH_API_KEY_LAST_USED_INTERVAL=-1s`; a Go duration needs its unit)
+turns usage writes off, so `last_used_at` stops changing. Revoked, expired,
+disabled-account and deactivated-subject keys still write their `blocked` or
+`failure` `apikey_auth` row.
 
 **Listing.** `GET /auth/service-accounts/{id}/keys` takes
 `?status=active|expired|revoked` and `?never_expires=true|false`, filtered in
@@ -4963,8 +4974,9 @@ a secret.
 `password_removed`, `password_reset`; the OAuth events (`oauth_login`,
 `oauth_register`, `oauth_link_verified`, `oauth_linked`,
 `oauth_pending_link_sent` (`UserID` = the matched account; Details `provider`
-only), `oauth_unlink_code_sent`, `oauth_unlinked`); `apikey_auth` (Details
-`key_prefix` and, on a denial, `reason`; an act-as-user key refused by
+only), `oauth_unlink_code_sent`, `oauth_unlinked`); `apikey_auth` (denials only:
+`blocked` or `failure`, never `success`; Details `key_prefix` and, where given,
+`reason`; an act-as-user key refused by
 `RefuseActAsUserKeys()` adds a blocked, budgeted row with Details `reason`
 `act_as_user_refused`, `group`, `api_key_id` and `service_account_id` — no
 prefix); `token_issued`;
@@ -5040,9 +5052,9 @@ fallback recorder `authlogic.New` builds; these never carry it:
   `authlogic.New` returns (`svc.CredentialAttribution`), to opt in;
 - `invitations.New` or `oauth2.New` built directly without the shared recorder
   (each then builds its own);
-- the resolution-time `apikey_auth` rows — written while the key is verified,
-  before its proof is stashed (the `act_as_user_refused` refusal row, written
-  after, does carry them);
+- the resolution-time `apikey_auth` denial rows — written while the key is
+  verified, before its proof is stashed (the `act_as_user_refused` refusal row,
+  written after, does carry them);
 - the maintenance rows (`security_events_purged`, `security_events_archived`),
   written outside any request.
 
