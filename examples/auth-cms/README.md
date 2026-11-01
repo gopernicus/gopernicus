@@ -861,6 +861,13 @@ and the process exits nonzero rather than continuing to admit work against a dea
 delivery runtime. A normal signal-driven shutdown (the delivery context is canceled by
 the ordered stop above) takes the quiet path and is never treated as a failure.
 
+In jobs mode, stopping the delivery runtime **drains**: in-flight sends finish and
+settle (up to `DrainTimeout`, 25s here, inside the 30-second lease) instead of being
+cut off and resent after the lease. Shutdown waits up to 27s for it. Budget the
+orchestrator's grace period for the whole sequence: `SHUTDOWN_TIMEOUT` (HTTP, default
+10s) + 27s + margin, about 40s. Kubernetes' default `terminationGracePeriodSeconds:
+30` is too short: a SIGKILL mid-drain brings the duplicate send back.
+
 ### Leg 7 — the authorization flagship (inbound admission and integrity)
 
 The `project:demo` owner, the `platform:main#admin` data tuple, and the `auditor` role

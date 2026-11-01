@@ -61,6 +61,8 @@ github.com/gopernicus/gopernicus/pockets/events v0.3.0 h1:P2E2NhEzzMyVxuDxSS/0st
 github.com/gopernicus/gopernicus/pockets/events v0.3.0/go.mod h1:3jXfwugCkrkX0DU+dUdcI/WHd3c2laNRLJmMWoop0cw=
 github.com/gopernicus/gopernicus/pockets/jobs v0.8.0 h1:CSF3YrjKFjxqGtCdJFNNK1XU+owvHhqmmMHxnPRnbrE=
 github.com/gopernicus/gopernicus/pockets/jobs v0.8.0/go.mod h1:fgUj1ZlhtTzS+IzuBO29I5hPpcJfaOQMrTE07hPkvEY=
+github.com/gopernicus/gopernicus/pockets/jobs v0.9.0 h1:h5KQ5ttZG2VWQS7wgbUL0kbnh3R+gVYgdqWJYIWNeSE=
+github.com/gopernicus/gopernicus/pockets/jobs v0.9.0/go.mod h1:fgUj1ZlhtTzS+IzuBO29I5hPpcJfaOQMrTE07hPkvEY=
 github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx v0.9.0 h1:5aLk7XaUx66d5RSHq1j+ZziXoSuTCmU0J7R37Rw8dAM=
 github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx v0.9.0/go.mod h1:AyNfXUYPt5CH+crptuJjm4UzJW+glZ3Q2xSEmY07YhM=
 github.com/gopernicus/gopernicus/pockets/jobs/stores/turso v0.8.0 h1:gGCYopXg99u03Pxprcpy8USAulfuO7vTNfA84YX9x9Q=
