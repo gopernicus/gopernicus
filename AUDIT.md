@@ -6286,8 +6286,9 @@ against the live Auth emulator.
 
 ## AUDIT-065: No audit row or per-request write for a successful API-key request (#314)
 
-- **Status:** pending tag as `pockets/authentication` v0.41.0. Record: `RELEASING.md`, "No
-  database write per successful API-key request (#314)".
+- **Status:** released as `pockets/authentication` v0.41.0 (tag object `6caa6370` → `84cbed4e`,
+  #326). Record: `RELEASING.md`, "No database write per successful API-key request (#314 —
+  published 2026-11-01)".
 - **Modules:** `pockets/authentication`. No store, port or migration change.
 - **Old behavior:** every successful API-key request wrote an unbudgeted `apikey_auth` /
   `success` security-event row and called `APIKeyRepository.TouchLastUsed`. That is two writes
