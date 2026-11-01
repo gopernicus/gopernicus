@@ -232,6 +232,10 @@ var (
 	// LinksConfig.InvitationURL is not HTTPS: the link carries a single-use
 	// credential in its fragment.
 	ErrInvitationURLInsecure = errors.New("auth: production RuntimeMode requires an HTTPS LinksConfig.InvitationURL")
+	// ErrMemberAddedURLInvalid is returned when a non-empty
+	// LinksConfig.MemberAddedURL is not a valid absolute http(s) URL with a host
+	// and no userinfo.
+	ErrMemberAddedURLInvalid = errors.New("auth: LinksConfig.MemberAddedURL must be a valid absolute http(s) URL")
 )
 
 // Passwordless enablement construction errors (design §4.2/§8). PasswordlessConfig.Passwordless
@@ -564,6 +568,16 @@ func validateInvitationURL(mode environment.Mode, raw string) error {
 	default:
 		return fmt.Errorf("%w: %q", ErrInvitationURLInvalid, raw)
 	}
+}
+
+// validateMemberAddedURL checks a non-empty MemberAddedURL's shape. The notice
+// link carries no credential, so the mode does not matter.
+func validateMemberAddedURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Host == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return fmt.Errorf("%w: %q", ErrMemberAddedURLInvalid, raw)
+	}
+	return nil
 }
 
 // validateOAuthConfig rejects ambiguous provider names and callback construction.

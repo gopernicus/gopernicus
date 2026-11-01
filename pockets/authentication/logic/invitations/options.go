@@ -40,13 +40,22 @@ func WithAccess(value AccessConfig) Option {
 	}
 }
 
-// WithInvitationURL sets the absolute landing URL an invitation or member-added
-// link points at when no allowlisted redirect was requested. It must carry no
+// WithInvitationURL sets the absolute landing URL an invitation link points at
+// when no allowlisted redirect was requested. It must carry no
 // fragment (the token owns it). Empty keeps the same-origin default "/", a
 // relative link most mail clients cannot open.
 func WithInvitationURL(value string) Option {
 	return func(c *constructorConfig) {
 		c.InvitationURL = value
+	}
+}
+
+// WithMemberAddedURL sets the absolute link a member-added notice points at when
+// no allowlisted redirect was requested. Empty uses the root of the
+// InvitationURL origin (or "/" without one): never the token-less accept landing.
+func WithMemberAddedURL(value string) Option {
+	return func(c *constructorConfig) {
+		c.MemberAddedURL = value
 	}
 }
 

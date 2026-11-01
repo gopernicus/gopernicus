@@ -1,5 +1,22 @@
 # Releasing gopernicus modules
 
+## Member-added notice opens the app, not the accept landing (#304 — pockets/authentication v0.40.0)
+
+**Status: pending merge and tag.** **MINOR.** The member-added notice ("You were added … Open it:
+<link>") fell back to `LinksConfig.InvitationURL` when the invitation had no `Redirect`. That is
+the accept landing, which expects a `#token=` fragment, so a signed-out recipient was sent to sign
+in to nothing and a signed-in one saw a "no invitation" state. A host could not fix it with
+`Redirect`, because that also moves the invitation link.
+
+- The notice now links to the allowlisted `redirect`, else the new optional
+  `LinksConfig.MemberAddedURL` (`AUTH_MEMBER_ADDED_URL`), else **the root of `InvitationURL`'s
+  origin**, else `/`. The invitation link itself is unchanged.
+- A non-empty `MemberAddedURL` must be an absolute http(s) URL with a host
+  (`ErrMemberAddedURLInvalid`). HTTP is admitted in production: the link carries no credential.
+
+**Migration:** none required. A host whose app is not at the `InvitationURL` origin root sets
+`AUTH_MEMBER_ADDED_URL`. No store, migration, sdk or views change.
+
 ## Fenced runtime drains on shutdown (#231 — pockets/jobs v0.9.0 — published 2026-11-01)
 
 **Status: released.** **MINOR, a default change to shutdown.** Cancelling

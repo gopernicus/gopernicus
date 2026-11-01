@@ -139,6 +139,7 @@ type constructorConfig struct {
 	PasswordResetURL              string   `env:"AUTH_PASSWORD_RESET_URL"`
 	OAuthLinkBaseURL              string   `env:"AUTH_OAUTH_LINK_URL"`
 	InvitationURL                 string   `env:"AUTH_INVITATION_URL"`
+	MemberAddedURL                string   `env:"AUTH_MEMBER_ADDED_URL"`
 	InvitationTokenInQuery        bool     `env:"AUTH_INVITATION_TOKEN_IN_QUERY"`
 	PasswordlessProvisionOnRedeem bool     `env:"AUTH_PASSWORDLESS_PROVISION_ON_REDEEM"`
 	Passwordless                  []string `env:"AUTH_PASSWORDLESS"`
@@ -800,9 +801,8 @@ type LinksConfig struct {
 	// landing page can scrub it from history. Request Host/forwarded headers never
 	// participate: the link is built from this configured value alone.
 	OAuthLinkBaseURL string `env:"AUTH_OAUTH_LINK_URL"`
-	// InvitationURL is the absolute landing URL an invitation (and its
-	// member-added notice) links to when the inviter requested no allowlisted
-	// redirect, BEFORE the "#token=<token>" fragment is appended. Without it the
+	// InvitationURL is the absolute landing URL an invitation links to when
+	// the inviter requested no allowlisted redirect, BEFORE the "#token=<token>" fragment is appended. Without it the
 	// link falls back to the relative "/", which most mail clients cannot open.
 	//
 	// Validation at construction: a non-empty value must be an absolute http(s)
@@ -811,6 +811,15 @@ type LinksConfig struct {
 	// whenever invitations are wired (a Granter; ErrInvitationURLRequired);
 	// development permits it empty with one startup WARN and keeps "/".
 	InvitationURL string `env:"AUTH_INVITATION_URL"`
+	// MemberAddedURL is the absolute link a member-added notice ("you were
+	// added") opens when the inviter requested no allowlisted redirect. The
+	// member already has access, so the notice never links to the token-less
+	// InvitationURL landing. Empty uses the root of InvitationURL's origin
+	// (https://app.example.com/accept → https://app.example.com/). A non-empty
+	// value must be an absolute http(s) URL with a host
+	// (ErrMemberAddedURLInvalid). It carries no credential, so HTTP is not
+	// refused in production.
+	MemberAddedURL string `env:"AUTH_MEMBER_ADDED_URL"`
 	// InvitationTokenInQuery restores the "?token=<token>" invitation link the
 	// URL fragment replaced, for ONE release: a host whose landing page still
 	// reads the query sets it while it moves to location.hash. Production logs
@@ -838,6 +847,7 @@ func WithLinks(value LinksConfig) Option {
 		c.PasswordResetURL = value.PasswordResetURL
 		c.OAuthLinkBaseURL = value.OAuthLinkBaseURL
 		c.InvitationURL = value.InvitationURL
+		c.MemberAddedURL = value.MemberAddedURL
 		c.InvitationTokenInQuery = value.InvitationTokenInQuery
 		c.RedirectAllowlist = value.RedirectAllowlist
 	}

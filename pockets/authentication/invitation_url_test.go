@@ -113,3 +113,48 @@ func TestSecurityEventsRouteRequiresRepositoryAndCheck(t *testing.T) {
 		t.Fatalf("no repository: err = %v, want ErrSecurityEventsRouteRequires", err)
 	}
 }
+
+// #304: LinksConfig.MemberAddedURL is optional; a non-empty value must be an
+// absolute http(s) URL. It carries no credential, so production admits http.
+func TestMemberAddedURLConstruction(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode environment.Mode
+		url  string
+		want error
+	}{
+		{"empty is fine", environment.ModeProduction, "", nil},
+		{"https accepted", environment.ModeProduction, "https://app.example.com/home", nil},
+		{"http accepted in production", environment.ModeProduction, "http://app.example.com/home", nil},
+		{"fragment accepted", environment.ModeDevelopment, "https://app.example.com/#/home", nil},
+		{"relative rejected", environment.ModeDevelopment, "/home", ErrMemberAddedURLInvalid},
+		{"no host rejected", environment.ModeDevelopment, "https:///home", ErrMemberAddedURLInvalid},
+		{"userinfo rejected", environment.ModeDevelopment, "https://u:p@app.example.com/", ErrMemberAddedURLInvalid},
+		{"non-http scheme rejected", environment.ModeDevelopment, "ftp://app.example.com/", ErrMemberAddedURLInvalid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := noPasswordConfig()
+			if tc.mode == environment.ModeProduction {
+				cfg = prodLimiterConfig()
+				cfg.RateLimiter = durableLimiter{}
+			}
+			cfg.Granter = stubGranter{}
+			cfg.InviteCheck = allowInvite
+			cfg.InvitationURL = "https://app.example.com/invite"
+			cfg.MemberAddedURL = tc.url
+			_, err := newFixture(testRepositories(Repositories{Invitations: stubInvitations{}}), cfg)
+			if tc.want == nil && err != nil || tc.want != nil && !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// WithLinks carries MemberAddedURL through.
+func TestWithLinksCarriesMemberAddedURL(t *testing.T) {
+	var c constructorConfig
+	WithLinks(LinksConfig{MemberAddedURL: "https://app.example.com/home"})(&c)
+	if c.MemberAddedURL != "https://app.example.com/home" {
+		t.Fatalf("MemberAddedURL = %q", c.MemberAddedURL)
+	}
+}
