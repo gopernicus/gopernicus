@@ -19,6 +19,8 @@ github.com/gopernicus/gopernicus/pockets/authentication v0.39.0 h1:ml4HPgeDRzjgJ
 github.com/gopernicus/gopernicus/pockets/authentication v0.39.0/go.mod h1:QdOoDpjAE7NGVqWqnyYdo3fPLOr7oZXC7NKsFLgbiKs=
 github.com/gopernicus/gopernicus/pockets/authentication v0.40.0 h1:zmJUamA+x2A4YABN2sWeca8o+nbaSU0w0BYeLB8IyMo=
 github.com/gopernicus/gopernicus/pockets/authentication v0.40.0/go.mod h1:QdOoDpjAE7NGVqWqnyYdo3fPLOr7oZXC7NKsFLgbiKs=
+github.com/gopernicus/gopernicus/pockets/authentication v0.41.0 h1:NN57O4s4iQzqjv06q4Kf7JFlKmTbNmEvlbFRBCtT6SQ=
+github.com/gopernicus/gopernicus/pockets/authentication v0.41.0/go.mod h1:QdOoDpjAE7NGVqWqnyYdo3fPLOr7oZXC7NKsFLgbiKs=
 github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx v0.19.0 h1:6YIcPKr2bqdywTwtNpfjOtmOzqAf1B/KwX1lLi42tZM=
 github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx v0.19.0/go.mod h1:X4rEnzTysZexAgNSRnFf7lC+lDRQGqgXlXaovp5tuuM=
 github.com/gopernicus/gopernicus/pockets/authorization v0.34.0 h1:Frk7/o6/+fyQjESLojUhJsakL/2tZSnN8neqHaaf57I=

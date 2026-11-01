@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## No database write per successful API-key request (#314 — pockets/authentication v0.41.0)
+## No database write per successful API-key request (#314 — pockets/authentication v0.41.0 — published 2026-11-01)
 
-**Status: pending merge and tag.** **MINOR, a visible audit change.** Every successful API-key
+**Status: released.** **MINOR, a visible audit change.** Every successful API-key
 request used to write an `apikey_auth` `success` security-event row and `last_used_at`. Now:
 
 - **No success row.** Denial rows stay (`blocked`: revoked, disabled account, deactivated
@@ -22,6 +22,28 @@ keys on the action's own rows. For "is this key in use", use `last_used_at`, whi
 to the interval (24 hours by default).
 
 No store, migration, sdk or views change. AUDIT-065.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/authentication/v0.41.0` | `6caa6370` → `84cbed4e` | #326 | 41357539204 @ `84cbed4e` | OK; MVS selects sdk v0.24.0 |
+| — | none | — | PR-2: auth-cms, external-identity, production-baseline repin | — | each builds, vets and tests with `GOWORK=off` |
+
+Annotated, not signed. Confirmed on origin and on the proxy. CodeQL raised three
+`go/clear-text-logging` alerts (#20–22) on the `auth: api key lifetime` boot line. The rule
+matches names: the logged values are a duration and a config-source label. The owner dismissed
+them as false positives, matching the earlier #16/#17 on the same line.
+
+**Run and look (auth-cms).** An admin mints a self-acting key, the key makes 50 requests to
+`/demo/whoami`, and the security events and the key's `last_used_at` are read back:
+
+| build | `apikey_auth` success rows | `last_used_at`, after request 25 → after 50 | revoked key |
+|---|---|---|---|
+| v0.40.0 | 50 | moves with each request | 401, 1 blocked row |
+| v0.41.0 (default) | 0 | written once, unchanged | 401, 1 blocked row |
+| v0.41.0, `AUTH_API_KEY_LAST_USED_INTERVAL=-1s` | 0 | never written | 401, 1 blocked row |
+
+Boot lines: `last_used_interval=24h0m0s` and `last_used_interval=off`. PR-2 adds
+`AUTH_API_KEY_LAST_USED_INTERVAL` to auth-cms's `.env.example`.
 
 ## Member-added notice opens the app, not the accept landing (#304 — pockets/authentication v0.40.0 — published 2026-11-01)
 
