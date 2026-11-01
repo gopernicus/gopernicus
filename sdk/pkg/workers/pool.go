@@ -33,6 +33,7 @@ type poolConfig struct {
 	middlewares  []Middleware
 	logger       *slog.Logger
 	wake         <-chan struct{}
+	drainBacklog bool
 }
 
 // WithName sets the pool name used in logs and worker IDs.
@@ -46,7 +47,8 @@ func WithWorkerCount(count int) PoolOption {
 	return func(c *poolConfig) { c.workerCount = count }
 }
 
-// WithPollInterval sets the delay between iterations while work is flowing.
+// WithPollInterval sets the delay between iterations while work is flowing
+// (after an error only, under WithDrainBacklog).
 func WithPollInterval(interval time.Duration) PoolOption {
 	return func(c *poolConfig) { c.pollInterval = interval }
 }
@@ -56,6 +58,17 @@ func WithPollInterval(interval time.Duration) PoolOption {
 // eventual pickup even when no wake signal arrives.
 func WithIdleInterval(interval time.Duration) PoolOption {
 	return func(c *poolConfig) { c.idleInterval = interval }
+}
+
+// WithDrainBacklog makes a worker start its next iteration immediately after a
+// successful one instead of waiting PollInterval, so a backlog drains at the
+// speed of the work rather than one item per worker per PollInterval. Errors
+// still wait PollInterval and ErrNoWork still waits IdleInterval; cancellation
+// keeps priority. The WorkFunc MUST return ErrNoWork when it found nothing to
+// do: one that returns nil on every call (periodic work) would run in a tight
+// loop. Off by default.
+func WithDrainBacklog(enabled bool) PoolOption {
+	return func(c *poolConfig) { c.drainBacklog = enabled }
 }
 
 // WithHeartbeat turns on a periodic INFO "pool alive" line carrying the pool
@@ -118,6 +131,7 @@ type Pool struct {
 	heartbeat    time.Duration
 	log          *slog.Logger
 	wake         <-chan struct{}
+	drainBacklog bool
 
 	workFunc WorkFunc
 	stats    stats
@@ -170,6 +184,7 @@ func NewPool(work WorkFunc, opts ...PoolOption) *Pool {
 		heartbeat:    c.heartbeat,
 		log:          c.logger,
 		wake:         c.wake,
+		drainBacklog: c.drainBacklog,
 	}
 
 	p.workFunc = work
@@ -296,6 +311,9 @@ func (p *Pool) worker(ctx context.Context, stop func(error), workerID string) {
 		}
 
 		next := p.pollInterval
+		if err == nil && p.drainBacklog {
+			next = 0
+		}
 		if errors.Is(err, ErrNoWork) {
 			p.log.DebugContext(ctx, "iteration: no work", "pool", p.name, "worker_id", workerID)
 			next = p.idleInterval

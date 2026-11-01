@@ -1,5 +1,23 @@
 # Releasing gopernicus modules
 
+## Pools drain a backlog; jobs takes the host logger (#230 — sdk v0.27.0, then pockets/jobs v0.10.0)
+
+**Status: PR-1 pending merge and tag.** Ships in three steps, because the sdk must be tagged
+before jobs can require it.
+
+- **sdk v0.27.0 (MINOR).** `workers.WithDrainBacklog(enabled bool)`: after a successful
+  iteration a worker starts the next one immediately instead of waiting `PollInterval`. Errors
+  still wait `PollInterval` and `ErrNoWork` waits `IdleInterval`; cancellation keeps priority.
+  **Off by default**, so a host pool doing periodic work (a WorkFunc that returns nil every time)
+  keeps its spacing. The WorkFunc must return `ErrNoWork` when idle.
+- **jobs (in PR-1, released with v0.10.0).** `jobs.WithLogger` / `queue.WithLogger`: the queue
+  service's construction line (`jobs queue service constructed`) and its retention WARN go to
+  the host logger, not `slog.Default`.
+- **jobs v0.10.0 (PR-2).** Requires sdk v0.27.0 and turns `WithDrainBacklog(true)` on for the
+  queue, scheduler and fenced pools. Without it, a backlog drains one job per worker per
+  `PollInterval` (5s by default).
+- **PR-3.** The examples repin; auth-cms's outbox poller pool turns the option on.
+
 ## No database write per successful API-key request (#314 — pockets/authentication v0.41.0 — published 2026-11-01)
 
 **Status: released.** **MINOR, a visible audit change.** Every successful API-key

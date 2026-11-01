@@ -24,7 +24,8 @@ type Service struct {
 
 // NewService validates the queue ports and resolves admission defaults. It starts no workers.
 // It resolves the optional TerminalPurger on Repositories.Queue once, logs it as
-// terminal_purge=wired|absent through slog.Default, and WARNs when an ordinary
+// terminal_purge=wired|absent through WithLogger's logger (default
+// slog.Default), and WARNs when an ordinary
 // queue is wired without it.
 func NewService(repos Repositories, opts ...Option) (*Service, error) {
 	cfg := serviceConfig{}
@@ -43,20 +44,22 @@ func NewService(repos Repositories, opts ...Option) (*Service, error) {
 	if cfg.clock == nil {
 		cfg.clock = func() time.Time { return time.Now().UTC() }
 	}
+	if cfg.logger == nil {
+		cfg.logger = slog.Default()
+	}
 	purger, _ := repos.Queue.(TerminalPurger)
-	logTerminalPurge(repos, purger != nil)
+	logTerminalPurge(cfg.logger, repos, purger != nil)
 	return &Service{repo: repos.Queue, fencedQueue: repos.FencedQueue, terminalPurger: purger, wake: make(chan struct{}, 1), maxAttempts: cfg.maxAttempts, now: cfg.clock, ids: cfg.ids.Or(sdk.UUIDv7())}, nil
 }
 
 // logTerminalPurge is the construction-time record of the ordinary-queue
 // retention capability. The WARN is mode-blind because the queue Service has no
 // runtime mode; every bundled store implements TerminalPurger.
-func logTerminalPurge(repos Repositories, wired bool) {
+func logTerminalPurge(log *slog.Logger, repos Repositories, wired bool) {
 	state := "absent"
 	if wired {
 		state = "wired"
 	}
-	log := slog.Default()
 	log.Info("jobs queue service constructed", "ordinary_queue", repos.Queue != nil, "fenced_queue", repos.FencedQueue != nil, "terminal_purge", state)
 	if repos.Queue != nil && !wired {
 		log.Warn("jobs queue: Repositories.Queue does not implement queue.TerminalPurger — ordinary-queue retention cannot run and PurgeTerminalJobs returns ErrTerminalPurgeRequired", "terminal_purge", state)

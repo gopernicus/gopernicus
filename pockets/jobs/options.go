@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/jobs/logic/schedules"
@@ -16,7 +17,12 @@ type config struct {
 	cron          schedules.CronParser
 	scheduleBatch int
 	ids           sdk.IDGenerator
+	logger        *slog.Logger
 }
+
+// WithLogger sets the logger the queue service's construction lines use. Nil
+// selects slog.Default.
+func WithLogger(logger *slog.Logger) Option { return func(c *config) { c.logger = logger } }
 
 // WithMaxAttempts replaces the queue admission retry limit. Nonpositive values select three attempts.
 func WithMaxAttempts(n int) Option { return func(c *config) { c.maxAttempts = n } }
