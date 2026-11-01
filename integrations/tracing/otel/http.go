@@ -89,7 +89,7 @@ func (t serverTracer) StartHTTPSpan(r *http.Request) (context.Context, tracing.S
 		}
 	}
 	ctx, span := t.tracer.Start(ctx, name, oteltrace.WithSpanKind(oteltrace.SpanKindServer), oteltrace.WithAttributes(attrs...))
-	return ctx, &httpSpanFinisher{spanFinisher: &spanFinisher{span: span}}
+	return ctx, &httpSpanFinisher{spanFinisher: &spanFinisher{span: span, recordErrorText: t.recordErrorText}}
 }
 
 type httpSpanFinisher struct{ *spanFinisher }

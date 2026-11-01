@@ -23,19 +23,26 @@ var (
 type Tracer struct {
 	tracer   oteltrace.Tracer
 	provider *sdktrace.TracerProvider // nil in ExporterProvider mode (caller owns it)
+
+	// recordErrorText mirrors Config.RecordErrorText.
+	recordErrorText bool
 }
+
+// errorStatusDescription is the fixed span status description RecordError sets
+// unless Config.RecordErrorText opts into the error's own text.
+const errorStatusDescription = "error"
 
 // newOwnedTracer wraps a provider this module created so Shutdown flushes and
 // stops it.
-func newOwnedTracer(tp *sdktrace.TracerProvider, name string) *Tracer {
-	return &Tracer{tracer: tp.Tracer(name), provider: tp}
+func newOwnedTracer(tp *sdktrace.TracerProvider, cfg Config) *Tracer {
+	return &Tracer{tracer: tp.Tracer(cfg.ServiceName), provider: tp, recordErrorText: cfg.RecordErrorText}
 }
 
 // StartSpan begins an OpenTelemetry span as a child of any span already in ctx
 // and returns a context carrying it plus a finisher.
 func (t *Tracer) StartSpan(ctx context.Context, operationName string) (context.Context, tracing.SpanFinisher) {
 	ctx, span := t.tracer.Start(ctx, operationName)
-	return ctx, &spanFinisher{span: span}
+	return ctx, &spanFinisher{span: span, recordErrorText: t.recordErrorText}
 }
 
 // Shutdown flushes any buffered spans and stops the TracerProvider this module
@@ -59,7 +66,8 @@ func (t *Tracer) ForceFlush(ctx context.Context) error {
 
 // spanFinisher adapts an OpenTelemetry span to sdk/capabilities/tracing.SpanFinisher.
 type spanFinisher struct {
-	span oteltrace.Span
+	span            oteltrace.Span
+	recordErrorText bool
 }
 
 // SetAttributes attaches the string attributes to the span.
@@ -74,9 +82,17 @@ func (f *spanFinisher) SetAttributes(attrs ...tracing.Attribute) {
 	f.span.SetAttributes(kvs...)
 }
 
-// RecordError records err on the span and marks the span failed.
+// RecordError marks the span failed. By default it exports no error text: the
+// status description is the fixed "error" and no exception event is added,
+// because err.Error() can carry user input, ids or SQL fragments. With
+// Config.RecordErrorText it also records the exception event and uses
+// err.Error() as the status description.
 func (f *spanFinisher) RecordError(err error) {
 	if err == nil {
+		return
+	}
+	if !f.recordErrorText {
+		f.span.SetStatus(codes.Error, errorStatusDescription)
 		return
 	}
 	f.span.RecordError(err)

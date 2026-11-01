@@ -63,6 +63,16 @@ The scalar `Config` fields carry `env:` tags for `sdk/pkg/environment.ParseEnvTa
 `Open` fills stdout, so an unset exporter stays distinguishable from an explicit
 `TRACING_EXPORTER=stdout`.
 
+## Error text stays out of spans by default
+
+`RecordError` marks the span failed with `codes.Error` and the fixed status
+description `error`. It adds no `exception` event, so `err.Error()` never reaches
+the collector: error text can carry user input, ids or SQL fragments (a raw
+Redis error from `goredis.TracingHook`, say). Set `Config.RecordErrorText`
+(`TRACING_RECORD_ERROR_TEXT=true`) to export the `exception` event and use
+`err.Error()` as the status description. Turn it on only when every error
+reaching `RecordError` is safe to export.
+
 ## Production posture — `RuntimeMode`
 
 `Config.RuntimeMode` is the host's `environment.Mode`, set in code by the
@@ -94,7 +104,8 @@ without stopping. Both are no-ops in `ExporterProvider` mode and on a nil
 
 Hermetic, no network. The provider mode is exercised against otel's
 `tracetest.SpanRecorder`, asserting span name, attributes, and error status
-through the `sdk/capabilities/tracing.Tracer` surface; the stdout mode redirects output to a
+through the `sdk/capabilities/tracing.Tracer` surface, and that error text is
+exported only under `RecordErrorText`; the stdout mode redirects output to a
 buffer and asserts the emitted JSON; the OTLP/gRPC mode is verified to construct
 and shut down offline; the `RuntimeMode` posture cases run `Open` over
 `ParseEnvTags` output and the loopback matrix. Run with `go test ./...`.
