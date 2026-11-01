@@ -202,6 +202,7 @@ type constructorConfig struct {
 	GlobalSessionRevocationRoute   bool
 	ServiceAccountStatus           bool          `env:"AUTH_SERVICE_ACCOUNT_STATUS"`
 	APIKeyMaxTTL                   time.Duration `env:"AUTH_API_KEY_MAX_TTL"`
+	APIKeyLastUsedInterval         time.Duration `env:"AUTH_API_KEY_LAST_USED_INTERVAL"`
 	APIKeyUnlimitedTTLAcknowledged bool
 	MFAAPIKeysExempt               bool
 	// registrationSource and apiKeyMaxTTLSource record whether Registration and
@@ -1169,6 +1170,14 @@ type AdministrationConfig struct {
 	// past expires_at is a 400 (api_key_expiry_past) in every case. Existing
 	// keys are untouched. (env: AUTH_API_KEY_MAX_TTL, a Go duration)
 	APIKeyMaxTTL time.Duration `env:"AUTH_API_KEY_MAX_TTL"`
+	// APIKeyLastUsedInterval is the most often a key's last_used_at is
+	// written: at most once per key per interval, per process. A successful
+	// key request writes nothing else: no apikey_auth success row (the rows an
+	// action writes carry via_api_key_id). Zero selects 24 hours; negative
+	// disables usage writes, so last_used_at stops changing (in env, a Go
+	// duration with a unit: AUTH_API_KEY_LAST_USED_INTERVAL=-1s).
+	// (env: AUTH_API_KEY_LAST_USED_INTERVAL, a Go duration)
+	APIKeyLastUsedInterval time.Duration `env:"AUTH_API_KEY_LAST_USED_INTERVAL"`
 	// APIKeyUnlimitedTTLAcknowledged keeps a zero APIKeyMaxTTL unlimited in
 	// production, with one posture_waiver=APIKeyUnlimitedTTLAcknowledged WARN.
 	// It is inert while APIKeyMaxTTL is set and in development. It is a wiring
@@ -1188,6 +1197,7 @@ func WithAdministration(value AdministrationConfig) Option {
 		c.GlobalSessionRevocationRoute = value.GlobalSessionRevocationRoute
 		c.ServiceAccountStatus = value.ServiceAccountStatus
 		c.APIKeyMaxTTL = value.APIKeyMaxTTL
+		c.APIKeyLastUsedInterval = value.APIKeyLastUsedInterval
 		c.APIKeyUnlimitedTTLAcknowledged = value.APIKeyUnlimitedTTLAcknowledged
 	}
 }

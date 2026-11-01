@@ -323,7 +323,7 @@ func TestGovernanceBootLines(t *testing.T) {
 		wiring mfaWiring
 		want   []string
 	}{
-		{environment.ModeDevelopment, mfaWiring{providers: one, ack: true}, []string{"registration=open source=default", "api_key_max_ttl=unlimited source=default", "api_keys=denied"}},
+		{environment.ModeDevelopment, mfaWiring{providers: one, ack: true}, []string{"registration=open source=default", "api_key_max_ttl=unlimited source=default last_used_interval=24h0m0s", "api_keys=denied"}},
 		{environment.ModeProduction, mfaWiring{providers: one, ack: true}, []string{"api_key_max_ttl=8760h0m0s source=default"}},
 		{environment.ModeProduction, mfaWiring{providers: one, ack: true, ttlAck: true}, []string{"api_key_max_ttl=unlimited source=acknowledged", "posture_waiver=APIKeyUnlimitedTTLAcknowledged"}},
 		{environment.ModeProduction, mfaWiring{providers: one, ack: true, apiKeyMaxTTL: 2160 * time.Hour, ttlAck: true}, []string{"api_key_max_ttl=2160h0m0s source=config"}},

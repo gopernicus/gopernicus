@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
@@ -156,5 +157,35 @@ func TestWithLinksCarriesMemberAddedURL(t *testing.T) {
 	WithLinks(LinksConfig{MemberAddedURL: "https://app.example.com/home"})(&c)
 	if c.MemberAddedURL != "https://app.example.com/home" {
 		t.Fatalf("MemberAddedURL = %q", c.MemberAddedURL)
+	}
+}
+
+// #314: AdministrationConfig.APIKeyLastUsedInterval reaches the constructor.
+func TestWithAdministrationCarriesAPIKeyLastUsedInterval(t *testing.T) {
+	var c constructorConfig
+	WithAdministration(AdministrationConfig{APIKeyLastUsedInterval: -1})(&c)
+	if c.APIKeyLastUsedInterval != -1 {
+		t.Fatalf("APIKeyLastUsedInterval = %s, want -1ns (off)", c.APIKeyLastUsedInterval)
+	}
+}
+
+// #314: the boot line names the usage interval, or off.
+func TestAPIKeyLastUsedIntervalBootLine(t *testing.T) {
+	for _, tc := range []struct {
+		interval time.Duration
+		want     string
+	}{
+		{0, "last_used_interval=24h0m0s"},
+		{time.Hour, "last_used_interval=1h0m0s"},
+		{-1, "last_used_interval=off"},
+	} {
+		log, buf := bufferLog()
+		cfg := noPasswordConfig()
+		cfg.APIKeyLastUsedInterval = tc.interval
+		cfg.Logger = log
+		logAccountPosture(cfg, Repositories{}, log)
+		if !strings.Contains(buf.String(), tc.want) {
+			t.Errorf("interval %s: boot log lacks %q:\n%s", tc.interval, tc.want, buf.String())
+		}
 	}
 }

@@ -291,6 +291,7 @@ type constructorConfig struct {
 	ServiceAccountStatuses  serviceaccount.StatusRepository
 	ServiceAccountStatus    bool
 	APIKeyMaxTTL            time.Duration
+	APIKeyLastUsedInterval  time.Duration
 }
 
 // Service implements the auth use cases over the repository ports.
@@ -473,6 +474,8 @@ type Service struct {
 	accountStatus serviceaccount.StatusRepository
 	// apiKeyMaxTTL bounds a minted key's life; zero is unlimited.
 	apiKeyMaxTTL time.Duration
+	// lastUsed throttles LastUsedAt writes; nil when usage writes are off.
+	lastUsed *lastUsedThrottle
 }
 
 // newService assembles already validated dependencies; isolated package tests
@@ -612,6 +615,7 @@ func newService(d constructorConfig) *Service {
 		globalSessions:     d.GlobalSessions,
 		accountStatus:      serviceAccountStatus,
 		apiKeyMaxTTL:       d.APIKeyMaxTTL,
+		lastUsed:           newLastUsedThrottle(d.APIKeyLastUsedInterval),
 	}
 	return svc
 }

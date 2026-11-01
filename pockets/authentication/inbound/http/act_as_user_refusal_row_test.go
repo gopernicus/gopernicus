@@ -44,22 +44,20 @@ func mintKeyFor(t *testing.T, svc *testService, name string, actAsUser bool, own
 	return mintedKey{raw: raw, id: key.ID, prefix: key.KeyPrefix, serviceAccountID: sa.ID}
 }
 
-// requireRefusalRows asserts rows are EXACTLY the apikey_auth success row and
-// one blocked refusal row for key on group, the refusal row carrying ids only.
-// The refusal row is written while the key is the request's proof, so it also
-// carries the via_ attribution; the success row, written before the proof is
-// stashed, carries none.
+// requireRefusalRows asserts rows are EXACTLY one blocked refusal row for key
+// on group, carrying ids only. A successful key resolution writes no row
+// (#314). The refusal row is written while the key is the request's proof, so
+// it also carries the via_ attribution.
 func requireRefusalRows(t *testing.T, rows []securityevent.SecurityEvent, key mintedKey, group string) {
 	t.Helper()
 	var kinds []string
 	for _, e := range rows {
 		kinds = append(kinds, e.EventType+"/"+e.EventStatus)
 	}
-	if len(rows) != 2 || rows[0].EventType != securityevent.TypeAPIKeyAuth || rows[0].EventStatus != securityevent.StatusSuccess ||
-		rows[1].EventType != securityevent.TypeAPIKeyAuth || rows[1].EventStatus != securityevent.StatusBlocked {
-		t.Fatalf("rows = %v, want exactly [apikey_auth/success apikey_auth/blocked]", kinds)
+	if len(rows) != 1 || rows[0].EventType != securityevent.TypeAPIKeyAuth || rows[0].EventStatus != securityevent.StatusBlocked {
+		t.Fatalf("rows = %v, want exactly [apikey_auth/blocked]", kinds)
 	}
-	blocked := rows[1]
+	blocked := rows[0]
 	if blocked.Actor.Type != authlogic.PrincipalServiceAccount || blocked.Actor.ID != key.serviceAccountID {
 		t.Errorf("refusal actor = %+v, want {service_account, %s}", blocked.Actor, key.serviceAccountID)
 	}
@@ -73,9 +71,6 @@ func requireRefusalRows(t *testing.T, rows []securityevent.SecurityEvent, key mi
 		securityevent.DetailViaAPIKeyID:         key.id,
 		securityevent.DetailViaServiceAccountID: key.serviceAccountID,
 		securityevent.DetailViaActAsUser:        true,
-	}
-	if _, ok := rows[0].Details[securityevent.DetailViaCredential]; ok {
-		t.Errorf("resolution-time success row carries via_ attribution: %v", rows[0].Details)
 	}
 	if len(blocked.Details) != len(want) {
 		t.Errorf("refusal details = %v, want exactly %v", blocked.Details, want)
@@ -167,8 +162,8 @@ func TestActAsUserRefusalRowNamesTheGroup(t *testing.T) {
 }
 
 // TestActAsUserRefusalRowIsBudgeted proves the refusal row rides the
-// failure-row budget: over budget it is counted, not written, while the
-// unbudgeted success row still lands.
+// failure-row budget: over budget it is counted, not written, and the
+// request leaves no row at all (a successful resolution writes none, #314).
 func TestActAsUserRefusalRowIsBudgeted(t *testing.T) {
 	users := newMemUsers()
 	spy := newSpySecurityEvents()
@@ -197,8 +192,8 @@ func TestActAsUserRefusalRowIsBudgeted(t *testing.T) {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 	rows := spy.recorded()
-	if len(rows) != 1 || rows[0].EventType != securityevent.TypeAPIKeyAuth || rows[0].EventStatus != securityevent.StatusSuccess {
-		t.Fatalf("rows = %+v, want the success row alone", rows)
+	if len(rows) != 0 {
+		t.Fatalf("rows = %+v, want none", rows)
 	}
 	if got := recorder.SuppressedRows(); got != 1 {
 		t.Errorf("suppressed rows = %d, want 1", got)

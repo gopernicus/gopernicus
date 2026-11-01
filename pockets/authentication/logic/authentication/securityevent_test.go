@@ -252,24 +252,23 @@ func TestSecurityEventOAuthUnlinked(t *testing.T) {
 
 // --- machine op (apikey_auth, all three branches) ---
 
-func TestSecurityEventAPIKeyAuthSuccess(t *testing.T) {
+// TestSecurityEventAPIKeyAuthSuccessWritesNoRow pins #314: a successful key
+// authentication writes no apikey_auth row; the rows an action writes carry
+// the via_* key attribution instead.
+func TestSecurityEventAPIKeyAuthSuccessWritesNoRow(t *testing.T) {
 	h := newMachineHarness(t)
 	ctx := context.Background()
 	sa, _ := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
-	key, raw, _ := h.svc.MintAPIKey(ctx, sa.ID, "deploy", time.Time{})
-	if _, _, ok, _ := h.svc.verifyAPIKeyCredential(ctx, raw); !ok {
-		t.Fatal("resolveAPIKeyCredential denied a valid key")
+	_, raw, _ := h.svc.MintAPIKey(ctx, sa.ID, "deploy", time.Time{})
+	for range 5 {
+		if _, _, ok, _ := h.svc.verifyAPIKeyCredential(ctx, raw); !ok {
+			t.Fatal("verifyAPIKeyCredential denied a valid key")
+		}
 	}
-	e := requireEvent(t, h.events, securityevent.TypeAPIKeyAuth, securityevent.StatusSuccess)
-	if e.Actor.Type != PrincipalServiceAccount || e.Actor.ID != sa.ID {
-		t.Errorf("apikey_auth success actor = %+v, want {service_account, %s}", e.Actor, sa.ID)
-	}
-	if e.Details["key_prefix"] != key.KeyPrefix {
-		t.Errorf("apikey_auth Details key_prefix = %v, want %q (prefix only)", e.Details["key_prefix"], key.KeyPrefix)
-	}
-	// Content hygiene: the raw key never lands in the audit content.
-	if strings.Contains(toString(e.Details["key_prefix"]), raw) {
-		t.Error("raw key leaked into audit Details")
+	for _, e := range h.events.recorded() {
+		if e.EventType == securityevent.TypeAPIKeyAuth {
+			t.Fatalf("successful authentication wrote an apikey_auth row: %+v", e)
+		}
 	}
 }
 

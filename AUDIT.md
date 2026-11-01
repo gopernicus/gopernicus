@@ -6243,7 +6243,7 @@ against the live Auth emulator.
     any host policy. A self-acting service account still reaches `UserAdminCheck` as itself.
     `/auth/me` and `/auth/csrf` are unchanged.
   - The refusal is on the rail: the `apikey_auth` success row plus one blocked `apikey_auth`
-    row (`reason=act_as_user_refused`, `group`, `api_key_id`, `service_account_id`; `Actor` the
+    row (the success row is gone since AUDIT-065, #314) (`reason=act_as_user_refused`, `group`, `api_key_id`, `service_account_id`; `Actor` the
     service account; budgeted; no key material).
   - `RefuseActAsUserKeys()` is a public `PrincipalOption`.
   - `UserAdminCheckRequest.Credential` / `InviteCheckRequest.Credential` (`CheckCredential`,
@@ -6283,3 +6283,29 @@ against the live Auth emulator.
   root `New`.
 - Pending for the release: `live-stores` on `main`, cold verification, the examples repinned
   and the live drill.
+
+## AUDIT-065: No audit row or per-request write for a successful API-key request (#314)
+
+- **Status:** pending tag as `pockets/authentication` v0.41.0. Record: `RELEASING.md`, "No
+  database write per successful API-key request (#314)".
+- **Modules:** `pockets/authentication`. No store, port or migration change.
+- **Old behavior:** every successful API-key request wrote an unbudgeted `apikey_auth` /
+  `success` security-event row and called `APIKeyRepository.TouchLastUsed`. That is two writes
+  per request: a key polling once a minute wrote about 2,880 rows and updates a day.
+- **New behavior:**
+  - No `apikey_auth` `success` row. Denials keep theirs: `blocked` (revoked, disabled account,
+    deactivated subject, the AUDIT-064 act-as-user refusal) and `failure` (expired). "Which key
+    did this" is the `via_api_key_id` / `via_service_account_id` keys on the rows an action
+    writes (AUDIT-064).
+  - `last_used_at` is written at most once per key per
+    `AdministrationConfig.APIKeyLastUsedInterval` (`AUTH_API_KEY_LAST_USED_INTERVAL`; zero is
+    24 hours, owner ruling), per process, on the request that crosses the interval. A failed
+    touch WARNs and is not retried within the interval. A negative interval (`-1s`) disables
+    usage writes. The boot line `auth: api key lifetime` adds `last_used_interval=<d>|off`.
+- **Migration:** SIEM or audit consumers counting `apikey_auth` success rows switch to the
+  `via_*` keys on action rows. `last_used_at` is now accurate to the interval, not to the
+  request.
+- **Residuals (deliberate):** a key request still does 3–4 reads (key, account status, service
+  account, subject status); no read cache. Several instances can write `last_used_at` out of
+  order within an interval (last write wins). No per-key request counts (owner ruling: a later
+  add-on if a host asks).

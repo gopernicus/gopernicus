@@ -17,8 +17,8 @@ import (
 // key owned by ANOTHER administrator, then presents it as a header-only bearer
 // (no Origin, so the browser-safe gate is skipped) on the erase route. Under
 // the default it is refused at the authenticator: the eraser is never called,
-// the host check never runs, and the request leaves exactly the resolution-time
-// apikey_auth success row and the blocked refusal row.
+// the host check never runs, and the request leaves exactly the blocked
+// refusal row.
 func TestDelegatedActAsUserKeyCannotEraseThroughItsOwner(t *testing.T) {
 	eraser := &fakeEraser{}
 	f := newPostureFixture(t, RouteAuthentication{}, func(d *mountDeps) { d.Eraser = eraser })

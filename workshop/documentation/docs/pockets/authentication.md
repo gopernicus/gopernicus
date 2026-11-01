@@ -775,6 +775,10 @@ API keys at the MFA gates.
   `api_key_ttl_exceeded` (`max_ttl_seconds`, `max_expires_at`); a past one is 400
   `api_key_expiry_past`. `APIKeyUnlimitedTTLAcknowledged` keeps production unlimited
   with a WARN. Existing keys are untouched.
+- **API-key usage.** A successful key request writes no `apikey_auth` row (#314); action rows
+  name the key through `via_*`. `last_used_at` is written at most once per key per
+  `AdministrationConfig.APIKeyLastUsedInterval` (`AUTH_API_KEY_LAST_USED_INTERVAL`, default 24
+  hours, per process); a negative interval (`-1s`) turns usage writes off.
 - **Key listing filters.** `GET /auth/service-accounts/{id}/keys?status=active|expired|revoked&never_expires=true|false`,
   filtered in the store (`apikey.FilteredLister`; without it a filtered call is 400
   `filter_unsupported`). A repeated key or an unknown value is 400;
@@ -1113,8 +1117,8 @@ store, migration or views change.
 - **`RefuseActAsUserKeys()`.** A new `PrincipalOption` for any `RequirePrincipal`: it refuses an
   act-as-user key, admits a self-acting one, is inert on a set that admits no API key, and holds
   under nested narrowing and `Optional()`.
-- **The refusal row.** A refused request leaves the `apikey_auth` success row plus one
-  `apikey_auth` row with status `blocked`, budgeted per client IP: `Actor` the service account,
+- **The refusal row.** A refused request leaves one `apikey_auth` row with status `blocked`
+  (a successful key resolution writes no row, #314), budgeted per client IP: `Actor` the service account,
   Details `reason=act_as_user_refused`, `group` (the slot name, or `route` on a host route),
   `api_key_id`, `service_account_id` — never the key, its prefix or its hash — plus the `via_*`
   keys below (it is written while the key is the request's proof).
@@ -1123,8 +1127,8 @@ store, migration or views change.
   (strings) and `via_act_as_user` (bool); `Actor` stays the effective principal. Proven values
   overwrite a caller-supplied `via_*` key. Session, job and unproven rows are unchanged. Never
   carried: rows through a recorder a host hands `authlogic.New`, or through `invitations.New` /
-  `oauth2.New` built without the shared recorder; the resolution-time `apikey_auth` rows (written
-  before the proof is stashed); the maintenance purge and archive rows. Absence means "not an
+  `oauth2.New` built without the shared recorder; the resolution-time `apikey_auth` denial rows
+  (written before the proof is stashed); the maintenance purge and archive rows. Absence means "not an
   API-key proof" only on a recorder with the reader.
 - **`CheckCredential`.** `UserAdminCheckRequest.Credential` and `InviteCheckRequest.Credential`
   carry `{Kind, ActAsUser, APIKeyID, ServiceAccountID}` (ids only, comparable). A host that
