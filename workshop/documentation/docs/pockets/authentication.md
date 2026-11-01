@@ -1089,6 +1089,57 @@ auth.WithMFA(auth.MFAConfig{
 *Operations runbooks*, "Turn on MFA for everyone", has the rollout, rollback and break-glass.
 The pocket README's "MFAConfig.Required all (native)" section is the reference.
 
+## Added by v0.39.0 (act-as-user keys on user administration and invitations)
+
+An act-as-user API key authenticates as its human owner, so a host policy that asks about the
+caller would see the owner, not the key. Authentication v0.39.0 is a behavior change (MINOR); no
+store, migration or views change.
+
+- **New defaults.** `BundledRouteAuth.UserAdministration` and `Invitations` default to
+  `RequirePrincipal(Live(), RefuseActAsUserKeys())`. An act-as-user key gets the opaque 401 on all
+  nine user-administration routes (list, get, deactivate, reactivate, resend-verification, erase,
+  `GET /auth/admin/security-events`, the passkey and TOTP resets) and all seven authenticated
+  invitation routes (create, list-by-resource, mine, accept, sync, cancel, resend); the host policy
+  is never consulted. `/auth/me` and `/auth/csrf` are unchanged.
+- **Self-acting accounts are unaffected.** A self-acting service account still reaches
+  `UserAdminCheck` as `Type=service_account`. Invitations have no machine path: a self-acting
+  account fails the handlers' `CurrentUser`, so automation uses an access token from a real
+  administrator session.
+- **`RefuseActAsUserKeys()`.** A new `PrincipalOption` for any `RequirePrincipal`: it refuses an
+  act-as-user key, admits a self-acting one, is inert on a set that admits no API key, and holds
+  under nested narrowing and `Optional()`.
+- **The refusal row.** A refused request leaves the `apikey_auth` success row plus one
+  `apikey_auth` row with status `blocked`, budgeted per client IP: `Actor` the service account,
+  Details `reason=act_as_user_refused`, `group` (the slot name, or `route` on a host route),
+  `api_key_id`, `service_account_id` — never the key, its prefix or its hash — plus the `via_*`
+  keys below (it is written while the key is the request's proof).
+- **Rows name the key (`via_*`).** A row the pocket's recorder writes while an API key is the
+  request's proof carries `via_credential` (`api_key`), `via_api_key_id`, `via_service_account_id`
+  (strings) and `via_act_as_user` (bool); `Actor` stays the effective principal. Proven values
+  overwrite a caller-supplied `via_*` key. Session, job and unproven rows are unchanged. Never
+  carried: rows through a recorder a host hands `authlogic.New`, or through `invitations.New` /
+  `oauth2.New` built without the shared recorder; the resolution-time `apikey_auth` rows (written
+  before the proof is stashed); the maintenance purge and archive rows. Absence means "not an
+  API-key proof" only on a recorder with the reader.
+- **`CheckCredential`.** `UserAdminCheckRequest.Credential` and `InviteCheckRequest.Credential`
+  carry `{Kind, ActAsUser, APIKeyID, ServiceAccountID}` (ids only, comparable). A host that
+  overrides a group to admit act-as-user keys refuses `Credential.ActAsUser` per action. With an
+  `InvitationResourceRule`, `InviteCheck` — and so `Credential` — is seen on create only; list,
+  resend and cancel go through `InvitationCan`.
+- **Boot WARNs.** Such an override logs `posture_warning=bundled_group_admits_act_as_user_keys
+  group=<slot>` at every boot; beside `MFAConfig.APIKeysExempt` it also logs
+  `posture_warning=bundled_group_act_as_user_mfa_exempt group=<slot>` (the admin MFA gate admits
+  that key unverified). They warn, never refuse.
+- **Diagnostic.** A key that gets 200 on `/auth/me` but 401 on `/auth/admin/*` or
+  `/auth/invitations/*` is an act-as-user key refused by the v0.39.0 default; look for the blocked
+  `apikey_auth` row with `reason=act_as_user_refused`.
+- **Residuals.** An act-as-user key still acts as its owner on host routes and on `/auth/me`;
+  delegated act-as-user creation stays a `MachineRoutesGate` decision (the
+  `service_account_created` row's `delegated` detail marks it).
+
+The pocket README's "Act-as-user API keys on user administration and invitations (v0.39.0)"
+section is the reference.
+
 ## Production posture
 
 Production has no implicit mode and fails closed on incomplete security wiring. Among other requirements:

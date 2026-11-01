@@ -180,6 +180,7 @@ func TestReasonsAreStableWireValues(t *testing.T) {
 		{ReasonInvalidRequest, "invalid_request"},
 		{ReasonInvalidScope, "invalid_scope"},
 		{ReasonInvalidTarget, "invalid_target"},
+		{ReasonActAsUserRefused, "act_as_user_refused"},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("reason = %q, want %q", tc.got, tc.want)

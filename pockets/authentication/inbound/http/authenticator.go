@@ -52,6 +52,8 @@ var (
 	_ CredentialService = (*authlogic.ExternalAuthenticator)(nil)
 	_ MFADenialRecorder = (*authlogic.Service)(nil)
 	_ MFADenialRecorder = (*authlogic.ExternalAuthenticator)(nil)
+
+	_ ActAsUserRefusalRecorder = (*authlogic.Service)(nil)
 )
 
 // Adapter adapts verified credentials to HTTP cookies, middleware and optional routes.
@@ -76,6 +78,10 @@ type Adapter struct {
 	// mfaDenials records MFA denials when the credential service implements
 	// MFADenialRecorder; nil records nothing.
 	mfaDenials MFADenialRecorder
+	// actAsUserRefusals records RefuseActAsUserKeys refusals when the
+	// credential service implements ActAsUserRefusalRecorder; nil records
+	// nothing.
+	actAsUserRefusals ActAsUserRefusalRecorder
 	// mfaStepUpPath is where a Browser() RequireMFA() denial of a cookie below
 	// AAL2 redirects: the TOTP chooser when TOTP pages are mounted, else the
 	// passkey step-up page; empty (neither mounted) answers JSON.
@@ -129,10 +135,11 @@ func newAuthenticator(service CredentialService, cfg authenticatorConfig) *Adapt
 		cfg.Logger = slog.Default()
 	}
 	mfaDenials, _ := service.(MFADenialRecorder)
+	actAsUserRefusals, _ := service.(ActAsUserRefusalRecorder)
 	return &Adapter{
 		service: service, cookie: cfg.Cookie, csrfCookie: resolveCSRFCookie(cfg.Cookie.Secure), externalCookies: slices.Clone(cfg.ExternalCookies),
 		browserLoginPath: cfg.BrowserLoginPath, browserLoginSet: browserLoginSet, limiter: cfg.Limiter, limiterFailOpen: cfg.LimiterFailOpen, logger: cfg.Logger,
-		proxies: newProxyPosture(cfg.RuntimeMode, cfg.Logger), mfaDenials: mfaDenials,
+		proxies: newProxyPosture(cfg.RuntimeMode, cfg.Logger), mfaDenials: mfaDenials, actAsUserRefusals: actAsUserRefusals,
 	}
 }
 
@@ -224,8 +231,19 @@ type MFADenialRecorder interface {
 	RecordMFADenied(context.Context, authlogic.MFADenial)
 }
 
+// ActAsUserRefusalRecorder is the optional recording seam for a
+// RefuseActAsUserKeys refusal. A credential service that implements it records
+// one blocked apikey_auth row per refused act-as-user key, naming the refusing
+// group (a bundled route group, or "route" for a host route); NewAuthenticator
+// asserts it once. *authlogic.Service implements it. A service that does not
+// still refuses; it records nothing.
+type ActAsUserRefusalRecorder interface {
+	RecordActAsUserKeyRefused(ctx context.Context, cred authlogic.Credential, group string)
+}
+
 // NewAuthenticator builds the credential middleware over service. When service
-// implements MFADenialRecorder, MFA denials are recorded through it.
+// implements MFADenialRecorder, MFA denials are recorded through it; when it
+// implements ActAsUserRefusalRecorder, act-as-user key refusals are too.
 func NewAuthenticator(service CredentialService, runtimeMode environment.Mode, opts ...AuthenticatorOption) (*Adapter, error) {
 	cfg := authenticatorConfig{}
 	cfg.RuntimeMode = runtimeMode

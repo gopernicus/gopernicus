@@ -291,6 +291,16 @@ revocation_checker=wired|none fail_open=<bool>`.
   `RevocationFailOpen` now logs `posture_waiver=RevocationFailOpen` (re-key alerts on the old
   WARN text). `guard --posture` gains no rule.
 
+**Added by authentication v0.39.0.** The `UserAdministration` and `Invitations` defaults refuse
+act-as-user API keys (`RefuseActAsUserKeys()`). Nothing refuses boot; two WARNs, in every mode
+and at every boot, name a `BundledRouteAuth` override of either group whose credential set
+admits an act-as-user key at the authenticator while machine identity is wired:
+
+| `posture_warning` | Logged when | Next step |
+|---|---|---|
+| `bundled_group_admits_act_as_user_keys group=<slot>` | the override admits an act-as-user key: the host policy behind it sees the key's human owner | add `RefuseActAsUserKeys()` to the strategy, or have the policy read `UserAdminCheckRequest.Credential` / `InviteCheckRequest.Credential` and refuse `ActAsUser` (on `Invitations` with a resource rule, `InviteCheck` sees `Credential` on create only) |
+| `bundled_group_act_as_user_mfa_exempt group=<slot>` | the same override beside `MFAConfig.APIKeysExempt`: the admin MFA gate admits that key unverified | as above, or drop `APIKeysExempt` |
+
 **Added by S4d part 3** (authentication v0.35.0, golang-jwt v0.4.0, sdk v0.23.0, bcrypt v0.3.0,
 the new `integrations/passwords/hibp` v0.1.0, stores pgx v0.18.0 / Turso v0.17.0; SOC 2 slice
 S4d part 3). Key management and password policy. Everything is host opt-in except bcrypt's

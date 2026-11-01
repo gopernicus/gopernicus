@@ -229,7 +229,7 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 	// With the rule on, InviteCheck is the optional create-only refinement;
 	// without it, InviteCheck is the whole policy.
 	if !h.resourceRuleOn() || h.inviteCheck != nil {
-		if err := h.checkInvite(r.Context(), InviteCheckRequest{Principal: principal, Action: InviteCreate, ResourceType: in.ResourceType, ResourceID: in.ResourceID, Relation: in.Relation, Metadata: in.Metadata, Identifier: in.Identifier, IdentifierKind: in.IdentifierKind, ResolvedSubjectID: prepared.ResolvedSubjectID()}); err != nil {
+		if err := h.checkInvite(r.Context(), InviteCheckRequest{Principal: principal, Action: InviteCreate, ResourceType: in.ResourceType, ResourceID: in.ResourceID, Relation: in.Relation, Metadata: in.Metadata, Identifier: in.Identifier, IdentifierKind: in.IdentifierKind, ResolvedSubjectID: prepared.ResolvedSubjectID(), Credential: h.checkCredential(r.Context())}); err != nil {
 			web.RespondJSONDomainError(w, err)
 			return
 		}
@@ -264,7 +264,7 @@ func (h *handlers) listResourceInvitations(w http.ResponseWriter, r *http.Reques
 			web.RespondJSONDomainError(w, err)
 			return
 		}
-	} else if err := h.checkInvite(r.Context(), InviteCheckRequest{Principal: sdk.Principal{Type: sdk.PrincipalTypeUser, ID: userID}, Action: InviteList, ResourceType: resourceType, ResourceID: resourceID}); err != nil {
+	} else if err := h.checkInvite(r.Context(), InviteCheckRequest{Principal: sdk.Principal{Type: sdk.PrincipalTypeUser, ID: userID}, Action: InviteList, ResourceType: resourceType, ResourceID: resourceID, Credential: h.checkCredential(r.Context())}); err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
 	}

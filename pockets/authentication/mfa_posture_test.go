@@ -67,6 +67,8 @@ type mfaWiring struct {
 	// oauth2 wires the OAuth2 server.
 	enrollmentStart time.Time
 	enrollmentGrace time.Duration
+	// routeAuth is BrowserConfig.BundledRouteAuth.
+	routeAuth inbound.BundledRouteAuthentication
 }
 
 func idp(name, issuer string, requireMFA bool) authlogic.ExternalProvider {
@@ -82,7 +84,7 @@ func (w mfaWiring) build(mode environment.Mode) (*Components, string, error) {
 		WithIdentity(IdentityConfig{IdentifierKeyer: prodKeyer{}, SingleFactorAcknowledged: w.ack, ChallengeProtector: w.protector, Registration: w.registration}),
 		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
 		WithDelivery(DeliveryConfig{Mailer: prodMailer{}}),
-		WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}}),
+		WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}, BundledRouteAuth: w.routeAuth}),
 		WithMFA(MFAConfig{Required: w.required, Methods: w.methods, APIKeysExempt: w.apiKeysExempt, EnrollmentStart: w.enrollmentStart, EnrollmentGrace: w.enrollmentGrace}),
 		WithLogger(log),
 	}

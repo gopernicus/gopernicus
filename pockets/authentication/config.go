@@ -1227,9 +1227,14 @@ type MFAConfig struct {
 	// or above MaxMFAEnrollmentGrace is ErrMFAEnrollmentGraceInvalid.
 	EnrollmentGrace time.Duration
 	// APIKeysExempt lets an API key pass every MFA gate — RequireMFA(), the
-	// admin and the machine gates — as it did before S4d. By default a key at
-	// one is refused with a 403 mfa_credential_not_eligible and no challenge
-	// (a key cannot step up), recorded as mfa_required_denied reason api_key.
+	// admin and the machine gates — as it did before S4d: a key cannot hold
+	// AAL2, so RequireMFA() and the machine gate admit it unverified, and the
+	// admin gate admits a self-acting key by default and an act-as-user key
+	// only under a BundledRouteAuth override that admits one (logged as
+	// posture_warning=bundled_group_act_as_user_mfa_exempt at every boot). By
+	// default a key at one is refused with a 403 mfa_credential_not_eligible
+	// and no challenge (a key cannot step up), recorded as mfa_required_denied
+	// reason api_key.
 	// Production logs one posture_waiver=APIKeysExempt WARN with it,
 	// development a plain WARN. POST /auth/admin/sessions/revoke-all refuses
 	// keys regardless. It is a wiring literal, not an env knob.

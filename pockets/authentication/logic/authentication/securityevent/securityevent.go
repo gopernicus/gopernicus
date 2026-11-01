@@ -82,7 +82,11 @@ const (
 	TypeOAuthUnlinkCodeSent = "oauth_unlink_code_sent"
 	// TypeOAuthUnlinked is a completed code-gated provider unlink (design §5.4).
 	TypeOAuthUnlinked = "oauth_unlinked"
-	// TypeAPIKeyAuth is an API-key authentication attempt.
+	// TypeAPIKeyAuth is an API-key authentication attempt. A key the inbound
+	// authenticator resolved and then refused as an act-as-user key records a
+	// second, blocked row (Budgeted per client IP; Actor the service account):
+	// reason act_as_user_refused, group, api_key_id and service_account_id —
+	// never the key, its prefix or its hash.
 	TypeAPIKeyAuth = "apikey_auth"
 	// TypeTokenIssued is a bearer-JWT issuance (POST /auth/token): success,
 	// failure or blocked, with the same reasons as a password login.
@@ -452,6 +456,23 @@ const (
 	AuditReadRailAuthorization = "authorization"
 )
 
+// The Details keys a Recorder wired with WithCredentialAttributionReader merges
+// into a row written while an API key is the request's proof. The via_ prefix is
+// reserved for them: a caller-supplied via_ key is overwritten by the proven
+// value. A row without them was not written under an API-key proof, or was
+// written through a recorder without the reader.
+const (
+	// DetailViaCredential is the proof's credential kind (string): api_key.
+	DetailViaCredential = "via_credential"
+	// DetailViaAPIKeyID is the key's row id (string) — never its prefix, hash or
+	// value.
+	DetailViaAPIKeyID = "via_api_key_id"
+	// DetailViaServiceAccountID is the key's service account (string).
+	DetailViaServiceAccountID = "via_service_account_id"
+	// DetailViaActAsUser is whether the key acts as its human owner (bool).
+	DetailViaActAsUser = "via_act_as_user"
+)
+
 // Reason vocabulary: the bounded value a denial row carries under the Details key
 // "reason". A reason names the class of refusal only — never an error message,
 // address, code or token.
@@ -512,6 +533,9 @@ const (
 	// ReasonServiceAccountDisabled is an API key refused because its service
 	// account is disabled.
 	ReasonServiceAccountDisabled = "service_account_disabled"
+	// ReasonActAsUserRefused is an act-as-user API key a surface refused
+	// because it authenticates as its human owner.
+	ReasonActAsUserRefused = "act_as_user_refused"
 	// ReasonInvalidRequest is an OAuth2 token-endpoint parameter value the
 	// server evaluated and refused.
 	ReasonInvalidRequest = "invalid_request"
@@ -619,6 +643,17 @@ type Field uint8
 type Principal struct {
 	Type string
 	ID   string
+}
+
+// CredentialAttribution is the API-key proof a row was written under, as the
+// recorder's attribution reader reports it: ids only, never the key, its prefix
+// or its hash. Actor stays the effective principal; this names the credential
+// that acted for it.
+type CredentialAttribution struct {
+	Kind             string
+	APIKeyID         string
+	ServiceAccountID string
+	ActAsUser        bool
 }
 
 // SecurityEvent is one append-only audit row. UserID and Actor are both optional

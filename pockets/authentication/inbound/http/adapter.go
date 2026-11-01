@@ -51,7 +51,10 @@ type adapterConfig struct {
 	MFAMethods          []authlogic.MFAMethod
 	// GlobalSessionRevocationRoute opts in to POST /auth/admin/sessions/revoke-all.
 	GlobalSessionRevocationRoute bool
-	// MFAAPIKeysExempt lets API keys pass every MFA gate.
+	// MFAAPIKeysExempt lets API keys pass every MFA gate: a key cannot hold
+	// AAL2, so RequireMFA() and the machine gate admit it unverified, and the
+	// admin gate admits a self-acting key by default and an act-as-user key
+	// only under an override that admits one.
 	MFAAPIKeysExempt bool
 	// EnrollmentFloor is native all's first-party enrollment floor.
 	EnrollmentFloor EnrollmentFloor
@@ -227,6 +230,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 	if !auth.csrfCookie.secure {
 		auth.logger.Warn("authentication: development CSRF cookie wired; the session cookie is not Secure, so the double-submit cookie drops the __Host- prefix and Secure — production refuses it", "csrf_cookie", auth.csrfCookie.name, "secure", false)
 	}
+	auth.warnActAsUserAdmission(cfg.RouteAuth)
 	return auth, nil
 }
 

@@ -45,6 +45,10 @@ type principalSet struct {
 	delegatedAudiences []string
 	assurances         []assurance
 	allowUnenrolled    bool
+	refuseActAsUser    bool
+	// group names the bundled route group this set guards on the act-as-user
+	// refusal row; empty reads as "route", a host route.
+	group string
 }
 
 // assurance is one assurance option. RequireMFA (mfa) runs the adapter's one
@@ -159,6 +163,23 @@ func Accept(kinds ...CredentialKind) PrincipalOption {
 			}
 		}
 	}
+}
+
+// RefuseActAsUserKeys refuses an act-as-user API key while still admitting a
+// self-acting service account's key. An act-as-user key authenticates as its
+// human owner, which a surface that asks a host policy about the caller must
+// not accept: the policy would see the owner, not the key. The refusal is the
+// same opaque 401 as a kind outside the set and holds under nested narrowing.
+// It is inert on a set that admits no API keys (FirstParty, or Accept without
+// CredentialAPIKey), and Accept does not reset it.
+func RefuseActAsUserKeys() PrincipalOption {
+	return func(set *principalSet) { set.refuseActAsUser = true }
+}
+
+// bundledGroup labels a set with the bundled route group it guards, for the
+// act-as-user refusal row. Hosts cannot name it: a host route records "route".
+func bundledGroup(name string) PrincipalOption {
+	return func(set *principalSet) { set.group = name }
 }
 
 // Transports is the OR-set of transports the authenticator reads. The default is
@@ -451,6 +472,9 @@ func (set principalSet) admits(cred Credential) bool {
 		if !set.apiKey || set.firstParty || len(set.audiences) != 0 {
 			return false
 		}
+		if set.refuseActAsUser && cred.ActAsUser {
+			return false
+		}
 	case CredentialExternalToken:
 		if !set.externalToken || set.firstParty || len(set.audiences) != 0 || len(set.delegatedAudiences) != 0 {
 			return false
@@ -470,6 +494,25 @@ func (set principalSet) admits(cred Credential) bool {
 		return set.cookie
 	}
 	return false
+}
+
+// refusedActAsUser reports whether cred is outside this set ONLY because
+// RefuseActAsUserKeys refuses it: an act-as-user API key the set would
+// otherwise admit.
+func (set principalSet) refusedActAsUser(cred Credential) bool {
+	if !set.refuseActAsUser || cred.Kind != CredentialAPIKey || !cred.ActAsUser {
+		return false
+	}
+	set.refuseActAsUser = false
+	return set.admits(cred)
+}
+
+// refusalGroup is the group the act-as-user refusal row names.
+func (set principalSet) refusalGroup() string {
+	if set.group == "" {
+		return "route"
+	}
+	return set.group
 }
 
 // RequireAccessTokenOrAPIKey admits a person's access token or an API key over

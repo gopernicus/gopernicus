@@ -22,6 +22,24 @@ const (
 	InviteList InviteAction = "list"
 )
 
+// CheckCredential is the credential summary a host policy receives beside the
+// Principal: the kind of proof the request presented and, for an API key,
+// whether its account acts as a human and the key's and account's ids. It is
+// strictly a four-field, comparable projection of CurrentCredential — ids only,
+// never a key, its prefix or its hash — and it will not grow key material.
+//
+// Under the default UserAdministration and Invitations postures Kind is
+// access_token, external_token or a self-acting api_key. ActAsUser is true
+// only under a host override that admits act-as-user keys; a policy behind
+// such an override refuses ActAsUser for the actions it cares about, because
+// the Principal is then the key's human owner, not the key.
+type CheckCredential struct {
+	Kind             CredentialKind
+	ActAsUser        bool
+	APIKeyID         string
+	ServiceAccountID string
+}
+
 // InviteCheckRequest is the parsed, principal-resolved authorization question the
 // HTTP invitation handlers pose to the host policy (design §6/D3).
 // Relation is set for InviteCreate and empty for InviteList. The pocket owns
@@ -52,6 +70,12 @@ type InviteCheckRequest struct {
 	// EMAIL-KIND ONLY today, so an empty value must never be read as proof that the
 	// invitee is new.
 	ResolvedSubjectID string
+	// Credential summarizes the proof behind Principal (see CheckCredential).
+	// With an InvitationResourceRule wired, InviteCheck runs on create only:
+	// list, resend and cancel go through InvitationCan, which receives no
+	// Credential, so an override that admits act-as-user keys on Invitations is
+	// visible to the host policy on create and nowhere else.
+	Credential CheckCredential
 }
 
 // InviteCheck is the host authorization seam invitation HTTP handlers call
@@ -135,11 +159,16 @@ const (
 //
 // The Principal reaches the policy VERBATIM — including a machine principal from
 // an API key. The pocket does not pre-decide whether a service account may
-// administer users; that is exactly the decision the host owns.
+// administer users; that is exactly the decision the host owns. A machine
+// principal is always the service account itself by default; an act-as-user
+// key reaches the policy only under a host override, and then Credential tells
+// it apart.
 type UserAdminCheckRequest struct {
 	Principal    sdk.Principal
 	Action       UserAdminAction
 	TargetUserID string
+	// Credential summarizes the proof behind Principal (see CheckCredential).
+	Credential CheckCredential
 }
 
 // UserAdminCheck is the host authorization seam for user administration. It is
@@ -160,6 +189,16 @@ type UserAdminCheckRequest struct {
 // the repositories are present, so a store adapter may return a complete bundle
 // without an authorization surface appearing anywhere.
 type UserAdminCheck func(ctx context.Context, req UserAdminCheckRequest) error
+
+// checkCredential projects the request's credential onto the summary a host
+// policy receives; the zero value when none is stashed.
+func (h *handlers) checkCredential(ctx context.Context) CheckCredential {
+	cred, ok := h.svc.CurrentCredential(ctx)
+	if !ok {
+		return CheckCredential{}
+	}
+	return CheckCredential{Kind: cred.Kind, ActAsUser: cred.ActAsUser, APIKeyID: cred.APIKeyID, ServiceAccountID: cred.ServiceAccountID}
+}
 
 func (h *handlers) checkInvite(ctx context.Context, req InviteCheckRequest) error {
 	if h.inviteCheck == nil {

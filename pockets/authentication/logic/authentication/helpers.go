@@ -17,10 +17,10 @@ import (
 // newSecurityEventRecorder builds the recorder a Service or ExternalAuthenticator
 // owns when none was supplied: over events, attributing each row to the client
 // through the request's client-info carrier (design §5.1 WI4).
-func newSecurityEventRecorder(events securityevent.SecurityEventRepository, ids sdk.IDGenerator, now func() time.Time, logger *slog.Logger, observer securityevent.WriteObserver) *securityevent.Recorder {
-	return securityevent.NewRecorder(events, ids, now, logger,
+func newSecurityEventRecorder(events securityevent.SecurityEventRepository, ids sdk.IDGenerator, now func() time.Time, logger *slog.Logger, observer securityevent.WriteObserver, opts ...securityevent.RecorderOption) *securityevent.Recorder {
+	return securityevent.NewRecorder(events, ids, now, logger, append([]securityevent.RecorderOption{
 		securityevent.WithClientInfoReader(ClientInfoFromContext),
-		securityevent.WithWriteObserver(observer))
+		securityevent.WithWriteObserver(observer)}, opts...)...)
 }
 
 // projectAddresses returns a user's active VERIFIED identifiers as identity

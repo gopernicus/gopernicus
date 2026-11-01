@@ -72,6 +72,7 @@ type authenticationFixture struct {
 	PasswordFlowsDisabled bool
 	RequireVerifiedEmail  bool
 	SecurityEvents        securityevent.SecurityEventRepository
+	SecurityEventRecorder *securityevent.Recorder
 	Invitations           interface {
 		ResolveInvitations(context.Context, string, string, string, string) (int, error)
 	}

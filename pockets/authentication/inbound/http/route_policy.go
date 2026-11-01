@@ -79,12 +79,19 @@ type BundledRouteAuthentication struct {
 	// minting/listing/revocation. Default: RequirePrincipal(Accept(CredentialAccessToken),
 	// FirstParty(), Live()) — a key never creates, reads, mints, or revokes keys.
 	MachineLifecycle RoutePrincipalStrategy
-	// UserAdministration gates every /auth/admin/users route.
-	// Default: RequirePrincipal(Live()) — every wired kind; a machine principal
-	// reaches WithUserAdminCheck and the host decides.
+	// UserAdministration gates every /auth/admin/users route and
+	// GET /auth/admin/security-events.
+	// Default: RequirePrincipal(Live(), RefuseActAsUserKeys()) — every wired
+	// kind except an act-as-user API key; a self-acting machine principal
+	// reaches WithUserAdminCheck and the host decides. An override that admits
+	// act-as-user keys is logged at every boot, and the check then reads
+	// UserAdminCheckRequest.Credential to tell the key from its owner.
 	UserAdministration RoutePrincipalStrategy
 	// Invitations gates the authenticated invitation routes.
-	// Default: RequirePrincipal(Live()) — every wired kind.
+	// Default: RequirePrincipal(Live(), RefuseActAsUserKeys()) — every wired
+	// kind except an act-as-user API key. A self-acting service account fails
+	// the handlers' CurrentUser requirement, so no machine principal reaches an
+	// invitation handler by default.
 	Invitations RoutePrincipalStrategy
 	// BrowserAccount gates the bundled HTML account pages and the form-only
 	// identifier edit POST. Default: RequirePrincipal(Accept(CredentialAccessToken),
@@ -98,16 +105,49 @@ type BundledRouteAuthentication struct {
 // default". An explicit PrincipalStrategy() with no options is CONFIGURED and
 // resolves to the primitive defaults, which is why the configured bit exists.
 // enrollment appends AllowMFAEnrollment() for the enrollment surface's groups,
-// so an override there inherits it.
-func (r RoutePrincipalStrategy) middleware(svc *Adapter, enrollment bool) web.Middleware {
+// so an override there inherits it; group labels the act-as-user refusal row.
+func (r RoutePrincipalStrategy) middleware(svc *Adapter, group string, enrollment bool) web.Middleware {
 	if !r.configured {
 		return nil
 	}
-	opts := r.opts
+	opts := append(slices.Clip(r.opts), bundledGroup(group))
 	if enrollment {
-		opts = append(slices.Clip(opts), AllowMFAEnrollment())
+		opts = append(opts, AllowMFAEnrollment())
 	}
 	return svc.RequirePrincipal(opts...)
+}
+
+// warnActAsUserAdmission logs, at every boot, each host override of
+// UserAdministration or Invitations whose credential set admits an act-as-user
+// API key at the authenticator while machine identity is wired: the host
+// policy behind it sees the key's human owner. With MFAConfig.APIKeysExempt
+// also set it logs a second line per group, since the admin MFA gate then
+// admits that key unverified. An override's own Check cannot be introspected,
+// so both lines speak of admission at the authenticator only. It warns, never
+// refuses.
+func (s *Adapter) warnActAsUserAdmission(cfg BundledRouteAuthentication) {
+	if !s.service.MachineEnabled() {
+		return
+	}
+	actAsUserKey := Credential{Kind: CredentialAPIKey, Transport: TransportHeader, ActAsUser: true}
+	for _, g := range []struct {
+		name     string
+		strategy RoutePrincipalStrategy
+		next     string
+	}{
+		{"UserAdministration", cfg.UserAdministration, "add RefuseActAsUserKeys() to the strategy, or read UserAdminCheckRequest.Credential"},
+		{"Invitations", cfg.Invitations, "add RefuseActAsUserKeys() to the strategy, or read InviteCheckRequest.Credential; InviteCheck sees Credential on create only"},
+	} {
+		if !g.strategy.configured || !s.resolveSet(g.strategy.opts).admits(actAsUserKey) {
+			continue
+		}
+		s.logger.Warn("authentication: a bundled route group override admits act-as-user API keys at the authenticator, so its host policy sees the key's human owner; "+g.next,
+			"posture_warning", "bundled_group_admits_act_as_user_keys", "group", g.name)
+		if s.apiKeysExempt {
+			s.logger.Warn("authentication: a bundled route group override admits act-as-user API keys at the authenticator and MFAConfig.APIKeysExempt is set, so the admin MFA gate admits that key unverified",
+				"posture_warning", "bundled_group_act_as_user_mfa_exempt", "group", g.name)
+		}
+	}
 }
 
 // resolveBundledRouteAuth freezes WithRouteAuthentication into concrete
@@ -115,14 +155,14 @@ func (r RoutePrincipalStrategy) middleware(svc *Adapter, enrollment bool) web.Mi
 // contract: a host names a posture through WithRouteAuthentication).
 func resolveBundledRouteAuth(cfg BundledRouteAuthentication, svc *Adapter) RouteAuthentication {
 	return RouteAuthentication{
-		OAuthLinkStart:       cfg.OAuthLinkStart.middleware(svc, true),
-		SessionSecurityReads: cfg.SessionSecurityReads.middleware(svc, true),
-		CSRFBootstrap:        cfg.CSRFBootstrap.middleware(svc, true),
-		SessionHydration:     cfg.SessionHydration.middleware(svc, true),
-		CredentialManagement: cfg.CredentialManagement.middleware(svc, true),
-		MachineLifecycle:     cfg.MachineLifecycle.middleware(svc, false),
-		UserAdministration:   cfg.UserAdministration.middleware(svc, false),
-		Invitations:          cfg.Invitations.middleware(svc, false),
-		BrowserAccount:       cfg.BrowserAccount.middleware(svc, true),
+		OAuthLinkStart:       cfg.OAuthLinkStart.middleware(svc, "OAuthLinkStart", true),
+		SessionSecurityReads: cfg.SessionSecurityReads.middleware(svc, "SessionSecurityReads", true),
+		CSRFBootstrap:        cfg.CSRFBootstrap.middleware(svc, "CSRFBootstrap", true),
+		SessionHydration:     cfg.SessionHydration.middleware(svc, "SessionHydration", true),
+		CredentialManagement: cfg.CredentialManagement.middleware(svc, "CredentialManagement", true),
+		MachineLifecycle:     cfg.MachineLifecycle.middleware(svc, "MachineLifecycle", false),
+		UserAdministration:   cfg.UserAdministration.middleware(svc, "UserAdministration", false),
+		Invitations:          cfg.Invitations.middleware(svc, "Invitations", false),
+		BrowserAccount:       cfg.BrowserAccount.middleware(svc, "BrowserAccount", true),
 	}
 }

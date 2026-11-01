@@ -510,9 +510,15 @@ func newService(d constructorConfig) *Service {
 	if credentialPolicy == nil {
 		credentialPolicy = credential.NewDefaultPolicy(credential.PolicyConfig{})
 	}
+	// svc is assigned below, after the recorder its attribution reader is built
+	// into; the reader is only called at record time.
+	var svc *Service
 	securityEvents := d.SecurityEventRecorder
 	if securityEvents == nil {
-		securityEvents = newSecurityEventRecorder(d.SecurityEvents, d.IDs, clock, logger, d.AuditWriteObserver)
+		securityEvents = newSecurityEventRecorder(d.SecurityEvents, d.IDs, clock, logger, d.AuditWriteObserver,
+			securityevent.WithCredentialAttributionReader(func(ctx context.Context) (securityevent.CredentialAttribution, bool) {
+				return svc.CredentialAttribution(ctx)
+			}))
 	}
 	registration, _ := normalizeRegistrationMode(d.Registration)
 	var serviceAccountStatus serviceaccount.StatusRepository
@@ -531,7 +537,7 @@ func newService(d constructorConfig) *Service {
 			logger.Warn("auth: the hasher could not hash the timing dummy; unknown-identifier logins will answer faster than wrong passwords", "warning", "password_timing_dummy_unavailable", "error_kind", ErrorKind(err))
 		}
 	}
-	return &Service{
+	svc = &Service{
 		authenticationLimits: d.AuthenticationLimits.withDefaults(),
 		users:                d.Users,
 		identifiers:          d.Identifiers,
@@ -607,6 +613,7 @@ func newService(d constructorConfig) *Service {
 		accountStatus:      serviceAccountStatus,
 		apiKeyMaxTTL:       d.APIKeyMaxTTL,
 	}
+	return svc
 }
 
 // Register creates an unverified user together with its primary email identifier

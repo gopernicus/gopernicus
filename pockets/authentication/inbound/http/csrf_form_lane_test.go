@@ -164,14 +164,12 @@ func TestStrictCSRFGateAdmitsHeaderToken(t *testing.T) {
 func TestStrictCSRFGateBearerUnaffected(t *testing.T) {
 	f, _ := newCSRFPostureFixture(t)
 	access := f.bearerAccessToken(t, "csrf@example.com")
-	actAsUser, _ := f.key(t, "helper", true, "u1")
 	machine, _ := f.key(t, "bot", false, "")
 	cases := []struct {
 		name, token string
 		rt          gatedRoute
 	}{
 		{"access token on invitation cancel", access, gatedRoute{"POST", "/auth/invitations/inv-1/cancel"}},
-		{"act-as-user key on invitation resend", actAsUser, gatedRoute{"POST", "/auth/invitations/inv-1/resend"}},
 		{"service-account key on user deactivate", machine, gatedRoute{"POST", "/auth/admin/users/u2/deactivate"}},
 	}
 	for _, tc := range cases {
