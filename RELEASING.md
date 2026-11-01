@@ -1,10 +1,10 @@
 # Releasing gopernicus modules
 
-## Bundled user-administration and invitation routes refuse act-as-user API keys (#312)
+## Bundled user-administration and invitation routes refuse act-as-user API keys (#312 — published 2026-10-31)
 
-**Status: pending.** One annotated tag (not signed) on one module, `pockets/authentication`
-**v0.39.0**, to be cut after PR-1 (this change, the audit attribution included) is on `main`
-with a green `live-stores` dispatch. Then it is pushed, confirmed on origin and on the proxy, and
+**Status: released.** One annotated tag (not signed) on one module, `pockets/authentication`
+**v0.39.0**, cut at the PR-1 squash-merge commit (#315, the audit attribution included) after a
+green `live-stores` dispatch on `main`. It was pushed, confirmed on origin and on the proxy, and
 cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache). The examples repin
 in PR-2. No migration, no store tag, no sdk, views, `pockets` or workshop tag. Rulings: the
 default for both groups is `RequirePrincipal(Live(), RefuseActAsUserKeys())` (the human-only
@@ -62,7 +62,56 @@ route, with the audit rows naming B.
 
 | Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
 |---|---|---|---|---|---|
-| 1 | `pockets/authentication/v0.39.0` | pending | pending (PR-1) | pending | pending |
+| 1 | `pockets/authentication/v0.39.0` | `1705ff99` → `a84df1c0` | #315 (PR-1, #312) | 41259742933 @ `a84df1c0` | OK; MVS selects sdk v0.24.0 |
+| — | none | pending merge | PR-2 (examples repin, auth-cms README leg + test) | — | the MVS sets below |
+
+The tag table matches `git ls-remote --tags origin` (the tag object `1705ff99` peels to
+`a84df1c0`). **Not tagged:** sdk, the authentication stores (pgx v0.19.0, turso v0.18.0),
+views/goth (v0.9.0), `pockets`, workshop, the examples, and every other module. Nothing retracts.
+
+**The MVS sets** (each from its own empty module cache with `GOWORK=off`, go1.26.10; each reports
+`all modules verified` and builds).
+- **Tag time:** authentication v0.39.0 alone (MVS selects sdk v0.24.0).
+- **Beside the released stores and views:** authentication v0.39.0 + authentication pgx v0.19.0
+  (sdk v0.24.0); + turso v0.18.0 (sdk v0.24.0); + views/goth v0.9.0 (sdk v0.24.0).
+- **pgx host shape:** authentication v0.39.0 + authentication pgx v0.19.0 + authorization
+  v0.35.0 + authorization pgx v0.24.0 + goredis v0.6.0 + golang-jwt v0.4.0 + bcrypt v0.3.0 +
+  pgxdb v0.18.0 (MVS selects sdk v0.26.0, from authorization v0.35.0); the same set with
+  authorization v0.34.0, as the examples pin it, selects sdk v0.25.0.
+
+**PR-2 repin.** `GOWORK=off go get github.com/gopernicus/gopernicus/pockets/authentication@v0.39.0`
+then `GOWORK=off go mod tidy` in auth-cms, production-baseline and external-identity: only
+`pockets/authentication` moves (v0.38.0 → v0.39.0); no other module version changes. Each
+example passes `GOWORK=off go build ./... && go vet ./... && go test ./...`, and
+`go version -m` on the built auth-cms server reports authentication v0.39.0. The auth-cms README
+Leg 2 shows an act-as-user key at 401 on `/auth/admin/users` and a self-acting key reaching the
+host check (403), and `TestActAsUserKeyRefusedOnBundledUserAdministration` pins the 401 against
+the host's real `UserAdminCheck` (it fails on v0.38.0 with the admin MFA gate's 403
+`mfa_credential_not_eligible`).
+
+**Run and look (live drill).** A real auth-cms binary, in-memory, `AUTH_RUNTIME_MODE=development`,
+`AUTH_DEMO_ADMIN_EMAIL` set. An admin and a second user registered and verified; the admin
+enrolled TOTP and stepped up to AAL2, then minted an act-as-user key (owned by the admin) and a
+self-acting key over the CSRF lane. Every key request is a header-only bearer with no `Origin`.
+- **Before** (v0.38.0, `AUTH_DEMO_API_KEYS_EXEMPT=1`): the act-as-user key got **200** on
+  `GET /auth/admin/users`, `GET /auth/admin/security-events` and `GET /auth/invitations/mine`,
+  and **200** on `POST /auth/admin/users/{id}/erase`; the second user's status read `erased`.
+- **After** (authentication v0.39.0 from the proxy, `GOWORK=off`; `go version -m` shows
+  v0.39.0), both with and without `AUTH_DEMO_API_KEYS_EXEMPT=1`:
+  - The act-as-user key got **401** on all four, and the second user stayed `active`. Without
+    the exemption the refusal now comes from the authenticator, before the admin MFA gate's 403.
+  - `/demo/whoami` and `/auth/me` still answered 200 for that key (the act-as-owner contract
+    and the Q2 ruling).
+  - The self-acting key got the host check's 403 `permission_denied`, as before.
+  - `/auth/admin/security-events` showed one `apikey_auth` / `blocked` row per refusal:
+    `reason=act_as_user_refused`, `group` `UserAdministration` (three) or `Invitations`
+    (one), `api_key_id`, `service_account_id` and the four `via_*` keys
+    (`via_act_as_user: true`). No row carried a key prefix or key material.
+  - The self-acting key's `authorization_denied` row carried `via_act_as_user: false`. No
+    session-written row carried `via_*`.
+- **Not driven live:** the `posture_warning=` boot lines. auth-cms has no switch that sets a
+  `BundledRouteAuth` override, so they are pinned only by `TestActAsUserAdmissionBootWarning`
+  and `TestActAsUserAdmissionWarnsThroughNew` (exact line counts, through `New`).
 
 > **Read first:** `grep -rnE 'BundledRouteAuth|UserAdministration|Invitations|APIKeysExempt|act_as_user|ActAsUser' --include='*.go'`.
 > - **Pins:** authentication **v0.39.0**; stores, views and sdk unchanged. Repin with explicit

@@ -511,6 +511,12 @@ curl -sX POST -c jar -b jar http://localhost:8082/auth/service-accounts \
 curl -sX POST -c jar -b jar http://localhost:8082/auth/service-accounts \
   -H "X-CSRF-Token: $CSRF" \
   -H 'Content-Type: application/json' -d '{"name":"ci","act_as_user":true}'  # -> {...,"owner_user_id":"<YOU>"}
+# a key on it (<ASAID> is that response's id) is refused at the bundled user
+# administration authenticator before any host check sees its owner
+curl -sX POST -c jar -b jar http://localhost:8082/auth/service-accounts/<ASAID>/keys \
+  -H "X-CSRF-Token: $CSRF" \
+  -H 'Content-Type: application/json' -d '{"name":"k0"}'                     # -> {...,"key":"<ASKEY>"}
+curl -i -H "Authorization: Bearer <ASKEY>" http://localhost:8082/auth/admin/users  # 401 (act-as-user key)
 # delegation to another human — gate-protected, validated, audited
 curl -sX POST -c jar -b jar http://localhost:8082/auth/service-accounts \
   -H "X-CSRF-Token: $CSRF" \
@@ -520,10 +526,26 @@ curl -sX POST -c jar -b jar http://localhost:8082/auth/service-accounts/<SAID>/k
   -H 'Content-Type: application/json' -d '{"name":"k1"}'                     # -> {"id":"<KEYID>",...,"key":"<KEY>"}
 # WITHOUT any cookie: the RequirePrincipal-gated demo route accepts the bearer key
 curl -i -H "Authorization: Bearer <KEY>" http://localhost:8082/demo/whoami  # 200 (service_account principal)
+# a self-acting key reaches the host's UserAdminCheck, which admits users only
+curl -i -H "Authorization: Bearer <KEY>" http://localhost:8082/auth/admin/users  # 403 {"message":"forbidden","code":"permission_denied"}
 # revoke (a cookie mutation, so the token rides along), then the same call -> 401
 curl -sX POST -c jar -b jar -H "X-CSRF-Token: $CSRF" http://localhost:8082/auth/api-keys/<KEYID>/revoke
 curl -i -H "Authorization: Bearer <KEY>" http://localhost:8082/demo/whoami  # 401
 ```
+
+Since `pockets/authentication` v0.39.0 the bundled user administration
+(`/auth/admin/users*`) and invitation routes refuse an act-as-user key at their
+authenticator — **401**, plus one `apikey_auth` row with status `blocked` and
+`reason=act_as_user_refused` — because `UserAdminCheck` would otherwise see the key's
+human owner and admit it as that admin. A self-acting key is still a real principal
+there and reaches this host's check, which grants `platform:main#admin` to users only,
+so it is **403**. Past the check sits the admin MFA gate: this host wires passkeys,
+TOTP and `UserAdminCheck`, so the MFA default resolves to `admins` and the admin
+routes (and the lifecycle routes above) also need an **AAL2** admin session; a key,
+which can never hold AAL2, is **403** `mfa_credential_not_eligible` there unless the
+host boots with `AUTH_DEMO_API_KEYS_EXEMPT=1` (development only;
+`MFAConfig.APIKeysExempt`). `TestActAsUserKeyRefusedOnBundledUserAdministration` in
+`cmd/server/apikey_search_test.go` pins the 401 against this host's real check.
 
 ### Leg 3 — JWT bearer (the session-backed token pair)
 

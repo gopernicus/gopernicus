@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
+	access "github.com/gopernicus/gopernicus/examples/auth-cms/pockets/access/inbound"
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 
 	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
@@ -44,6 +47,15 @@ type machineHost struct {
 
 func newMachineHost(t *testing.T) *machineHost {
 	t.Helper()
+	return newMachineHostWith(t, false)
+}
+
+// newMachineHostWith is newMachineHost that, with userAdmin, also wires run()'s
+// UserAdminCheck so /auth/admin/users* is mounted. That check beside the host's
+// passkeys and TOTP resolves the MFA default to admins, which puts AAL2 on the
+// lifecycle routes too, so a userAdmin host mints its keys through the service.
+func newMachineHostWith(t *testing.T, userAdmin bool) *machineHost {
+	t.Helper()
 
 	components, err := newAuthorization(nil, nil, environment.ModeDevelopment, nil)
 	if err != nil {
@@ -52,8 +64,13 @@ func newMachineHost(t *testing.T) *machineHost {
 	gate := components.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed(platformResourceType, platformResourceID)))
 
 	return &machineHost{
-		linkHost: newLinkHostTuned(t, func(cfg *authenticationConfig) { cfg.MachineRoutesGate = gate }),
-		system:   components.Mutations,
+		linkHost: newLinkHostTuned(t, func(cfg *authenticationConfig) {
+			cfg.MachineRoutesGate = gate
+			if userAdmin {
+				cfg.UserAdminCheck = access.New(components.Decisions).UserAdmin
+			}
+		}),
+		system: components.Mutations,
 	}
 }
 
@@ -337,5 +354,29 @@ func TestMachineRoutesRequireACredential(t *testing.T) {
 
 	if resp, body := c.do("GET", "/auth/service-accounts?limit=10", "", nil); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("GET /auth/service-accounts unauthenticated = %d, want 401; body=%s", resp.StatusCode, body)
+	}
+}
+
+// TestActAsUserKeyRefusedOnBundledUserAdministration pins authentication v0.39.0's
+// default over real HTTP: an act-as-user key owned by a platform admin is refused
+// at the UserAdministration authenticator (401) before the host check, which would
+// otherwise see the owner and admit the key as that admin.
+func TestActAsUserKeyRefusedOnBundledUserAdministration(t *testing.T) {
+	host := newMachineHostWith(t, true)
+	adminID := host.currentUserID(host.signUpPlatformAdmin("apikey-act-as-user@example.com"))
+
+	ctx := context.Background()
+	sa, err := host.svc.Authentication.CreateServiceAccount(ctx, adminID, "ci", "", true, adminID)
+	if err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+	_, key, err := host.svc.Authentication.MintAPIKey(ctx, sa.ID, "k1", time.Time{})
+	if err != nil {
+		t.Fatalf("MintAPIKey: %v", err)
+	}
+
+	bearer := http.Header{"Authorization": {"Bearer " + key}}
+	if resp, body := host.newClient().do("GET", "/auth/admin/users", "", bearer); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("GET /auth/admin/users with an act-as-user key = %d, want 401; body=%s", resp.StatusCode, body)
 	}
 }

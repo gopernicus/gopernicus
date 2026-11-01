@@ -6222,9 +6222,10 @@ against the live Auth emulator.
 
 ## AUDIT-064: Bundled user-administration and invitation routes refuse act-as-user API keys (#312)
 
-- **Status:** implemented; release pending as `pockets/authentication` v0.39.0 (with the
-  audit-attribution change that ships on the same tag). Record: `RELEASING.md`, "Bundled
-  user-administration and invitation routes refuse act-as-user API keys (#312)".
+- **Status:** released as `pockets/authentication` v0.39.0 (with the audit-attribution change
+  that ships on the same tag; tag object `1705ff99` → `a84df1c0`, #315); the examples repin in
+  PR-2. Record: `RELEASING.md`, "Bundled user-administration and invitation routes refuse
+  act-as-user API keys (#312 — published 2026-10-31)".
 - **Modules:** `pockets/authentication`. Untouched: sdk, the authentication stores, views/goth,
   `pockets`, workshop. No migration; `security_events.details` gains additive keys only.
 - **Old behavior:**
