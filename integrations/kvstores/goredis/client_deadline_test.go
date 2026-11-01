@@ -65,3 +65,24 @@ func TestOpenHonorsDeadlineAfterConnection(t *testing.T) {
 		t.Fatal("test never reached an established connection")
 	}
 }
+
+// lateCtx reports a past deadline while Err is still nil: the moment between
+// the socket timing out and the context's own timer firing.
+type lateCtx struct{ context.Context }
+
+func (lateCtx) Deadline() (time.Time, bool) { return time.Now().Add(-time.Millisecond), true }
+
+func TestCallerDeadlineErrBeforeContextFires(t *testing.T) {
+	if err := callerDeadlineErr(lateCtx{context.Background()}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("callerDeadlineErr = %v, want DeadlineExceeded once the deadline has passed", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	if err := callerDeadlineErr(ctx); err != nil {
+		t.Fatalf("callerDeadlineErr = %v, want nil before the deadline", err)
+	}
+	cancel()
+	if err := callerDeadlineErr(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("callerDeadlineErr = %v, want Canceled", err)
+	}
+}

@@ -151,13 +151,27 @@ func Open(ctx context.Context, cfg Config, opts ...ClientOption) (*redis.Client,
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		_ = rdb.Close()
-		if ctx.Err() != nil {
-			err = ctx.Err()
+		if cerr := callerDeadlineErr(ctx); cerr != nil {
+			err = cerr
 		}
 		return nil, fmt.Errorf("goredis: pinging redis at %s: %w", redisOpts.Addr, err)
 	}
 
 	return rdb, nil
+}
+
+// callerDeadlineErr reports the caller's context error for a failed ping. go-redis
+// sets the socket deadline from ctx's deadline, so the read can time out
+// ("i/o timeout") a moment before ctx itself reports DeadlineExceeded. A
+// deadline already at or past now counts as exceeded.
+func callerDeadlineErr(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if dl, ok := ctx.Deadline(); ok && !time.Now().Before(dl) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 // options resolves cfg into the go-redis options Open dials with: the
