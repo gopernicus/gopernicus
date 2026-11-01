@@ -20,6 +20,7 @@ import (
 // EMAIL body (the branded verification content). They are different Config fields of
 // different types feeding different subsystems.
 func TestOverrideSystemsAreDistinct(t *testing.T) {
+	t.Parallel()
 	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
@@ -66,6 +67,7 @@ func (c *captureSender) latest() (email.Message, bool) {
 // the bundled default copy. This is the host-level demonstration that the email
 // override system actually takes effect, distinct from the page Views override.
 func TestEmailLayerAppOverrideWins(t *testing.T) {
+	t.Parallel()
 	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)

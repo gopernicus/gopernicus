@@ -32,6 +32,7 @@ func (r *failingOutboxMark) MarkPublished(ctx context.Context, id string) error 
 // memory repositories as stand-ins for the host's durable stores. The stable
 // outbox ID must survive failed marking so repeated handoffs enqueue just one job.
 func TestOutboxDispatchToJobsPreservesIdempotentHandoff(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	outbox := &failingOutboxMark{Store: outboxmem.New(), err: errors.New("outbox mark unavailable")}
 	queue := jobsmem.NewQueue()

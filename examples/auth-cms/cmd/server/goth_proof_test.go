@@ -59,6 +59,7 @@ func gothProofRouter(t *testing.T, global ...web.Middleware) *web.WebHandler {
 // policy wins — no-referrer, X-Frame-Options DENY, and its own CSP with
 // frame-ancestors 'none'.
 func TestSecurityHeadersPresetBesidePocketPolicy(t *testing.T) {
+	t.Parallel()
 	router := gothProofRouter(t, web.TrustProxies(0), web.SecurityHeaders())
 	rec := get(t, router, "/auth/login")
 	if rec.Code != http.StatusOK {
@@ -109,6 +110,7 @@ var mappedCSP = []string{
 // real composed router. (Login is this host's asset-free branded override; every other
 // page renders through ui/goth.)
 func TestGOTHRegisterRendersStyledUnderMappedCSP(t *testing.T) {
+	t.Parallel()
 	router := gothProofRouter(t)
 	rec := get(t, router, "/auth/register")
 	if rec.Code != http.StatusOK {
@@ -146,6 +148,7 @@ func TestGOTHRegisterRendersStyledUnderMappedCSP(t *testing.T) {
 // EVERY auth page, including this host's asset-free Login override: the mapped CSP is
 // pocket-applied per render, so a view can never weaken it.
 func TestGOTHMappedCSPAppliesToHostOverride(t *testing.T) {
+	t.Parallel()
 	rec := get(t, gothProofRouter(t), "/auth/login")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /auth/login = %d, want 200", rec.Code)
@@ -162,6 +165,7 @@ func TestGOTHMappedCSPAppliesToHostOverride(t *testing.T) {
 // externalized fragment-reader script (no inline script) and that the script serves
 // same-origin so script-src 'self' covers it.
 func TestGOTHResetLandingExternalizedReader(t *testing.T) {
+	t.Parallel()
 	router := gothProofRouter(t)
 	rec := get(t, router, "/auth/password/reset")
 	if rec.Code != http.StatusOK {
@@ -197,6 +201,7 @@ func TestGOTHResetLandingExternalizedReader(t *testing.T) {
 // migration: a POST to /auth/login with a JSON content type is dispatched to the JSON
 // arm and answered with a JSON error (never an HTML page).
 func TestGOTHMigrationPreservesJSONAPI(t *testing.T) {
+	t.Parallel()
 	router := gothProofRouter(t)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"email":"x","password":"y"}`))
@@ -214,6 +219,7 @@ func TestGOTHMigrationPreservesJSONAPI(t *testing.T) {
 // Views wired the HTML GET page is unregistered (405 — the JSON POST twin still owns
 // the path) and no widened CSP/asset route is required.
 func TestGOTHNilViewsAssetFreePosture(t *testing.T) {
+	t.Parallel()
 	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
@@ -245,6 +251,7 @@ func TestGOTHNilViewsAssetFreePosture(t *testing.T) {
 // 'unsafe-inline', and the global Permissions-Policy never denies the
 // publickey-credentials-* features.
 func TestGOTHLoginPasskeyContract(t *testing.T) {
+	t.Parallel()
 	router := gothProofRouter(t, web.TrustProxies(0), web.SecurityHeaders())
 	rec := get(t, router, "/auth/login")
 	if rec.Code != http.StatusOK {
@@ -322,6 +329,7 @@ func (c *linkClient) formPost(path string, form url.Values) (*http.Response, str
 // enrollment PRG, the QR code and the key, a wrong code keeping the same key,
 // the recovery codes shown once, and a code from the chooser reaching aal2.
 func TestGOTHTOTPPagesThroughTheHost(t *testing.T) {
+	t.Parallel()
 	host := newPasskeyHost(t, nil)
 	dora := host.signUp("dora@example.com")
 

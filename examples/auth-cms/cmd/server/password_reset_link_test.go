@@ -97,6 +97,7 @@ func (productionSender) Capabilities() notify.Capabilities {
 
 // TestPasswordResetLinkCompletesTheFlow is the end-to-end walk.
 func TestPasswordResetLinkCompletesTheFlow(t *testing.T) {
+	t.Parallel()
 	host := newResetHost(t)
 	const addr = "reset-flow@example.com"
 	c := host.signUp(addr)
@@ -145,6 +146,7 @@ func TestPasswordResetLinkCompletesTheFlow(t *testing.T) {
 // forgot-password request must NOT be able to steer the emailed link at their own
 // origin — that is a full account-takeover primitive.
 func TestPasswordResetLinkIgnoresRequestHeaders(t *testing.T) {
+	t.Parallel()
 	host := newResetHost(t)
 	const addr = "reset-hostile@example.com"
 	c := host.signUp(addr)
@@ -193,6 +195,7 @@ func TestPasswordResetLinkIgnoresRequestHeaders(t *testing.T) {
 // posture at construction: production refuses to start without it, development
 // starts (with a warning) and keeps the legacy raw-token mail.
 func TestPasswordResetProductionRequiresTheURL(t *testing.T) {
+	t.Parallel()
 	base, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)

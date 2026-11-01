@@ -28,6 +28,7 @@ func (s *membershipFacts) ReadTupleSnapshot(ctx context.Context, fn func(context
 }
 
 func TestMembershipPolicySharesSnapshotAndFailsClosed(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, principal string
 		failFirst       bool

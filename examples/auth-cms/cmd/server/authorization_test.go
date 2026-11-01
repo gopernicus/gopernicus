@@ -68,6 +68,7 @@ func allowed(t *testing.T, svc authorization.Components, userID, permission, res
 }
 
 func TestAuthorizationCompositionInboundPolicy(t *testing.T) {
+	t.Parallel()
 	comps := hostAuthz(t)
 	if comps.Decisions == nil || comps.Mutations == nil {
 		t.Fatal("guarded composition must return both Service and TupleWriter")
@@ -85,6 +86,7 @@ func TestAuthorizationCompositionInboundPolicy(t *testing.T) {
 }
 
 func TestHostAdmissionManageAccessAllowsAndDenies(t *testing.T) {
+	t.Parallel()
 	comps := hostAuthz(t)
 	svc, sm := comps, comps.Mutations
 	seedTrustedOwner(t, sm, "p1", "u-owner")
@@ -119,6 +121,7 @@ func TestHostAdmissionManageAccessAllowsAndDenies(t *testing.T) {
 // Apply, and no row is written. This is the acceptance's "untrusted service calls cannot
 // self-grant".
 func TestInboundRejectsSelfGrant(t *testing.T) {
+	t.Parallel()
 	comps := hostAuthz(t)
 	svc, sm := comps, comps.Mutations
 	seedTrustedOwner(t, sm, "p1", "u-owner")
@@ -136,6 +139,7 @@ func TestInboundRejectsSelfGrant(t *testing.T) {
 }
 
 func TestHostAdmissionPlatformAdminShortCircuit(t *testing.T) {
+	t.Parallel()
 	comps := hostAuthz(t)
 	svc, sm := comps, comps.Mutations
 	if err := seedAuthorization(context.Background(), sm); err != nil { // seeds platform:main#admin@user:demo-owner
@@ -170,6 +174,7 @@ func TestHostAdmissionPlatformAdminShortCircuit(t *testing.T) {
 }
 
 func TestHostAdmissionGlobalMutationTrustedOnly(t *testing.T) {
+	t.Parallel()
 	comps := hostAuthz(t)
 	_, err := admitAssignRole(context.Background(), comps, actor("u-nobody"), mutations.AssignRoleCommand{
 
@@ -202,6 +207,7 @@ func demoGrant(operationID, relation, subjectID string) invitations.GrantInput {
 }
 
 func TestBaselineInvitationGranterNeedsNoMutationLifecycle(t *testing.T) {
+	t.Parallel()
 	store := authzmem.New()
 	comps, err := authorization.New(authorization.Repositories{Tuples: store.Tuples()}, authorization.WithModel(authzSchema()))
 	if err != nil {
@@ -234,6 +240,7 @@ func TestBaselineInvitationGranterNeedsNoMutationLifecycle(t *testing.T) {
 }
 
 func TestInvitationAcceptanceTrustedAndIdempotent(t *testing.T) {
+	t.Parallel()
 	comps := hostAuthz(t)
 	svc, sm := comps, comps.Mutations
 	ctx := context.Background()
@@ -269,6 +276,7 @@ func TestInvitationAcceptanceTrustedAndIdempotent(t *testing.T) {
 }
 
 func TestInvitationReinviteAfterRevokeRestoresTuple(t *testing.T) {
+	t.Parallel()
 	comps := hostAuthz(t)
 	svc, sm := comps, comps.Mutations
 	ctx := context.Background()
@@ -313,6 +321,7 @@ func TestInvitationReinviteAfterRevokeRestoresTuple(t *testing.T) {
 }
 
 func TestInvitationGranterChangedCommandResolvesSuperseded(t *testing.T) {
+	t.Parallel()
 	comps := hostAuthz(t)
 	ctx := context.Background()
 	if err := seedAuthorization(ctx, comps.Mutations); err != nil {
@@ -332,6 +341,7 @@ func TestInvitationGranterChangedCommandResolvesSuperseded(t *testing.T) {
 
 // Accepting member preserves an existing owner on the same subject/resource.
 func TestInvitationMemberAndOwnerCoexist(t *testing.T) {
+	t.Parallel()
 	comps := hostAuthz(t)
 	ctx := context.Background()
 	if err := seedAuthorization(ctx, comps.Mutations); err != nil {
@@ -368,6 +378,7 @@ func TestInvitationMemberAndOwnerCoexist(t *testing.T) {
 // since-deleted host resource fails wrapping sdk.ErrNotFound and writes no tuple. Only the
 // host knows the resource is gone, so the check is the Granter's duty (design D2).
 func TestInvitationGrantDeletedResourceNotFound(t *testing.T) {
+	t.Parallel()
 	comps := hostAuthz(t)
 	svc, sm := comps, comps.Mutations
 	ctx := context.Background()
@@ -396,6 +407,7 @@ func TestInvitationGrantDeletedResourceNotFound(t *testing.T) {
 // sdk.ErrForbidden (the pocket maps that to 403 before the invitation service is reached —
 // proven in the authentication pocket's handler tests).
 func TestHostInviteCheckPermissionMapping(t *testing.T) {
+	t.Parallel()
 	comps := hostAuthz(t)
 	svc, sm := comps, comps.Mutations
 	ctx := context.Background()
@@ -450,6 +462,7 @@ func TestHostInviteCheckPermissionMapping(t *testing.T) {
 // third posture — no authorization — is the ungated public cms routes and the retained
 // middle-posture git artifact (README), not an engine call.
 func TestAuthorizationPosturesDemonstrable(t *testing.T) {
+	t.Parallel()
 	comps := hostAuthz(t)
 	svc, sm := comps, comps.Mutations
 	ctx := context.Background()
@@ -487,6 +500,7 @@ func TestAuthorizationPosturesDemonstrable(t *testing.T) {
 // =============================================================================
 
 func TestHostUnifiedModelDeclaresGraphAndExactPermissions(t *testing.T) {
+	t.Parallel()
 	c, err := newAuthorization(nil, nil, environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -570,6 +584,7 @@ func (h *demoAuditHost) get(c *linkClient, path string) (int, []byte) {
 // The named audit permission checks scoped membership. A global auditor alone
 // is denied, while the platform-admin recipe remains independently composed.
 func TestDemoAuditRouteUsesScopedPredicate(t *testing.T) {
+	t.Parallel()
 	h := newDemoAuditHost(t)
 
 	// No credential at all: the route's RequirePrincipal answers before any decision.
@@ -655,6 +670,7 @@ func testRoleScope(rt, id string) tuples.Scope {
 // the security-event read included, and refuses an action it does not know —
 // so an action a later release adds is denied until the policy names it.
 func TestHostUserAdminPolicySwitchesOnAction(t *testing.T) {
+	t.Parallel()
 	comps := hostAuthz(t)
 	if err := seedAuthorization(context.Background(), comps.Mutations); err != nil {
 		t.Fatalf("seedAuthorization: %v", err)

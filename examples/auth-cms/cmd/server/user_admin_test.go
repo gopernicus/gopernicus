@@ -128,6 +128,7 @@ func (c *linkClient) userIDFor() string {
 
 // TestUserAdminLifecycleThroughHostSeams is the end-to-end walk.
 func TestUserAdminLifecycleThroughHostSeams(t *testing.T) {
+	t.Parallel()
 	host := newAdminHost(t)
 
 	admin := host.signUp(adminEmail)
@@ -294,6 +295,7 @@ func TestUserAdminLifecycleThroughHostSeams(t *testing.T) {
 // denial happens BEFORE the target is resolved — an unauthorized caller cannot
 // use the response to probe which user ids exist.
 func TestUserAdminDeniesUnauthorized(t *testing.T) {
+	t.Parallel()
 	host := newAdminHost(t)
 	admin := host.signUp("denies-admin@example.com")
 	stranger := host.signUp("denies-stranger@example.com")
@@ -333,6 +335,7 @@ func TestUserAdminDeniesUnauthorized(t *testing.T) {
 // TestUserAdminRequiresSession pins that the admin surface is live-session-gated,
 // not merely authorization-gated.
 func TestUserAdminRequiresSession(t *testing.T) {
+	t.Parallel()
 	host := newAdminHost(t)
 	anon := host.newClient()
 
@@ -350,6 +353,7 @@ func TestUserAdminRequiresSession(t *testing.T) {
 // store ALWAYS supplies the administration repositories, so route presence must
 // come from the host's explicit Config.UserAdminCheck and nothing else.
 func TestUserAdminRoutesAbsentWithoutCheck(t *testing.T) {
+	t.Parallel()
 	// The default host config wires no UserAdminCheck.
 	svc := bootInProcess(t, &recordingSender{}, nil)
 	router := mountInProcess(t, svc)
@@ -376,6 +380,7 @@ func TestUserAdminRoutesAbsentWithoutCheck(t *testing.T) {
 // TestUserAdminCheckWithoutReposFailsLoudly pins the construction guard: a host
 // cannot advertise a deactivate button without the wiring that makes it real.
 func TestUserAdminCheckWithoutReposFailsLoudly(t *testing.T) {
+	t.Parallel()
 	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)

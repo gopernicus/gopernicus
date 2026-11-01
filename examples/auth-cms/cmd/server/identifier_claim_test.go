@@ -94,6 +94,7 @@ func newClaimHost(t *testing.T) (*linkHost, *recordingGranter, *recordingPhone) 
 // either, a sync answers {"resolved":0}, a token accept is refused and "mine"
 // lists nothing.
 func TestNotificationOnlyPhoneNeverResolvesSyncsOrMatches(t *testing.T) {
+	t.Parallel()
 	host, granter, phone := newClaimHost(t)
 
 	const number = "+15550100"
@@ -149,6 +150,7 @@ func TestNotificationOnlyPhoneNeverResolvesSyncsOrMatches(t *testing.T) {
 // the ruling: an email added notification-only resolves nothing on its
 // confirm; enabling login on it later resolves its AutoAccept invitation.
 func TestNotificationOnlyEmailResolvesOnceLoginIsEnabled(t *testing.T) {
+	t.Parallel()
 	host, granter, _ := newClaimHost(t)
 	const added = "claim-added@example.com"
 	user := host.signUp("claim-user@example.com")

@@ -139,6 +139,7 @@ func (c *linkClient) startMagicLink(t *testing.T, addr string) {
 
 // TestProvisionOnConsumptionCreatesTheAccountAtRedeem is the headline walk.
 func TestProvisionOnConsumptionCreatesTheAccountAtRedeem(t *testing.T) {
+	t.Parallel()
 	host := newProvisioningHost(t)
 	const addr = "brand-new-person@example.com"
 
@@ -199,6 +200,7 @@ func TestProvisionOnConsumptionCreatesTheAccountAtRedeem(t *testing.T) {
 // identically for a known and an unknown address, because it still resolves
 // nothing on the request path. What changed is whether the WORKER sends.
 func TestProvisionOnConsumptionStartIsIndistinguishable(t *testing.T) {
+	t.Parallel()
 	host := newProvisioningHost(t)
 	known := host.signUp("provision-known@example.com")
 	_ = known
@@ -222,6 +224,7 @@ func TestProvisionOnConsumptionStartIsIndistinguishable(t *testing.T) {
 // TestProvisionDisabledSendsNothingForUnknownAddress pins the default posture:
 // with the switch off, an unknown address still gets no mail and no account.
 func TestProvisionDisabledSendsNothingForUnknownAddress(t *testing.T) {
+	t.Parallel()
 	sender := &recordingSender{}
 	svc := bootInProcess(t, sender, nil) // provisioning left OFF
 	router := mountInProcess(t, svc)
@@ -250,6 +253,7 @@ func TestProvisionDisabledSendsNothingForUnknownAddress(t *testing.T) {
 // TestProvisionWiringFailsLoudly pins the construction matrix: every dependency
 // provisioning needs is required, not best-effort.
 func TestProvisionWiringFailsLoudly(t *testing.T) {
+	t.Parallel()
 	base, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
@@ -302,6 +306,7 @@ func TestProvisionWiringFailsLoudly(t *testing.T) {
 // provisioned account resolves its pending invitations exactly as a password
 // registration does — and an ordinary link LOGIN does not re-run that resolution.
 func TestProvisionedAccountResolvesPendingInvitations(t *testing.T) {
+	t.Parallel()
 	// The default in-process fixture wires no Granter, so the invitation surface is
 	// deny-by-absence and its routes do not mount. This case needs it, so it boots a
 	// host WITH a granter — the same relationshipGranter shape run() uses.
@@ -364,6 +369,7 @@ func TestProvisionedAccountResolvesPendingInvitations(t *testing.T) {
 // then a magic-link redeem that verifies and adopts it, resolves the
 // auto-accept invitation addressed to it.
 func TestAdoptedAccountResolvesPendingInvitations(t *testing.T) {
+	t.Parallel()
 	host, granter := newProvisioningHostWithInvitations(t)
 	const invitee = "adopted-by-link@example.com"
 
@@ -427,6 +433,7 @@ func newProvisioningHostWithMode(t *testing.T, mode auth.RegistrationMode) *link
 // issue: closed and an uninvited address under invitation_only mail no link at
 // all, while an invited address gets one that provisions on redeem.
 func TestProvisionOnRedeemFollowsTheRegistrationMode(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []auth.RegistrationMode{auth.RegistrationClosed, auth.RegistrationInvitationOnly} {
 		t.Run(string(mode), func(t *testing.T) {
 			host := newProvisioningHostWithMode(t, mode)

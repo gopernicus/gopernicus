@@ -118,6 +118,7 @@ type apiKeyListResponse struct {
 // them with `?q=` and compares each result set against listing.MatchesSearch — the
 // SAME oracle the store-conformance suite and both SQL dialects are pinned to.
 func TestAPIKeySearchThroughHTTP(t *testing.T) {
+	t.Parallel()
 	host := newMachineHost(t)
 	c := host.signUpPlatformAdmin("apikey-search@example.com")
 
@@ -209,6 +210,7 @@ func TestAPIKeySearchThroughHTTP(t *testing.T) {
 // TestAPIKeySearchCountReflectsTheTerm is the fan-out trap over HTTP: `count=true`
 // must report the SEARCHED total, not the unfiltered one.
 func TestAPIKeySearchCountReflectsTheTerm(t *testing.T) {
+	t.Parallel()
 	host := newMachineHost(t)
 	c := host.signUpPlatformAdmin("apikey-search-count@example.com")
 
@@ -258,6 +260,7 @@ func TestAPIKeySearchCountReflectsTheTerm(t *testing.T) {
 // `name` is searchable. A searchable key prefix would let a caller probe for a key
 // by fragment.
 func TestAPIKeySearchDoesNotLeakCredentialMaterial(t *testing.T) {
+	t.Parallel()
 	host := newMachineHost(t)
 	c := host.signUpPlatformAdmin("apikey-search-scope@example.com")
 
@@ -314,6 +317,7 @@ func TestAPIKeySearchDoesNotLeakCredentialMaterial(t *testing.T) {
 // REAL authorization middleware, and the 403 body is the real FS9 one — a signed-up user
 // without the platform:main#admin tuple is refused with code `permission_denied`.
 func TestMachineRoutesGateRefusesANonAdmin(t *testing.T) {
+	t.Parallel()
 	host := newMachineHost(t)
 	c := host.signUp("apikey-gate-plain@example.com")
 
@@ -349,6 +353,7 @@ func TestMachineRoutesGateRefusesANonAdmin(t *testing.T) {
 // request is 401, never the authorization 403 (which would leak that the route exists
 // to anyone).
 func TestMachineRoutesRequireACredential(t *testing.T) {
+	t.Parallel()
 	host := newMachineHost(t)
 	c := host.newClient() // a cookie jar that never signed in
 
@@ -362,6 +367,7 @@ func TestMachineRoutesRequireACredential(t *testing.T) {
 // at the UserAdministration authenticator (401) before the host check, which would
 // otherwise see the owner and admit the key as that admin.
 func TestActAsUserKeyRefusedOnBundledUserAdministration(t *testing.T) {
+	t.Parallel()
 	host := newMachineHostWith(t, true)
 	adminID := host.currentUserID(host.signUpPlatformAdmin("apikey-act-as-user@example.com"))
 

@@ -13,6 +13,7 @@ import (
 )
 
 func TestNoSessionOnlyAuthorizationMutationRoute(t *testing.T) {
+	t.Parallel()
 	authCfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)

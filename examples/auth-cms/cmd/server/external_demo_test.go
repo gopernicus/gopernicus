@@ -150,12 +150,14 @@ func bearerHeader(token string) http.Header {
 }
 
 func TestExternalDemoRefusedOutsideDevelopment(t *testing.T) {
+	t.Parallel()
 	if demo, err := newExternalDemo(context.Background(), "https://app.example.com", environment.ModeProduction, quietLog()); demo != nil || err == nil {
 		t.Fatalf("newExternalDemo(production) = %v, %v; want a refusal", demo, err)
 	}
 }
 
 func TestExternalDemoHybridRoutes(t *testing.T) {
+	t.Parallel()
 	h := newExternalDemoHost(t)
 	plain := h.devToken(`{"sub":"ext-1","email":"ext@example.com","email_verified":true}`)
 	mfa := h.devToken(`{"sub":"ext-1","email":"ext@example.com","email_verified":true,"amr":["pwd","mfa"]}`)
@@ -183,6 +185,7 @@ func TestExternalDemoHybridRoutes(t *testing.T) {
 }
 
 func TestExternalDemoRefusesANativeSession(t *testing.T) {
+	t.Parallel()
 	h := newExternalDemoHost(t)
 	if resp, body := h.do(http.MethodPost, "/auth/register", `{"email":"native@example.com","password":"correct horse battery staple","display_name":"Native"}`, nil); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("register = %d %s", resp.StatusCode, body)

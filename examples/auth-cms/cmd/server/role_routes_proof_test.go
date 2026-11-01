@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -49,7 +48,7 @@ const (
 type roleRoutesHost struct {
 	*linkHost
 	comps authorization.Components
-	logs  *bytes.Buffer
+	logs  *syncBuffer
 }
 
 // newRoleRoutesHost boots the real composition. withGate false is the
@@ -58,7 +57,7 @@ type roleRoutesHost struct {
 func newRoleRoutesHost(t *testing.T, withGate bool) *roleRoutesHost {
 	t.Helper()
 
-	logs := &bytes.Buffer{}
+	logs := &syncBuffer{}
 	log := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	// The ordering seam run() uses: the gate is NAMED before either service
@@ -140,6 +139,7 @@ type mutationEnvelope struct {
 }
 
 func TestRoleRoutesPlatformAdminDrivesTheLifecycle(t *testing.T) {
+	t.Parallel()
 	host := newRoleRoutesHost(t, true)
 	admin := host.signUp(roleAdminEmail)
 	host.makePlatformAdmin(admin.userIDFor())
@@ -218,6 +218,7 @@ func TestRoleRoutesPlatformAdminDrivesTheLifecycle(t *testing.T) {
 // policy, and GET /authorization/audit pages the change history to the admin,
 // newest first, never cached.
 func TestRoleRoutesRefuseSelfAssignmentAndServeTheAudit(t *testing.T) {
+	t.Parallel()
 	host := newRoleRoutesHost(t, true)
 	admin := host.signUp(roleAdminEmail)
 	adminID := admin.userIDFor()
@@ -264,6 +265,7 @@ func TestRoleRoutesRefuseSelfAssignmentAndServeTheAudit(t *testing.T) {
 // TestRoleRoutesRefuseANonAdmin proves the REAL FS9 denial body a signed-in
 // non-admin sees on every route — the thing a stub gate cannot demonstrate.
 func TestRoleRoutesRefuseANonAdmin(t *testing.T) {
+	t.Parallel()
 	host := newRoleRoutesHost(t, true)
 	plain := host.signUp(rolePlainEmail)
 	// The double-submit token lets the POSTs clear the browser-safe layer, so the
@@ -292,6 +294,7 @@ func TestRoleRoutesRefuseANonAdmin(t *testing.T) {
 // TestRoleRoutesRefuseAnAnonymousCaller proves the authenticating layer of the
 // gate: no credential, no route.
 func TestRoleRoutesRefuseAnAnonymousCaller(t *testing.T) {
+	t.Parallel()
 	host := newRoleRoutesHost(t, true)
 	anonymous := host.newClient()
 
@@ -307,6 +310,7 @@ func TestRoleRoutesRefuseAnAnonymousCaller(t *testing.T) {
 // the real host: the same wiring with no gate answers 404 everywhere, and
 // intentional headless use is logged as ordinary configuration, not a warning.
 func TestRoleRoutesAreNotMountedWithoutAGate(t *testing.T) {
+	t.Parallel()
 	host := newRoleRoutesHost(t, false)
 	admin := host.signUp(roleAdminEmail)
 	host.makePlatformAdmin(admin.userIDFor())
@@ -317,13 +321,14 @@ func TestRoleRoutesAreNotMountedWithoutAGate(t *testing.T) {
 			t.Errorf("%s %s = %d, want 404; body=%s", rt.method, rt.path, resp.StatusCode, payload)
 		}
 	}
-	if !bytes.Contains(host.logs.Bytes(), []byte("role_routes=false")) || bytes.Contains(host.logs.Bytes(), []byte("level=WARN")) {
+	if logs := host.logs.String(); !strings.Contains(logs, "role_routes=false") || strings.Contains(logs, "level=WARN") {
 		t.Errorf("expected informational headless configuration: %s", host.logs.String())
 	}
 }
 
 // Structurally valid labels need no permission-model catalog entry.
 func TestRoleRoutesAcceptOpaqueLabel(t *testing.T) {
+	t.Parallel()
 	host := newRoleRoutesHost(t, true)
 	admin := host.signUp(roleAdminEmail)
 	host.makePlatformAdmin(admin.userIDFor())
@@ -339,6 +344,7 @@ func TestRoleRoutesAcceptOpaqueLabel(t *testing.T) {
 // TestRoleRoutesRejectAHalfScopedPair proves the global-or-fully-scoped rule
 // surfaces as a 400 through the real chain.
 func TestRoleRoutesRejectAHalfScopedPair(t *testing.T) {
+	t.Parallel()
 	host := newRoleRoutesHost(t, true)
 	admin := host.signUp(roleAdminEmail)
 	host.makePlatformAdmin(admin.userIDFor())
@@ -355,6 +361,7 @@ func TestRoleRoutesRejectAHalfScopedPair(t *testing.T) {
 // or without the double-submit token, while a bearer-only caller and a cookie
 // read pass.
 func TestRoleRoutesRequireBrowserSafeMutation(t *testing.T) {
+	t.Parallel()
 	host := newRoleRoutesHost(t, true)
 	admin := host.signUp(roleAdminEmail)
 	host.makePlatformAdmin(admin.userIDFor())
@@ -422,6 +429,7 @@ func TestRoleRoutesRequireBrowserSafeMutation(t *testing.T) {
 // TestDeferredMiddlewareInstalledReportsAssignment pins the boot assertion run()
 // makes right after wiring the chain: unassigned is reported, assigned is not.
 func TestDeferredMiddlewareInstalledReportsAssignment(t *testing.T) {
+	t.Parallel()
 	gate := &deferredMiddleware{}
 	if gate.installed() {
 		t.Fatal("a fresh deferredMiddleware reports installed")
@@ -435,6 +443,7 @@ func TestDeferredMiddlewareInstalledReportsAssignment(t *testing.T) {
 // TestDeferredMiddlewareFailsClosed pins the ordering seam's posture: a gate that
 // was never assigned refuses rather than admits.
 func TestDeferredMiddlewareFailsClosed(t *testing.T) {
+	t.Parallel()
 	var reached bool
 	unassigned := &deferredMiddleware{}
 	handler := unassigned.middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))

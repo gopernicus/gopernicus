@@ -21,6 +21,7 @@ import (
 // A host transport can establish caller identity and drive step-up without
 // depending on the pocket's internal service or HTTP request structures.
 func TestHostCanUsePublicSensitiveAuthentication(t *testing.T) {
+	t.Parallel()
 	host := newLinkHost(t)
 	host.signUp("public-api@example.com")
 	pair, _, err := host.svc.Authentication.Login(context.Background(), "public-api@example.com", linkPassword)
@@ -65,6 +66,7 @@ func TestHostCanUsePublicSensitiveAuthentication(t *testing.T) {
 // on-demand invitation sync through the public service; this fixture wires no
 // Granter, so the sync resolves nothing.
 func TestHostCanUseVerifiedIdentifiersAndSync(t *testing.T) {
+	t.Parallel()
 	host := newLinkHost(t)
 	c := host.signUp("public-sync@example.com")
 	uid := c.userIDFor()
@@ -82,6 +84,7 @@ func TestHostCanUseVerifiedIdentifiersAndSync(t *testing.T) {
 // coded 403, an invited one registers, and its verification grants the
 // invitation (the S7 every-verification rule).
 func TestInvitationOnlyRegistrationThroughTheHost(t *testing.T) {
+	t.Parallel()
 	granter := &recordingGranter{}
 	sender := &recordingSender{}
 	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, granter)

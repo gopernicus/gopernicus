@@ -242,6 +242,7 @@ func (h *oauthHTTPProof) revokeFromBrowser(path string) {
 }
 
 func TestOAuth2HTTPIndependentSessions(t *testing.T) {
+	t.Parallel()
 	h := newOAuthHTTPProof(t, true)
 	h.login()
 	initial := h.inventory()
@@ -324,6 +325,7 @@ func TestOAuth2HTTPIndependentSessions(t *testing.T) {
 }
 
 func TestOAuth2HTTPRefreshReplayRevokesOnlyConnection(t *testing.T) {
+	t.Parallel()
 	h := newOAuthHTTPProof(t, true)
 	h.login()
 	a, b := h.connect(), h.connect()
@@ -346,6 +348,7 @@ func TestOAuth2HTTPRefreshReplayRevokesOnlyConnection(t *testing.T) {
 }
 
 func TestOAuth2DisabledSurface(t *testing.T) {
+	t.Parallel()
 	h := newOAuthHTTPProof(t, false)
 	for _, path := range []string{"/.well-known/oauth-authorization-server", "/auth/oauth2/authorize", "/auth/sessions"} {
 		res, _ := h.do(h.client, "GET", path, "", "", "", false)
@@ -362,6 +365,7 @@ func TestOAuth2DisabledSurface(t *testing.T) {
 }
 
 func TestOAuth2IncompleteWiringFailsBeforeServing(t *testing.T) {
+	t.Parallel()
 	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatal(err)

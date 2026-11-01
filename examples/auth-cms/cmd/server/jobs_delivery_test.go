@@ -25,6 +25,7 @@ import (
 // and that construction/registration start no delivery work — only the host-run runtime
 // does.
 func TestJobsModeDeliveryEndToEnd(t *testing.T) {
+	t.Parallel()
 	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
