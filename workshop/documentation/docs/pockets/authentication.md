@@ -679,6 +679,11 @@ rail.
   fragment or userinfo, HTTPS in production, and **required in production beside a
   Granter** (`ErrInvitationURLRequired`). It replaces the old relative `/` fallback,
   which broke in mail clients; development WARNs and keeps `/`.
+- **`LinksConfig.MemberAddedURL`** (`AUTH_MEMBER_ADDED_URL`) is where the
+  member-added notice links when no allowlisted `redirect` is requested. The member
+  already has access, so the notice never uses the token-less `InvitationURL`
+  landing. Empty selects the root of `InvitationURL`'s origin. A non-empty value is
+  an absolute http(s) URL (`ErrMemberAddedURLInvalid`).
 - **The landing page.** Invitation, magic-link and OAuth pending-link URLs all carry
   `#token=`, so tell them apart **by path** and give the invitation landing its own
   route. Read `location.hash` and `history.replaceState` it away before any network

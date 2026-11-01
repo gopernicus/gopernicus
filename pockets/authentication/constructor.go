@@ -486,6 +486,11 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		default:
 			transportLog.Warn("auth: LinksConfig.InvitationURL is unset; invitation links without an allowlisted redirect fall back to the relative \"/\", which mail clients cannot open. Production requires AUTH_INVITATION_URL")
 		}
+		if cfg.MemberAddedURL != "" {
+			if err := validateMemberAddedURL(cfg.MemberAddedURL); err != nil {
+				return nil, err
+			}
+		}
 		switch {
 		case !cfg.InvitationTokenInQuery:
 		case cfg.RuntimeMode.IsProduction():
@@ -582,6 +587,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 			invitations.WithIdentifierKeyer(cfg.IdentifierKeyer),
 			invitations.WithRedirectAllowlist(cfg.RedirectAllowlist),
 			invitations.WithInvitationURL(cfg.InvitationURL),
+			invitations.WithMemberAddedURL(cfg.MemberAddedURL),
 			invitations.WithLinkTokenInQuery(cfg.InvitationTokenInQuery),
 			invitations.WithSecurityEventRecorder(securityEvents),
 			invitations.WithLogger(cfg.Logger),

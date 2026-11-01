@@ -344,3 +344,62 @@ func TestConcurrentResolutionDuplicatesShareOperationID(t *testing.T) {
 		t.Errorf("invitation = %+v, want accepted", got)
 	}
 }
+
+// TestMemberAddedLinkIsNotTheAcceptLanding pins #304: the member-added notice
+// never links to the token-less InvitationURL accept landing. It uses an
+// allowlisted redirect, else MemberAddedURL, else InvitationURL's origin root.
+func TestMemberAddedLinkIsNotTheAcceptLanding(t *testing.T) {
+	for _, tc := range []struct {
+		name, invitationURL, memberAddedURL, redirectTo, want string
+	}{
+		{"origin root of the invitation url", "https://app.example.com/invitations/accept", "", "", "https://app.example.com/"},
+		{"configured member-added url", "https://app.example.com/invitations/accept", "https://app.example.com/home", "", "https://app.example.com/home"},
+		{"allowlisted redirect wins", "https://app.example.com/invitations/accept", "https://app.example.com/home", "https://app.example.com/projects/p1", "https://app.example.com/projects/p1"},
+		{"no urls configured", "", "", "", "/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hook := &recordingHook{}
+			svc := newSvc(t, newFakeInvRepo(), &fakeGranter{}, constructorConfig{UserLookup: knownUser})
+			svc.invitationURL = tc.invitationURL
+			svc.memberAddedURL = tc.memberAddedURL
+			svc.redirects = redirect.New([]string{"https://app.example.com/projects/p1"})
+			wireSyncDeliveryHook(t, svc, &recordingMailer{}, nil, hook.hook)
+			res, err := svc.Create(context.Background(), CreateInput{ResourceType: "project", ResourceID: "p1", Relation: "member", Identifier: "known@x.com", InvitedBy: "inviter", AutoAccept: true, Redirect: tc.redirectTo})
+			if err != nil || !res.DirectlyAdded {
+				t.Fatalf("Create: res=%+v err=%v", res, err)
+			}
+			if link := hook.only(t, delivery.PurposeMemberAdded).data["Link"].(string); link != tc.want {
+				t.Errorf("member-added Link = %q, want %q", link, tc.want)
+			}
+		})
+	}
+}
+
+// TestAcceptedMemberAddedLinkIsNotTheAcceptLanding covers the Accept path the
+// issue reports: an invitation with no Redirect, accepted, notices the origin
+// root, while the invitation link itself still uses the accept landing.
+func TestAcceptedMemberAddedLinkIsNotTheAcceptLanding(t *testing.T) {
+	repo := newFakeInvRepo()
+	hook := &recordingHook{}
+	svc := newSvc(t, repo, &fakeGranter{}, constructorConfig{UserLookup: unknownUser})
+	svc.invitationURL = "https://app.example.com/invitations/accept"
+	wireSyncDeliveryHook(t, svc, &recordingMailer{}, nil, hook.hook)
+	seedInvite(t, repo, "project", "p1", "member", "invitee@x.com", "inviter", "secret-304", false, time.Now().Add(time.Hour))
+	if _, err := svc.Accept(context.Background(), AcceptInput{Token: "secret-304", SubjectType: "user", SubjectID: "user-9", Identifier: "invitee@x.com"}); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	if link := hook.only(t, delivery.PurposeMemberAdded).data["Link"].(string); link != "https://app.example.com/" {
+		t.Errorf("member-added Link = %q, want the origin root", link)
+	}
+	// The invitation link itself is unchanged: the accept landing plus token.
+	invHook := &recordingHook{}
+	invSvc := newSvc(t, newFakeInvRepo(), &fakeGranter{}, constructorConfig{UserLookup: unknownUser})
+	invSvc.invitationURL = "https://app.example.com/invitations/accept"
+	wireSyncDeliveryHook(t, invSvc, &recordingMailer{}, nil, invHook.hook)
+	if _, err := invSvc.Create(context.Background(), CreateInput{ResourceType: "project", ResourceID: "p2", Relation: "member", Identifier: "other@x.com", InvitedBy: "inviter"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if link := invHook.only(t, delivery.PurposeInvitation).data["Link"].(string); !strings.HasPrefix(link, "https://app.example.com/invitations/accept#token=") {
+		t.Errorf("invitation Link = %q, want the accept landing with a token", link)
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -312,6 +313,7 @@ type constructorConfig struct {
 	Queue               deliveryQueue
 	RedirectAllowlist   []string
 	InvitationURL       string
+	MemberAddedURL      string
 	LinkTokenInQuery    bool
 	SecurityEvents      securityevent.SecurityEventRepository
 	SecurityRecorder    *securityevent.Recorder
@@ -347,6 +349,10 @@ type Service struct {
 	// invitationURL is the absolute landing URL a link falls back to when no
 	// allowlisted redirect was requested (WithInvitationURL); empty keeps "/".
 	invitationURL string
+	// memberAddedURL is the absolute link a member-added notice falls back to
+	// when no allowlisted redirect was requested (WithMemberAddedURL); empty
+	// uses the root of invitationURL's origin.
+	memberAddedURL string
 	// linkTokenInQuery restores the pre-fragment "?token=" link for one release
 	// (WithLinkTokenInQuery).
 	linkTokenInQuery bool
@@ -400,6 +406,7 @@ func newService(d constructorConfig) *Service {
 		queue:               d.Queue,
 		redirects:           redirect.New(d.RedirectAllowlist),
 		invitationURL:       d.InvitationURL,
+		memberAddedURL:      d.MemberAddedURL,
 		linkTokenInQuery:    d.LinkTokenInQuery,
 		securityEvents:      d.securityEventRecorder(clock, logger),
 		now:                 clock,
@@ -1212,7 +1219,7 @@ func (s *Service) sendMemberAdded(ctx context.Context, m memberAdded) {
 		s.logger.Warn("member-added notification skipped: delivery outbox not wired")
 		return
 	}
-	dest := s.destination(m.redirectTo)
+	dest := s.noticeDestination(m.redirectTo)
 	env, err := s.deliverer.Render(ctx, delivery.Request{
 		Kind:        m.kind,
 		Purpose:     delivery.PurposeMemberAdded,
@@ -1257,14 +1264,31 @@ func deliveryData(invitationID, operationID, resourceType, resourceID, relation,
 }
 
 // destination is the link target of an invitation message: the requested
-// redirect when allowlisted, else the configured InvitationURL, else the
-// same-origin default "/".
+// redirect when allowlisted, else the configured InvitationURL (the accept
+// landing the token fragment is appended to), else the same-origin default "/".
 func (s *Service) destination(requested string) string {
 	dest := s.redirects.Resolve(requested)
 	if dest == "/" && s.invitationURL != "" {
 		return s.invitationURL
 	}
 	return dest
+}
+
+// noticeDestination is the link target of a member-added notice. The member has
+// already been granted access, so the token-less accept landing is the wrong
+// target: it is the requested redirect when allowlisted, else MemberAddedURL,
+// else the root of InvitationURL's origin, else the same-origin default "/".
+func (s *Service) noticeDestination(requested string) string {
+	if dest := s.redirects.Resolve(requested); dest != "/" {
+		return dest
+	}
+	if s.memberAddedURL != "" {
+		return s.memberAddedURL
+	}
+	if u, err := url.Parse(s.invitationURL); err == nil && u.Scheme != "" && u.Host != "" {
+		return u.Scheme + "://" + u.Host + "/"
+	}
+	return "/"
 }
 
 // inviteLink builds the accept link the rendered invitation message points the
