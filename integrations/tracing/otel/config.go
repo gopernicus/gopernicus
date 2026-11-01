@@ -102,6 +102,14 @@ type Config struct {
 	// caller's responsibility.
 	Provider oteltrace.TracerProvider
 
+	// RecordErrorText exports error text from SpanFinisher.RecordError: the
+	// span gets an "exception" event and err.Error() as its status
+	// description. Off by default, so a failed span carries only a fixed
+	// "error" description: error text can hold user input, ids or SQL
+	// fragments. Turn it on only when every error reaching RecordError is
+	// safe to send to the collector.
+	RecordErrorText bool `env:"TRACING_RECORD_ERROR_TEXT" default:"false"`
+
 	// RuntimeMode is the host's deployment posture. The zero value is
 	// mode-blind: Open behaves exactly as it did before the field existed. A
 	// non-zero mode must be environment.ModeDevelopment or ModeProduction.
@@ -141,7 +149,7 @@ func Open(ctx context.Context, cfg Config) (*Tracer, error) {
 		if cfg.Provider == nil {
 			return nil, fmt.Errorf("otel: exporter %q requires Config.Provider", cfg.Exporter)
 		}
-		return &Tracer{tracer: cfg.Provider.Tracer(cfg.ServiceName)}, nil
+		return &Tracer{tracer: cfg.Provider.Tracer(cfg.ServiceName), recordErrorText: cfg.RecordErrorText}, nil
 	case ExporterStdout:
 		return openStdout(cfg)
 	case ExporterOTLPGRPC:
@@ -220,7 +228,7 @@ func openStdout(cfg Config) (*Tracer, error) {
 		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())),
 		sdktrace.WithResource(res),
 	)
-	return newOwnedTracer(tp, cfg.ServiceName), nil
+	return newOwnedTracer(tp, cfg), nil
 }
 
 // openOTLPGRPC wires a batching OTLP/gRPC exporter for a collector.
@@ -248,7 +256,7 @@ func openOTLPGRPC(ctx context.Context, cfg Config) (*Tracer, error) {
 		sdktrace.WithSampler(rootSampler(cfg.SampleRate)),
 		sdktrace.WithResource(res),
 	)
-	return newOwnedTracer(tp, cfg.ServiceName), nil
+	return newOwnedTracer(tp, cfg), nil
 }
 
 // newResource builds the span resource from cfg. NewSchemaless keeps

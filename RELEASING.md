@@ -1,5 +1,22 @@
 # Releasing gopernicus modules
 
+## Tracer exports no error text by default (#310 — integrations/tracing/otel v0.4.0)
+
+**Status: pending merge and tag.** **MINOR, a default change.** `SpanFinisher.RecordError` used to
+export `err.Error()` twice: as an `exception` event and as the span status description. Errors
+reaching it (raw Redis errors from `goredis.TracingHook`, application errors) can carry user
+input, ids or SQL fragments. Now:
+
+- By default a failed span gets `codes.Error` with the fixed description `error` and no
+  `exception` event. The HTTP middleware's `error.type=http.request_failed` is unchanged.
+- `Config.RecordErrorText` (env `TRACING_RECORD_ERROR_TEXT`, default `false`) restores the old
+  export for a host whose errors are all safe to send to its collector. It applies in every
+  exporter mode, `ExporterProvider` included.
+
+**Migration:** a dashboard or alert that matched on span status text or `exception.message`
+now sees `error` and no event. Set `TRACING_RECORD_ERROR_TEXT=true` to keep the old behaviour.
+No other module changes; `examples/cms` stays on v0.3.0 until it repins.
+
 ## Bundled user-administration and invitation routes refuse act-as-user API keys (#312 — published 2026-10-31)
 
 **Status: released.** One annotated tag (not signed) on one module, `pockets/authentication`
@@ -63,7 +80,7 @@ route, with the audit rows naming B.
 | Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
 |---|---|---|---|---|---|
 | 1 | `pockets/authentication/v0.39.0` | `1705ff99` → `a84df1c0` | #315 (PR-1, #312) | 41259742933 @ `a84df1c0` | OK; MVS selects sdk v0.24.0 |
-| — | none | pending merge | PR-2 (examples repin, auth-cms README leg + test) | — | the MVS sets below |
+| — | none | `ee031ec7` | #316 (PR-2: examples repin, auth-cms README leg + test) | — | the MVS sets below |
 
 The tag table matches `git ls-remote --tags origin` (the tag object `1705ff99` peels to
 `a84df1c0`). **Not tagged:** sdk, the authentication stores (pgx v0.19.0, turso v0.18.0),

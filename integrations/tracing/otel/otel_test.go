@@ -59,11 +59,65 @@ func TestProviderExporter(t *testing.T) {
 	if got.Status().Code != codes.Error {
 		t.Errorf("status code = %v, want %v", got.Status().Code, codes.Error)
 	}
-	if got.Status().Description != wantErr.Error() {
-		t.Errorf("status description = %q, want %q", got.Status().Description, wantErr.Error())
+	if got.Status().Description != "error" {
+		t.Errorf("status description = %q, want the fixed %q", got.Status().Description, "error")
 	}
-	if !hasErrorEvent(got.Events()) {
-		t.Errorf("expected a recorded error event on the span")
+	if hasErrorEvent(got.Events()) {
+		t.Errorf("default RecordError added an exception event; want none")
+	}
+}
+
+// TestRecordErrorText proves RecordError exports no error text by default and
+// exports it only when Config.RecordErrorText opts in.
+func TestRecordErrorText(t *testing.T) {
+	const secret = "pq: duplicate key value (email)=(victim@example.com)"
+	for _, tc := range []struct {
+		name     string
+		optIn    bool
+		wantDesc string
+	}{
+		{name: "default", optIn: false, wantDesc: "error"},
+		{name: "opt-in", optIn: true, wantDesc: secret},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := tracetest.NewSpanRecorder()
+			tracer, err := otel.Open(context.Background(), otel.Config{
+				Exporter:        otel.ExporterProvider,
+				Provider:        sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)),
+				RecordErrorText: tc.optIn,
+			})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			_, span := tracer.StartSpan(context.Background(), "db.insert")
+			span.RecordError(errors.New(secret))
+			span.Finish()
+
+			got := rec.Ended()[0]
+			if got.Status().Code != codes.Error {
+				t.Errorf("status code = %v, want %v", got.Status().Code, codes.Error)
+			}
+			if got.Status().Description != tc.wantDesc {
+				t.Errorf("status description = %q, want %q", got.Status().Description, tc.wantDesc)
+			}
+			if hasErrorEvent(got.Events()) != tc.optIn {
+				t.Errorf("exception event present = %v, want %v", hasErrorEvent(got.Events()), tc.optIn)
+			}
+			if !tc.optIn {
+				for _, e := range got.Events() {
+					for _, a := range e.Attributes {
+						if strings.Contains(a.Value.Emit(), "victim@example.com") {
+							t.Errorf("event %q attribute %s leaks error text", e.Name, a.Key)
+						}
+					}
+				}
+				for _, a := range got.Attributes() {
+					if strings.Contains(a.Value.Emit(), "victim@example.com") {
+						t.Errorf("span attribute %s leaks error text", a.Key)
+					}
+				}
+			}
+		})
 	}
 }
 
