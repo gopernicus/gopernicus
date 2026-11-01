@@ -124,6 +124,7 @@ func waitHealth(t *testing.T, h *deliveryhealth.Health, within time.Duration, pr
 // TestDeliveryHealthNotStartedVsRunning proves the endpoint distinguishes a delivery runtime
 // the host has not started from a running one, over the REAL runtime lifecycle.
 func TestDeliveryHealthNotStartedVsRunning(t *testing.T) {
+	t.Parallel()
 	svc, h := bootHealth(t, &recordingSender{}, nil, nil)
 
 	if s := getHealth(t, h); s.Runtime != "not_started" {
@@ -144,6 +145,7 @@ func TestDeliveryHealthNotStartedVsRunning(t *testing.T) {
 // running) via REAL forgot-password admissions over HTTP and asserts the health endpoint
 // shows the queue saturated/backlogged — distinct from an idle queue.
 func TestDeliveryHealthBacklogUnderSaturation(t *testing.T) {
+	t.Parallel()
 	svc, h := bootHealth(t, &recordingSender{}, nil, func(c *authenticationConfig) {
 		c.InProcessDelivery = delivery.InProcessConfig{
 			QueueCapacity:     1,
@@ -175,6 +177,7 @@ func TestDeliveryHealthBacklogUnderSaturation(t *testing.T) {
 // fails with MaxAttempts=1, so the bounded pool dead-letters on the first attempt, and
 // asserts the health endpoint's dead_lettered counter increments.
 func TestDeliveryHealthDeadLetterIncrements(t *testing.T) {
+	t.Parallel()
 	svc, h := bootHealth(t, &recordingSender{failFirst: 1_000}, nil, func(c *authenticationConfig) {
 		c.InProcessDelivery = delivery.InProcessConfig{MaxAttempts: 1}
 	})
@@ -194,6 +197,7 @@ func TestDeliveryHealthDeadLetterIncrements(t *testing.T) {
 // and drives a REAL successful registration; the delivered lifecycle observation's emit
 // fails, and the health endpoint's observer_failures counter increments.
 func TestDeliveryHealthObserverFailureVisible(t *testing.T) {
+	t.Parallel()
 	svc, h := bootHealth(t, &recordingSender{}, failingBus{}, nil)
 	stop := runDeliveryHealth(t, svc, h)
 	defer stop()
@@ -208,6 +212,7 @@ func TestDeliveryHealthObserverFailureVisible(t *testing.T) {
 // serialized health output carries neither the recipient address nor the delivered secret —
 // the health surface is counters/gauges/enums only.
 func TestDeliveryHealthNoLeak(t *testing.T) {
+	t.Parallel()
 	const canaryAddr = "canary-leak-health@secret.example"
 	sender := &recordingSender{}
 	svc, h := bootHealth(t, sender, nil, nil)

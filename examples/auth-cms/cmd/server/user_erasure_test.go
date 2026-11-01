@@ -99,6 +99,7 @@ type erasureBody struct {
 // untouched; a repeat is a no-op; the erased user cannot be reactivated; and
 // an administrator cannot erase themself.
 func TestUserErasureOverRealHTTP(t *testing.T) {
+	t.Parallel()
 	h := newErasureHost(t)
 	admin := h.signUpPlatformAdmin("erase-admin@example.com")
 	admin.stepUpToAAL2()
@@ -186,6 +187,7 @@ func TestUserErasureOverRealHTTP(t *testing.T) {
 // TestUserErasureRefusedForANonAdmin proves the action reaches this host's
 // policy: a signed-in user without platform admin is 403 and erases nothing.
 func TestUserErasureRefusedForANonAdmin(t *testing.T) {
+	t.Parallel()
 	h := newErasureHost(t)
 	mallory := h.signUp("erase-mallory@example.com")
 	victim := h.signUp("erase-victim@example.com")
@@ -202,6 +204,7 @@ func TestUserErasureRefusedForANonAdmin(t *testing.T) {
 // member who also holds the global auditor role from every scope, each removal
 // audited with the administrator as actor and the reason user_erase.
 func TestUserErasureRevokesAccessServerSide(t *testing.T) {
+	t.Parallel()
 	h := newErasureHost(t)
 	admin := h.signUpPlatformAdmin("revoke-admin@example.com")
 	admin.stepUpToAAL2()
@@ -249,6 +252,7 @@ func TestUserErasureRevokesAccessServerSide(t *testing.T) {
 // is attempted first, nothing revoked; a second owner lets the re-run finish,
 // and a third erase is a no-op.
 func TestUserErasureRefusedWhileSoleProjectOwner(t *testing.T) {
+	t.Parallel()
 	h := newErasureHost(t)
 	admin := h.signUpPlatformAdmin("owner-admin@example.com")
 	admin.stepUpToAAL2()

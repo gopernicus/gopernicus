@@ -48,6 +48,7 @@ func (r *failInvitationCompletionOnce) CompleteAcceptance(ctx context.Context, i
 }
 
 func TestInvitationCommittedGrantRecoveryThroughHTTP(t *testing.T) {
+	t.Parallel()
 	components := hostAuthz(t)
 	g, _ := hostGranter(components.Mutations, resourceKey(demoResourceType, demoResourceID))
 	sender := &recordingSender{}
@@ -271,6 +272,7 @@ func (h *settlementHost) restoreResource() {
 }
 
 func TestInvitationCancelDuringPausedGrantThroughHTTP(t *testing.T) {
+	t.Parallel()
 	pause := &pausingGranter{entered: make(chan struct{}), release: make(chan struct{})}
 	h := newSettlementHost(t, func(g invitations.Granter) invitations.Granter {
 		pause.inner = g
@@ -354,6 +356,7 @@ func TestInvitationCancelDuringPausedGrantThroughHTTP(t *testing.T) {
 }
 
 func TestInvitationRecordedOperationSettlesAfterResourceDeleted(t *testing.T) {
+	t.Parallel()
 	h := newSettlementHost(t, nil, func(r invitations.InvitationRepository) invitations.InvitationRepository {
 		return &failInvitationCompletionOnce{InvitationRepository: r}
 	})
@@ -384,6 +387,7 @@ func TestInvitationRecordedOperationSettlesAfterResourceDeleted(t *testing.T) {
 }
 
 func TestFencedInvitationNotRevivedByResourceRestore(t *testing.T) {
+	t.Parallel()
 	h := newSettlementHost(t, nil, nil)
 	id, token := h.invite(t)
 	acceptBody := `{"token":"` + token + `"}`
@@ -419,6 +423,7 @@ func TestFencedInvitationNotRevivedByResourceRestore(t *testing.T) {
 }
 
 func TestFencerNamespaceMatchesGranter(t *testing.T) {
+	t.Parallel()
 	components := hostAuthz(t)
 	seedTrustedOwner(t, components.Mutations, demoResourceID, "namespace-owner")
 	g, _ := hostGranter(components.Mutations, resourceKey(demoResourceType, demoResourceID))

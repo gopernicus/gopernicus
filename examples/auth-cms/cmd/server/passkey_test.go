@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
@@ -31,7 +30,7 @@ import (
 type passkeyHost struct {
 	*linkHost
 	rpID string
-	logs *bytes.Buffer
+	logs *syncBuffer
 }
 
 func newPasskeyHost(t *testing.T, tune func(*authenticationConfig)) *passkeyHost {
@@ -41,7 +40,7 @@ func newPasskeyHost(t *testing.T, tune func(*authenticationConfig)) *passkeyHost
 	if err != nil {
 		t.Fatal(err)
 	}
-	var logs bytes.Buffer
+	var logs syncBuffer
 	sender := &recordingSender{}
 	svc := bootInProcess(t, sender, func(cfg *authenticationConfig) {
 		cfg.Logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -196,6 +195,7 @@ func (h *passkeyHost) awaitNotices(to string, n int) {
 // step-up, a presence-only key at AAL1, the clone refusal, the admin gate under
 // the default, the admin reset and re-enrollment.
 func TestPasskeysThroughTheHost(t *testing.T) {
+	t.Parallel()
 	var admins sync.Map
 	host := newPasskeyHost(t, func(cfg *authenticationConfig) {
 		cfg.UserAdminCheck = func(_ context.Context, req authenticationhttp.UserAdminCheckRequest) error {
@@ -309,6 +309,7 @@ func TestPasskeysThroughTheHost(t *testing.T) {
 // carries the credential id, the COSE public key, the user handle or the
 // passkey's name, in any encoding.
 func TestPasskeyRowsAndNoticesCarryNoCredentialMaterial(t *testing.T) {
+	t.Parallel()
 	host := newPasskeyHost(t, nil)
 	const email, name = "hygiene@example.com", "Hygiene Laptop 7781"
 	c := host.signUp(email)
@@ -405,6 +406,7 @@ func TestPasskeyRowsAndNoticesCarryNoCredentialMaterial(t *testing.T) {
 // TestPasskeyHostWithoutAdminCheckKeepsNone pins the other arm of B-2: without
 // a UserAdminCheck the zero value resolves to none.
 func TestPasskeyHostWithoutAdminCheckKeepsNone(t *testing.T) {
+	t.Parallel()
 	host := newPasskeyHost(t, nil)
 	if !strings.Contains(host.logs.String(), "mfa_required=none source=default") {
 		t.Fatalf("boot line:\n%s", host.logs)

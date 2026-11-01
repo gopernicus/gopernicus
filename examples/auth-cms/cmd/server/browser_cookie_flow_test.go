@@ -173,6 +173,7 @@ func (b *browserClient) jarCookieNames(path string) []string {
 // over cookies at the PREFIXED paths, and logs out with the refresh cookie cleared at
 // the same Path it was issued under.
 func TestBrowserCookieFlowThroughHostSeams(t *testing.T) {
+	t.Parallel()
 	srv, svc := newBrowserFlowHost(t)
 	spa := newBrowserClient(t, srv)
 
@@ -314,6 +315,7 @@ func TestBrowserCookieFlowThroughHostSeams(t *testing.T) {
 // origin the host's CORS policy does NOT allow cannot bootstrap, and the sdk writes no
 // CORS headers for it, so the browser refuses to expose the response at all.
 func TestBrowserFlowRejectsUnallowlistedOrigin(t *testing.T) {
+	t.Parallel()
 	srv, _ := newBrowserFlowHost(t)
 	spa := newBrowserClient(t, srv)
 

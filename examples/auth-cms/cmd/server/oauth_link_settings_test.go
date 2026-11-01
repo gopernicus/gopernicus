@@ -291,6 +291,7 @@ func (h *linkHost) sessionCookiesSet(resp *http.Response) []string {
 // signed-in user → link/start → provider → callback → redirect → refreshed
 // inventory, with the session untouched throughout.
 func TestOAuthExplicitLinkFromSettingsPage(t *testing.T) {
+	t.Parallel()
 	host := newLinkHost(t)
 	const addr = "settings-link@example.com"
 	c := host.signUp(addr)
@@ -346,6 +347,7 @@ func TestOAuthExplicitLinkFromSettingsPage(t *testing.T) {
 // TestOAuthLinkStartRequiresSession pins the gate: the link initiator is not a
 // public route.
 func TestOAuthLinkStartRequiresSession(t *testing.T) {
+	t.Parallel()
 	host := newLinkHost(t)
 	anon := host.newClient()
 
@@ -360,6 +362,7 @@ func TestOAuthLinkStartRequiresSession(t *testing.T) {
 
 // TestOAuthLinkStartUnknownProvider pins that only a WIRED provider is linkable.
 func TestOAuthLinkStartUnknownProvider(t *testing.T) {
+	t.Parallel()
 	host := newLinkHost(t)
 	c := host.signUp("unknown-provider@example.com")
 
@@ -375,6 +378,7 @@ func TestOAuthLinkStartUnknownProvider(t *testing.T) {
 // same-origin relative destination needs no allowlisting — see
 // TestOAuthExplicitLinkFromSettingsPage.)
 func TestOAuthLinkRedirectIsAllowlisted(t *testing.T) {
+	t.Parallel()
 	host := newLinkHost(t)
 	c := host.signUp("redirect-guard@example.com")
 
@@ -395,6 +399,7 @@ func TestOAuthLinkRedirectIsAllowlisted(t *testing.T) {
 // linking user comes from server-side state, so query input on the callback
 // cannot steer a provider identity onto a different account.
 func TestOAuthLinkTargetsTheStateOwnerNotTheCaller(t *testing.T) {
+	t.Parallel()
 	host := newLinkHost(t)
 	const (
 		ownerAddr    = "state-owner@example.com"
@@ -433,6 +438,7 @@ func TestOAuthLinkTargetsTheStateOwnerNotTheCaller(t *testing.T) {
 // TestOAuthLinkProviderIdentityConflict proves a provider account already owned
 // by one user does not move to another.
 func TestOAuthLinkProviderIdentityConflict(t *testing.T) {
+	t.Parallel()
 	host := newLinkHost(t)
 	const (
 		firstAddr    = "identity-owner@example.com"
@@ -466,6 +472,7 @@ func TestOAuthLinkProviderIdentityConflict(t *testing.T) {
 // with the link button. The code is mailed to the account's verified recovery
 // identifier, so this also proves the delivered secret is the only way through.
 func TestOAuthUnlinkCodeFlow(t *testing.T) {
+	t.Parallel()
 	host := newLinkHost(t)
 	const addr = "unlink-flow@example.com"
 	c := host.signUp(addr)

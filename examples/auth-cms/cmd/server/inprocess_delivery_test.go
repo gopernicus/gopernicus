@@ -156,6 +156,7 @@ func runDelivery(t *testing.T, svc *auth.Components) (stop func()) {
 // host-owned worker pool renders and sends it. The recording mailer observes exactly the
 // message a real recipient would receive — proof the ephemeral pool actually delivers.
 func TestInProcessHostDeliversRegistrationOverPool(t *testing.T) {
+	t.Parallel()
 	sender := &recordingSender{}
 	svc := bootInProcess(t, sender, nil)
 	stop := runDelivery(t, svc)
@@ -182,6 +183,7 @@ func TestInProcessHostDeliversRegistrationOverPool(t *testing.T) {
 // address admits and returns 202 Accepted (never enumerating), and the pool resolves it
 // off the request path (skip, no send).
 func TestInProcessHostForgotPasswordAdmitsOverHTTP(t *testing.T) {
+	t.Parallel()
 	sender := &recordingSender{}
 	svc := bootInProcess(t, sender, nil)
 	stop := runDelivery(t, svc)
@@ -198,6 +200,7 @@ func TestInProcessHostForgotPasswordAdmitsOverHTTP(t *testing.T) {
 // single slot is full, a further admission returns 503 Service Unavailable within the
 // admission deadline — never a 202 after silently dropping the work.
 func TestInProcessHostSaturationReturns503OverHTTP(t *testing.T) {
+	t.Parallel()
 	svc := bootInProcess(t, &recordingSender{}, func(c *authenticationConfig) {
 		c.InProcessDelivery = delivery.InProcessConfig{
 			QueueCapacity:     1,
@@ -228,6 +231,7 @@ func TestInProcessHostSaturationReturns503OverHTTP(t *testing.T) {
 // carries the byte-identical rendered message (the checkpointed secret), never a
 // re-minted one. Backoff is the package default (~5s), so this test is patient.
 func TestInProcessHostRetryReusesSecretOverPool(t *testing.T) {
+	t.Parallel()
 	sender := &recordingSender{failFirst: 1}
 	svc := bootInProcess(t, sender, nil)
 	stop := runDelivery(t, svc)

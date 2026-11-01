@@ -55,6 +55,7 @@ func (c *linkClient) enrollTOTP() (string, []string) {
 // the methods claim, the second-factor gate on passkeys, recovery codes, the
 // admin gate and reset.
 func TestTOTPThroughTheHost(t *testing.T) {
+	t.Parallel()
 	var admins sync.Map
 	host := newPasskeyHost(t, func(cfg *authenticationConfig) {
 		cfg.UserAdminCheck = func(_ context.Context, req authenticationhttp.UserAdminCheckRequest) error {

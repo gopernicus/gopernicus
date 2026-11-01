@@ -44,6 +44,7 @@ func (h *linkHost) probeResend(t *testing.T, email string) resendProbe {
 
 // TestPublicResendIsByteIdenticalAcrossTargetStates is the enumeration proof.
 func TestPublicResendIsByteIdenticalAcrossTargetStates(t *testing.T) {
+	t.Parallel()
 	host := newLinkHost(t)
 
 	// An active, unverified account: registered but never verified.
@@ -95,6 +96,7 @@ func TestPublicResendIsByteIdenticalAcrossTargetStates(t *testing.T) {
 // TestPublicResendThrottles proves the ONE non-uniform outcome, and that it is a
 // throttle rather than anything about the target.
 func TestPublicResendThrottles(t *testing.T) {
+	t.Parallel()
 	host := newLinkHost(t)
 	c := host.newClient()
 
@@ -120,6 +122,7 @@ func TestPublicResendThrottles(t *testing.T) {
 // TestPublicResendDeliversAFreshUsableCode is the behavioral half: the resend is
 // not just accepted, it actually produces a code that verifies.
 func TestPublicResendDeliversAFreshUsableCode(t *testing.T) {
+	t.Parallel()
 	host := newLinkHost(t)
 	const addr = "resend-usable@example.com"
 
@@ -159,6 +162,7 @@ func TestPublicResendDeliversAFreshUsableCode(t *testing.T) {
 // only when the host wired UserAdminCheck, and it may say what the public route
 // never can.
 func TestAdminResendReportsRealTargetState(t *testing.T) {
+	t.Parallel()
 	host := newAdminHost(t)
 	admin := host.signUp("resend-admin@example.com")
 	host.authorize(admin.userIDFor())
@@ -241,6 +245,7 @@ func TestAdminResendReportsRealTargetState(t *testing.T) {
 // TestAdminResendDeniedWithoutAuthorization pins that the admin resend is behind
 // the same host check as the rest of the admin surface.
 func TestAdminResendDeniedWithoutAuthorization(t *testing.T) {
+	t.Parallel()
 	host := newAdminHost(t)
 	stranger := host.signUp("resend-stranger@example.com")
 
@@ -253,6 +258,7 @@ func TestAdminResendDeniedWithoutAuthorization(t *testing.T) {
 // TestAdminResendRouteAbsentWithoutCheck completes the deny-by-absence set: the
 // PUBLIC route is always present, the ADMIN one only with a wired check.
 func TestAdminResendRouteAbsentWithoutCheck(t *testing.T) {
+	t.Parallel()
 	svc := bootInProcess(t, &recordingSender{}, nil)
 	router := mountInProcess(t, svc)
 	stop := runDelivery(t, svc)

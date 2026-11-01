@@ -231,6 +231,7 @@ func proofHierarchySchema() decisions.Model {
 // TestAZ3ProofProtocol drives the twelve-point exact-semantics/concurrency protocol
 // and writes the recorded transcript artifact. Run it under -race.
 func TestAZ3ProofProtocol(t *testing.T) {
+	t.Parallel()
 	tr := &proofTranscript{}
 
 	points := []struct {
