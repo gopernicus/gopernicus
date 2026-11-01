@@ -456,6 +456,23 @@ const (
 	AuditReadRailAuthorization = "authorization"
 )
 
+// The Details keys a Recorder wired with WithCredentialAttributionReader merges
+// into a row written while an API key is the request's proof. The via_ prefix is
+// reserved for them: a caller-supplied via_ key is overwritten by the proven
+// value. A row without them was not written under an API-key proof, or was
+// written through a recorder without the reader.
+const (
+	// DetailViaCredential is the proof's credential kind (string): api_key.
+	DetailViaCredential = "via_credential"
+	// DetailViaAPIKeyID is the key's row id (string) — never its prefix, hash or
+	// value.
+	DetailViaAPIKeyID = "via_api_key_id"
+	// DetailViaServiceAccountID is the key's service account (string).
+	DetailViaServiceAccountID = "via_service_account_id"
+	// DetailViaActAsUser is whether the key acts as its human owner (bool).
+	DetailViaActAsUser = "via_act_as_user"
+)
+
 // Reason vocabulary: the bounded value a denial row carries under the Details key
 // "reason". A reason names the class of refusal only — never an error message,
 // address, code or token.
@@ -626,6 +643,17 @@ type Field uint8
 type Principal struct {
 	Type string
 	ID   string
+}
+
+// CredentialAttribution is the API-key proof a row was written under, as the
+// recorder's attribution reader reports it: ids only, never the key, its prefix
+// or its hash. Actor stays the effective principal; this names the credential
+// that acted for it.
+type CredentialAttribution struct {
+	Kind             string
+	APIKeyID         string
+	ServiceAccountID string
+	ActAsUser        bool
 }
 
 // SecurityEvent is one append-only audit row. UserID and Actor are both optional

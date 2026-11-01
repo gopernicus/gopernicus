@@ -1821,7 +1821,13 @@ policy about the caller that is a misrepresentation — `UserAdminCheck` and
   `group` (the bundled slot name, or `route` for a host route carrying
   `RefuseActAsUserKeys()`), `api_key_id` and `service_account_id` — never the
   key, its prefix or its hash. It is budgeted per client IP like the other
-  failure rows.
+  failure rows. It is written while the key is the request's proof, so it also
+  carries the `via_*` keys below; the success row, written before, does not.
+- **Rows name the key.** Every row the pocket's recorder writes while an API key
+  is the request's proof carries `via_credential`, `via_api_key_id`,
+  `via_service_account_id` and `via_act_as_user` beside the effective-principal
+  `Actor` — so a row an opted-in act-as-user key writes names the key, not only
+  its owner. See [Credential attribution](#credential-attribution-via_-v0390).
 - **A self-acting service account is unaffected.** It still reaches
   `UserAdminCheck` as `Type=service_account` — the operator-key pull of
   `GET /auth/admin/security-events` keeps working — and the host decides.
@@ -1848,7 +1854,8 @@ policy about the caller that is a misrepresentation — `UserAdminCheck` and
 
 Deliberate residuals: an act-as-user key still acts as its owner on host routes
 and on `/auth/me` (which discloses the owner's profile to the key holder); an
-invitation created under an opted-in key records the owner as `InvitedBy`; and
+invitation created under an opted-in key records the owner as `InvitedBy` (its
+`invitation_created` row's `via_*` details name the key); and
 delegated act-as-user creation (`act_as_user_id` naming another user) remains a
 `MachineRoutesGate` decision — the `service_account_created` row's `delegated`
 detail marks it, and a host that does not want it refuses it there.
@@ -4994,6 +5001,41 @@ call, written by the store with `Actor` system/maintenance; Details `cutoff`,
 `last_id`, `archive_location`); every read of an audit listing records
 `audit_read` (below). The forgot-password
 *request* records nothing (it must not reveal whether an address exists).
+
+### Credential attribution (`via_*`, v0.39.0)
+
+A row written through the pocket's recorder while an API key is the request's
+proof carries four Details keys naming the key; `Actor` stays the effective
+principal (an act-as-user key's owner, or the service account):
+
+| key | type | value |
+|---|---|---|
+| `via_credential` | string | `api_key` (the only value today) |
+| `via_api_key_id` | string | the key's row id — never its prefix, hash or value |
+| `via_service_account_id` | string | the key's service account |
+| `via_act_as_user` | bool | whether the key acts as its human owner |
+
+The `via_` prefix is reserved: a caller-supplied `via_*` Details key is
+overwritten by the proven value. The keys come from the proof the pocket's own
+`Service` verified (`Service.CredentialAttribution`); a proof another `Service`
+stamped attributes nothing. Rows written under a session, an external token, a
+delegated token, outside a request (a job, a sweep) or with no proof are
+unchanged. **Absence means "not an API-key proof" only on a recorder that has
+the reader.** It is wired into the recorder `New` builds (shared by the service,
+its external engine, the OAuth2 server and the invitation service) and into the
+fallback recorder `authlogic.New` builds; these never carry it:
+
+- a recorder a host hands `authlogic.New` through
+  `authlogic.WithSecurityEventRecorder` — build it with
+  `securityevent.WithCredentialAttributionReader`, late-bound to the `Service`
+  `authlogic.New` returns (`svc.CredentialAttribution`), to opt in;
+- `invitations.New` or `oauth2.New` built directly without the shared recorder
+  (each then builds its own);
+- the resolution-time `apikey_auth` rows — written while the key is verified,
+  before its proof is stashed (the `act_as_user_refused` refusal row, written
+  after, does carry them);
+- the maintenance rows (`security_events_purged`, `security_events_archived`),
+  written outside any request.
 
 ### Reading the rail over HTTP
 

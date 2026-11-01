@@ -6,16 +6,23 @@ import (
 	"crypto/sha256"
 	"errors"
 	"log/slog"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/apikey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
@@ -242,5 +249,83 @@ func TestComponentsWarnUnattributedRowsInProductionOnly(t *testing.T) {
 				t.Fatalf("missing-attribution WARNs = %d, want %d:\n%s", got, tc.want, logs.String())
 			}
 		})
+	}
+}
+
+// TestComponentsAttributeRowsToTheAPIKeyProof drives the via_ attribution
+// through the public constructor: the invitation service records through the
+// shared recorder, so an invitation_created row written while an act-as-user
+// key is the request's proof names the key; the same create without a proof
+// carries no via_ key.
+func TestComponentsAttributeRowsToTheAPIKeyProof(t *testing.T) {
+	events := &recorderEvents{}
+	pending := &wiringInvitations{}
+	users := &wiringUsers{users: map[string]user.User{"u-owner": {ID: "u-owner"}}}
+	cfg := browserBaseConfig()
+	c, err := New(testRepositories(Repositories{
+		Users:           users,
+		ServiceAccounts: &liveServiceAccounts{m: map[string]serviceaccount.ServiceAccount{}},
+		APIKeys:         &liveAPIKeys{m: map[string]apikey.APIKey{}},
+		SecurityEvents:  events,
+		Invitations:     pending,
+	}), cfg.TokenSigner, cfg.RuntimeMode, delivery.ModeInProcess,
+		WithPassword(PasswordConfig{Hasher: cfg.Hasher, PasswordFlowsDisabled: true}),
+		WithDelivery(DeliveryConfig{Mailer: cfg.Mailer, DeliveryEncrypter: stubEncrypter{}}),
+		WithInvitations(InvitationsConfig{Granter: stubGranter{}, InviteCheck: allowInvite}),
+		WithAdministration(AdministrationConfig{MachineRoutesGate: func(next http.Handler) http.Handler { return next }}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	sa, err := c.Authentication.CreateServiceAccount(ctx, "admin", "personal", "", true, "u-owner")
+	if err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+	key, raw, err := c.Authentication.MintAPIKey(ctx, sa.ID, "k", time.Time{})
+	if err != nil {
+		t.Fatalf("MintAPIKey: %v", err)
+	}
+	keyCtx, err := c.Authentication.Authenticate(ctx, authlogic.CredentialAPIKey, authlogic.TransportHeader, raw)
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+
+	created := func(ctx context.Context, invitee string) securityevent.SecurityEvent {
+		t.Helper()
+		if _, err := c.Invitations.Create(ctx, invitations.CreateInput{ResourceType: "team", ResourceID: "t1", Relation: "member", Identifier: invitee, InvitedBy: "u-owner"}); err != nil {
+			t.Fatalf("Invitations.Create: %v", err)
+		}
+		events.mu.Lock()
+		defer events.mu.Unlock()
+		for i := len(events.created) - 1; i >= 0; i-- {
+			if events.created[i].EventType == securityevent.TypeInvitationCreated {
+				return events.created[i]
+			}
+		}
+		t.Fatal("no invitation_created row")
+		return securityevent.SecurityEvent{}
+	}
+
+	row := created(keyCtx, "bob@example.com")
+	want := map[string]any{
+		securityevent.DetailViaCredential:       "api_key",
+		securityevent.DetailViaAPIKeyID:         key.ID,
+		securityevent.DetailViaServiceAccountID: sa.ID,
+		securityevent.DetailViaActAsUser:        true,
+	}
+	for k, v := range want {
+		if row.Details[k] != v {
+			t.Errorf("invitation_created Details[%q] = %v, want %v (Details %v)", k, row.Details[k], v, row.Details)
+		}
+	}
+	if row.Details["resource_type"] != "team" {
+		t.Errorf("the row lost its own Details: %v", row.Details)
+	}
+
+	row = created(ctx, "carol@example.com")
+	for k := range row.Details {
+		if strings.HasPrefix(k, "via_") {
+			t.Errorf("an unproven invitation_created row carries %s: %v", k, row.Details)
+		}
 	}
 }

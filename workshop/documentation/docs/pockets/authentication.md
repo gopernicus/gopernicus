@@ -1111,7 +1111,16 @@ store, migration or views change.
 - **The refusal row.** A refused request leaves the `apikey_auth` success row plus one
   `apikey_auth` row with status `blocked`, budgeted per client IP: `Actor` the service account,
   Details `reason=act_as_user_refused`, `group` (the slot name, or `route` on a host route),
-  `api_key_id`, `service_account_id` — never the key, its prefix or its hash.
+  `api_key_id`, `service_account_id` — never the key, its prefix or its hash — plus the `via_*`
+  keys below (it is written while the key is the request's proof).
+- **Rows name the key (`via_*`).** A row the pocket's recorder writes while an API key is the
+  request's proof carries `via_credential` (`api_key`), `via_api_key_id`, `via_service_account_id`
+  (strings) and `via_act_as_user` (bool); `Actor` stays the effective principal. Proven values
+  overwrite a caller-supplied `via_*` key. Session, job and unproven rows are unchanged. Never
+  carried: rows through a recorder a host hands `authlogic.New`, or through `invitations.New` /
+  `oauth2.New` built without the shared recorder; the resolution-time `apikey_auth` rows (written
+  before the proof is stashed); the maintenance purge and archive rows. Absence means "not an
+  API-key proof" only on a recorder with the reader.
 - **`CheckCredential`.** `UserAdminCheckRequest.Credential` and `InviteCheckRequest.Credential`
   carry `{Kind, ActAsUser, APIKeyID, ServiceAccountID}` (ids only, comparable). A host that
   overrides a group to admit act-as-user keys refuses `Credential.ActAsUser` per action. With an

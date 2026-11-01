@@ -550,8 +550,14 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if cfg.RuntimeMode == environment.ModeProduction {
 		missingAttribution = securityevent.WithMissingAttributionWarning()
 	}
+	// The attribution reader is late-bound to authService like the invitation
+	// service's VerifiedIdentifiers below: a row recorded before the assignment
+	// carries no via_ details (a nil Service reports nothing).
 	securityEvents := securityevent.NewRecorder(repos.SecurityEvents, cfg.IDs, time.Now, cfg.Logger,
 		securityevent.WithClientInfoReader(authlogic.ClientInfoFromContext),
+		securityevent.WithCredentialAttributionReader(func(ctx context.Context) (securityevent.CredentialAttribution, bool) {
+			return authService.CredentialAttribution(ctx)
+		}),
 		securityevent.WithWriteObserver(cfg.AuditWriteObserver),
 		securityevent.WithFailureRowBudget(limiter, ratelimiter.PerMinute(auditFailureRowsPerMinute)),
 		missingAttribution)

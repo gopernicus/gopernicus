@@ -6251,6 +6251,12 @@ against the live Auth emulator.
   - An override admitting act-as-user keys WARNs at every boot
     (`posture_warning=bundled_group_admits_act_as_user_keys`, and
     `bundled_group_act_as_user_mfa_exempt` beside `MFAConfig.APIKeysExempt`); never a refusal.
+  - Rows written through the pocket's recorder while an API key is the request's proof carry
+    `via_credential`, `via_api_key_id`, `via_service_account_id` (strings) and `via_act_as_user`
+    (bool), read from the pocket's own proof (`Service.CredentialAttribution`, owner-bound);
+    proven values overwrite caller `via_*` keys; `Actor` is unchanged. The refusal row carries
+    them too. Never carried: a host-supplied recorder, `invitations.New` / `oauth2.New` built
+    without the shared recorder, the resolution-time `apikey_auth` rows, the maintenance rows.
 
 **Migration:**
 - A host using act-as-user keys against these routes moves to a self-acting account its

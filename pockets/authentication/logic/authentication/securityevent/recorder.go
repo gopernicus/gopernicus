@@ -94,6 +94,7 @@ type Recorder struct {
 	now         func() time.Time
 	log         *slog.Logger
 	clientInfo  func(context.Context) (ip, ua string)
+	attribution func(context.Context) (CredentialAttribution, bool)
 	observer    WriteObserver
 	timeout     time.Duration
 	budget      ratelimiter.Allower
@@ -123,6 +124,16 @@ type logThrottle struct {
 // UserAgent are recorded empty.
 func WithClientInfoReader(read func(context.Context) (ip, ua string)) RecorderOption {
 	return func(r *Recorder) { r.clientInfo = read }
+}
+
+// WithCredentialAttributionReader sets how Prepare names the credential a row
+// was written under: when read reports one, the row's Details gain
+// DetailViaCredential, DetailViaAPIKeyID, DetailViaServiceAccountID and
+// DetailViaActAsUser, and those proven values win over any caller-supplied key
+// of the same name. A row read reports nothing for is unchanged. read must be
+// safe to call before whatever it reads from is assigned.
+func WithCredentialAttributionReader(read func(context.Context) (CredentialAttribution, bool)) RecorderOption {
+	return func(r *Recorder) { r.attribution = read }
 }
 
 // WithWriteObserver sets the observer told about every failed write.
@@ -238,6 +249,11 @@ func (r *Recorder) Prepare(ctx context.Context, in Input) (SecurityEvent, bool) 
 	evt.UserID = in.UserID
 	evt.Actor = in.Actor
 	evt.Details = boundDetails(in.Details)
+	if r.attribution != nil {
+		if cred, ok := r.attribution(ctx); ok {
+			evt.Details = withCredentialAttribution(evt.Details, cred)
+		}
+	}
 	evt.IPAddress, evt.UserAgent = ip, ua
 	if id, ok := sdk.RequestIDFromContext(ctx); ok {
 		evt.RequestID = BoundValue(FieldRequestID, id)
@@ -368,6 +384,20 @@ func boundDetails(details map[string]any) map[string]any {
 		}
 		out[key] = bounded
 	}
+	return out
+}
+
+// withCredentialAttribution returns a clone of details carrying cred under the
+// via_ keys, so the caller's map is never written; a nil details allocates.
+func withCredentialAttribution(details map[string]any, cred CredentialAttribution) map[string]any {
+	out := maps.Clone(details)
+	if out == nil {
+		out = make(map[string]any, 4)
+	}
+	out[DetailViaCredential] = BoundValue(FieldDetail, cred.Kind)
+	out[DetailViaAPIKeyID] = BoundValue(FieldDetail, cred.APIKeyID)
+	out[DetailViaServiceAccountID] = BoundValue(FieldDetail, cred.ServiceAccountID)
+	out[DetailViaActAsUser] = cred.ActAsUser
 	return out
 }
 

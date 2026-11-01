@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -147,5 +148,69 @@ func TestInviteCheckRequestCarriesTheCredential(t *testing.T) {
 	want := CheckCredential{Kind: CredentialAPIKey, ActAsUser: true, APIKeyID: act.id, ServiceAccountID: act.serviceAccountID}
 	if got[0].Credential != want || got[0].Principal.ID != "u1" {
 		t.Errorf("invite check = principal %+v credential %+v, want the owner u1 with %+v", got[0].Principal, got[0].Credential, want)
+	}
+}
+
+// TestRowsUnderAnAPIKeyNameTheKey pins the via_ attribution end to end over a
+// bundled route: under an override that admits act-as-user keys, the
+// user_directory_read row a key's list writes names the key beside its owner
+// Actor; a self-acting key carries via_act_as_user=false; a session row carries
+// no via_ key.
+func TestRowsUnderAnAPIKeyNameTheKey(t *testing.T) {
+	f := newPostureFixture(t, RouteAuthentication{})
+	f = newPostureFixtureWith(t, f, RouteAuthentication{UserAdministration: f.svc.RequirePrincipal(Live())})
+	f.seedAccount("u1", "alice@example.com")
+	cookie := f.login(t, "alice@example.com")
+	act := mintKeyFor(t, f.svc, "personal", true, "u1")
+	self := mintKeyFor(t, f.svc, "bot", false, "")
+
+	for _, tc := range []struct {
+		name   string
+		bearer string
+		cookie *http.Cookie
+		key    *mintedKey
+		actAs  bool
+	}{
+		{"act-as-user key", act.raw, nil, &act, true},
+		{"self-acting key", self.raw, nil, &self, false},
+		{"session", "", cookie, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f.events.reset()
+			if rec := f.request("GET", "/auth/admin/users", "", tc.bearer, tc.cookie); rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+			}
+			var read *securityevent.SecurityEvent
+			for _, e := range f.events.recorded() {
+				if e.EventType == securityevent.TypeUserDirectoryRead {
+					read = &e
+				}
+			}
+			if read == nil {
+				t.Fatal("no user_directory_read row")
+			}
+			if tc.key == nil {
+				for k := range read.Details {
+					if strings.HasPrefix(k, "via_") {
+						t.Errorf("session row carries %s: %v", k, read.Details)
+					}
+				}
+				return
+			}
+			want := map[string]any{
+				securityevent.DetailViaCredential:       "api_key",
+				securityevent.DetailViaAPIKeyID:         tc.key.id,
+				securityevent.DetailViaServiceAccountID: tc.key.serviceAccountID,
+				securityevent.DetailViaActAsUser:        tc.actAs,
+			}
+			for k, v := range want {
+				if read.Details[k] != v {
+					t.Errorf("Details[%q] = %v, want %v", k, read.Details[k], v)
+				}
+			}
+			if read.Details["page"] != true {
+				t.Errorf("the row lost its own Details: %v", read.Details)
+			}
+		})
 	}
 }

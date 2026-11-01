@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -72,6 +73,27 @@ func (s *Service) CurrentCredential(ctx context.Context) (Credential, bool) {
 		return Credential{}, false
 	}
 	return proof.credential.clone(), true
+}
+
+// CredentialAttribution reports the API key this service verified on ctx, for
+// the security-event recorder's via_ details: ok only for an API-key proof this
+// exact Service stamped, so a proof another Service or a host stamped attributes
+// nothing. It reads ids only. A nil Service reports nothing, so a recorder built
+// before the Service is assigned can hold a late-bound reader over it.
+func (s *Service) CredentialAttribution(ctx context.Context) (securityevent.CredentialAttribution, bool) {
+	if s == nil {
+		return securityevent.CredentialAttribution{}, false
+	}
+	proof, ok := s.currentProof(ctx)
+	if !ok || proof.credential.Kind != CredentialAPIKey {
+		return securityevent.CredentialAttribution{}, false
+	}
+	return securityevent.CredentialAttribution{
+		Kind:             string(CredentialAPIKey),
+		APIKeyID:         proof.credential.APIKeyID,
+		ServiceAccountID: proof.credential.ServiceAccountID,
+		ActAsUser:        proof.credential.ActAsUser,
+	}, true
 }
 
 func (c Credential) clone() Credential {

@@ -3,7 +3,7 @@
 ## Bundled user-administration and invitation routes refuse act-as-user API keys (#312)
 
 **Status: pending.** One annotated tag (not signed) on one module, `pockets/authentication`
-**v0.39.0**, to be cut after PR-1 (this change) and PR-1b (audit attribution) are both on `main`
+**v0.39.0**, to be cut after PR-1 (this change, the audit attribution included) is on `main`
 with a green `live-stores` dispatch. Then it is pushed, confirmed on origin and on the proxy, and
 cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache). The examples repin
 in PR-2. No migration, no store tag, no sdk, views, `pockets` or workshop tag. Rulings: the
@@ -39,9 +39,18 @@ route, with the audit rows naming B.
   and adds one `apikey_auth` row with status `blocked`, budgeted per client IP. `Actor` is the
   service account; Details are `reason=act_as_user_refused`, `group` (the slot name, or `route`
   for a host route carrying the option), `api_key_id` and `service_account_id` — never the key,
-  its prefix or its hash. It is written from the inbound authenticator through a new optional
-  `ActAsUserRefusalRecorder` port (implemented by `*authlogic.Service`), so logic never learns
-  route posture.
+  its prefix or its hash — plus the `via_*` keys below. It is written from the inbound
+  authenticator through a new optional `ActAsUserRefusalRecorder` port (implemented by
+  `*authlogic.Service`), so logic never learns route posture.
+- **Audit attribution (`via_*`).** A row written through the pocket's recorder while an API key
+  is the request's proof gains `via_credential` (`api_key`), `via_api_key_id`,
+  `via_service_account_id` (strings) and `via_act_as_user` (bool); `Actor` stays the effective
+  principal, so a row an opted-in act-as-user key writes names the key as well as its owner. The
+  values come from the pocket's own proof (`Service.CredentialAttribution`, owner-bound) through
+  a new `securityevent.WithCredentialAttributionReader`; proven values overwrite a
+  caller-supplied `via_*` key. Never carried: a recorder a host hands `authlogic.New`,
+  `invitations.New` / `oauth2.New` built without the shared recorder, the resolution-time
+  `apikey_auth` rows, the maintenance purge/archive rows.
 - **`CheckCredential`.** `UserAdminCheckRequest.Credential` and `InviteCheckRequest.Credential`
   carry a comparable `{Kind, ActAsUser, APIKeyID, ServiceAccountID}`, ids only.
 - **Boot WARNs**, every boot, every mode, for a `BundledRouteAuth` override of either group
@@ -53,7 +62,7 @@ route, with the audit rows naming B.
 
 | Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
 |---|---|---|---|---|---|
-| 1 | `pockets/authentication/v0.39.0` | pending | pending (PR-1, PR-1b) | pending | pending |
+| 1 | `pockets/authentication/v0.39.0` | pending | pending (PR-1) | pending | pending |
 
 > **Read first:** `grep -rnE 'BundledRouteAuth|UserAdministration|Invitations|APIKeysExempt|act_as_user|ActAsUser' --include='*.go'`.
 > - **Pins:** authentication **v0.39.0**; stores, views and sdk unchanged. Repin with explicit
@@ -69,6 +78,7 @@ route, with the audit rows naming B.
 | 5 | `posture_warning=bundled_group_admits_act_as_user_keys` | one WARN per admitting overridden group, every boot | add `RefuseActAsUserKeys()` to the strategy | authentication@v0.39.0 |
 | 6 | `posture_warning=bundled_group_act_as_user_mfa_exempt` | one more WARN per such group beside `APIKeysExempt` | as above, or drop `APIKeysExempt` | authentication@v0.39.0 |
 | 7 | the blocked `apikey_auth` refusal row | one extra row per refused request (`reason=act_as_user_refused`, ids only, budgeted); a test comparing exact row sets for such a request sees it | — | authentication@v0.39.0 |
+| 8 | `via_*` audit attribution | rows written under an API-key proof gain four Details keys; session, job and unproven rows are byte-identical; a test comparing whole rows for a key's request sees them | a host-supplied recorder carries none unless built with `WithCredentialAttributionReader` | authentication@v0.39.0 |
 
 **Upgrade notes by host shape.**
 - **(a) No machine identity** (`ServiceAccounts`/`APIKeys` unwired): no change.
@@ -81,6 +91,11 @@ route, with the audit rows naming B.
   fails the handlers' `CurrentUser`). Use an access token from a real administrator session.
 - **(e) An override admitting act-as-user keys beside `APIKeysExempt`:** the two WARNs above
   repeat at every boot by design; the admin MFA gate admits that key unverified.
+- **(f) Any host whose API keys reach rows the pocket records** (self-acting or act-as-user,
+  bundled or host routes): those rows' Details gain the four `via_*` keys. Update a test that
+  compares whole Details maps for such a request; an audit query can now filter on
+  `via_api_key_id`. A host that hands `authlogic.New` its own recorder sees no change unless it
+  builds that recorder with `securityevent.WithCredentialAttributionReader`.
 
 **Diagnostic.** A key that gets 200 on `/auth/me` but 401 on `/auth/admin/*` or
 `/auth/invitations/*` is an act-as-user key refused by v0.39.0's default; look for the blocked

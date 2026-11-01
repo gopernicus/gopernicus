@@ -600,3 +600,89 @@ func TestRecorderPrepareBuildsWithoutWriting(t *testing.T) {
 		t.Errorf("SuppressedRows = %d, want 1", refusing.SuppressedRows())
 	}
 }
+
+// TestRecorderCredentialAttribution pins the via_ merge: a row written while
+// the reader reports an API-key proof carries the four keys on a clone of the
+// caller's Details (nil allocates), the proven values win over caller-supplied
+// via_ keys, and a row the reader reports nothing for is unchanged — on Record
+// and on Prepare alike.
+func TestRecorderCredentialAttribution(t *testing.T) {
+	proven := CredentialAttribution{Kind: "api_key", APIKeyID: "key-1", ServiceAccountID: "sa-1", ActAsUser: true}
+	type proofKey struct{}
+	read := func(ctx context.Context) (CredentialAttribution, bool) {
+		cred, ok := ctx.Value(proofKey{}).(CredentialAttribution)
+		return cred, ok
+	}
+	repo := &recordingRepo{}
+	rec := NewRecorder(repo, sdk.IDGenerator{}, nil, nil, WithCredentialAttributionReader(read))
+	keyed := context.WithValue(context.Background(), proofKey{}, proven)
+	want := map[string]any{
+		DetailViaCredential:       "api_key",
+		DetailViaAPIKeyID:         "key-1",
+		DetailViaServiceAccountID: "sa-1",
+		DetailViaActAsUser:        true,
+	}
+	requireVia := func(t *testing.T, details map[string]any, extra map[string]any) {
+		t.Helper()
+		if len(details) != len(want)+len(extra) {
+			t.Errorf("Details = %v, want the via_ keys plus %v", details, extra)
+		}
+		for k, v := range want {
+			if details[k] != v {
+				t.Errorf("Details[%q] = %v, want %v", k, details[k], v)
+			}
+		}
+		for k, v := range extra {
+			if details[k] != v {
+				t.Errorf("Details[%q] = %v, want %v", k, details[k], v)
+			}
+		}
+	}
+
+	caller := map[string]any{"status": "deactivated", DetailViaAPIKeyID: "forged", DetailViaActAsUser: false}
+	rec.Record(keyed, Input{Type: TypeUserDeactivated, Status: StatusSuccess, Details: caller})
+	rec.Record(keyed, Input{Type: TypeLogout, Status: StatusSuccess})
+	got := repo.recorded()
+	if len(got) != 2 {
+		t.Fatalf("recorded %d rows, want 2", len(got))
+	}
+	requireVia(t, got[0].Details, map[string]any{"status": "deactivated"})
+	requireVia(t, got[1].Details, nil)
+	if len(caller) != 3 || caller[DetailViaAPIKeyID] != "forged" || caller[DetailViaActAsUser] != false {
+		t.Errorf("the caller's Details were written: %v", caller)
+	}
+
+	evt, ok := rec.Prepare(keyed, Input{Type: TypeUserErased, Status: StatusSuccess})
+	if !ok {
+		t.Fatal("Prepare refused the row")
+	}
+	requireVia(t, evt.Details, nil)
+
+	self := context.WithValue(context.Background(), proofKey{}, CredentialAttribution{Kind: "api_key", APIKeyID: "key-2", ServiceAccountID: "sa-2"})
+	evt, _ = rec.Prepare(self, Input{Type: TypeUserErased, Status: StatusSuccess})
+	if evt.Details[DetailViaActAsUser] != false || evt.Details[DetailViaAPIKeyID] != "key-2" {
+		t.Errorf("self-acting Details = %v, want via_act_as_user=false", evt.Details)
+	}
+
+	plain := map[string]any{"status": "deactivated"}
+	evt, _ = rec.Prepare(context.Background(), Input{Type: TypeUserDeactivated, Status: StatusSuccess, Details: plain})
+	if len(evt.Details) != 1 || evt.Details["status"] != "deactivated" {
+		t.Errorf("unattributed Details = %v, want the caller's unchanged", evt.Details)
+	}
+	evt, _ = rec.Prepare(context.Background(), Input{Type: TypeLogout, Status: StatusSuccess})
+	if evt.Details != nil {
+		t.Errorf("unattributed nil Details = %v, want nil", evt.Details)
+	}
+
+	unread := NewRecorder(repo, sdk.IDGenerator{}, nil, nil)
+	evt, _ = unread.Prepare(keyed, Input{Type: TypeLogout, Status: StatusSuccess})
+	if evt.Details != nil {
+		t.Errorf("a recorder without the reader stamped %v", evt.Details)
+	}
+
+	oversized := context.WithValue(context.Background(), proofKey{}, CredentialAttribution{Kind: "api_key", APIKeyID: strings.Repeat("k", MaxDetailLen+1), ServiceAccountID: "sa\x00"})
+	evt, _ = rec.Prepare(oversized, Input{Type: TypeLogout, Status: StatusSuccess})
+	if evt.Details[DetailViaAPIKeyID] != "" || evt.Details[DetailViaServiceAccountID] != "" {
+		t.Errorf("via_ ids not bounded: %v", evt.Details)
+	}
+}

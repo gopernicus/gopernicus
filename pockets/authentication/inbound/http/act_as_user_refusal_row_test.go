@@ -46,6 +46,9 @@ func mintKeyFor(t *testing.T, svc *testService, name string, actAsUser bool, own
 
 // requireRefusalRows asserts rows are EXACTLY the apikey_auth success row and
 // one blocked refusal row for key on group, the refusal row carrying ids only.
+// The refusal row is written while the key is the request's proof, so it also
+// carries the via_ attribution; the success row, written before the proof is
+// stashed, carries none.
 func requireRefusalRows(t *testing.T, rows []securityevent.SecurityEvent, key mintedKey, group string) {
 	t.Helper()
 	var kinds []string
@@ -65,6 +68,14 @@ func requireRefusalRows(t *testing.T, rows []securityevent.SecurityEvent, key mi
 		"group":              group,
 		"api_key_id":         key.id,
 		"service_account_id": key.serviceAccountID,
+
+		securityevent.DetailViaCredential:       string(authlogic.CredentialAPIKey),
+		securityevent.DetailViaAPIKeyID:         key.id,
+		securityevent.DetailViaServiceAccountID: key.serviceAccountID,
+		securityevent.DetailViaActAsUser:        true,
+	}
+	if _, ok := rows[0].Details[securityevent.DetailViaCredential]; ok {
+		t.Errorf("resolution-time success row carries via_ attribution: %v", rows[0].Details)
 	}
 	if len(blocked.Details) != len(want) {
 		t.Errorf("refusal details = %v, want exactly %v", blocked.Details, want)
