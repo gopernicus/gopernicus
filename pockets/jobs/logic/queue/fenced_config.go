@@ -64,9 +64,16 @@ type FencedHandlerFunc func(ctx context.Context, claim FencedClaim) error
 // cross-pocket structural seam.
 type DeadLetterFunc func(ctx context.Context, j Job) error
 
-// FencedRuntimePolicy controls pool sizing, leases and retry timing. Nonpositive
-// sizing fields select defaults. A positive ProcessTimeout must be shorter than
-// the resolved LeaseFor. Backoff nil selects a capped exponential.
+// FencedRuntimePolicy controls pool sizing, leases, shutdown drain and retry
+// timing. Nonpositive sizing fields select defaults. A positive ProcessTimeout
+// must be shorter than the resolved LeaseFor. Backoff nil selects a capped
+// exponential.
+//
+// DrainTimeout bounds how long Run keeps in-flight claims going after its ctx
+// is cancelled. Zero selects the resolved LeaseFor. Negative disables the
+// drain: cancelling Run aborts in-flight processing and leaves those claims
+// reclaimable. A value longer than LeaseFor is refused
+// (ErrDrainTimeoutExceedsLease).
 // Env keys intentionally match RuntimePolicy; ParseEnvTags can add a namespace.
 type FencedRuntimePolicy struct {
 	Workers        int           `env:"JOBS_WORKERS"`
@@ -74,6 +81,7 @@ type FencedRuntimePolicy struct {
 	IdleInterval   time.Duration `env:"JOBS_IDLE_INTERVAL"`
 	LeaseFor       time.Duration `env:"JOBS_LEASE_FOR"`
 	ProcessTimeout time.Duration `env:"JOBS_PROCESS_TIMEOUT"`
+	DrainTimeout   time.Duration `env:"JOBS_DRAIN_TIMEOUT"`
 	MaxAttempts    int           `env:"JOBS_MAX_ATTEMPTS"`
 	Backoff        func(attempt int) time.Duration
 }

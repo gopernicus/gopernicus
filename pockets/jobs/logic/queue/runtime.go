@@ -180,8 +180,8 @@ func (q kindScopedQueue) Defer(ctx context.Context, id string, availableAt time.
 // handler and persist its outcome before the pool returns. Hosts must bound
 // handler execution and store I/O separately; a handler timeout does not bound
 // Claim or persistence. Without those bounds an iteration can drain forever.
-// The fenced runtime intentionally does not use this wrapper: its
-// shutdown contract cancels processing and leaves the fenced lease reclaimable.
+// The fenced runtime uses drainFenced instead, which bounds the drain by the
+// lease and DrainTimeout.
 func drainInFlight(work workers.WorkFunc) workers.WorkFunc {
 	return func(ctx context.Context) error {
 		return work(context.WithoutCancel(ctx))
