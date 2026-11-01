@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## Fenced runtime drains on shutdown (#231 — pockets/jobs v0.9.0)
+## Fenced runtime drains on shutdown (#231 — pockets/jobs v0.9.0 — published 2026-11-01)
 
-**Status: pending merge and tag.** **MINOR, a default change to shutdown.** Cancelling
+**Status: released.** **MINOR, a default change to shutdown.** Cancelling
 `FencedRuntime.Run` used to cancel in-flight processing and skip settlement. A SIGTERM during a
 deploy could therefore cut off a send the provider had already accepted, and after the lease the
 job was reclaimed and **sent again**. Now:
@@ -27,8 +27,29 @@ job was reclaimed and **sent again**. Now:
 - A handler that ran past its lease (no `ProcessTimeout`) is now cancelled at the lease.
 - Set `DrainTimeout: -1` to keep the old abort.
 
-No other module changes; jobs stays on sdk v0.21.0. The examples repin in a follow-up PR, with
-auth-cms's delivery wait raised.
+No other module changes; jobs stays on sdk v0.21.0.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/jobs/v0.9.0` | `abc56d73` → `132c5ad1` | #321 | 41342189763 @ `132c5ad1` | OK; MVS selects sdk v0.21.0 |
+| — | none | — | PR-2: auth-cms + jobs-minimal repin | — | both build, vet and test with `GOWORK=off` |
+
+Annotated, not signed. Confirmed on origin and on the proxy. **Run and look.** A scratch program
+runs two `FencedRuntime`s on one in-memory queue (old and new replica) and sends a real SIGTERM to
+the first mid-send (accept at 1s, return at 3s, signal at 2s, lease 4s). Built from the cold module
+cache against the published v0.9.0, it shows `sends=1 final_status=completed`. Against v0.8.0 it
+shows `sends=2`, the second replica resending after the lease. With a 6s call on a 4s lease and the
+signal at 3.5s, the first replica is stopped at 3.60s (lease minus margin) and reschedules under its
+own lease, so the two never run the job at the same time.
+
+**PR-2.** auth-cms and jobs-minimal require jobs v0.9.0 (only jobs moved). auth-cms sets
+`DrainTimeout: 25s` and waits `deliveryStopWait` (27s) for the delivery runtime, not 5s. A 5s wait
+would exit mid-drain and bring the duplicate back. The auth-cms README gives the shutdown budget:
+`SHUTDOWN_TIMEOUT` + 27s + margin, about 40s. jobs-minimal does not use `FencedRuntime`, so its
+repin is consistency only. The auth-cms binary (`go version -m`: jobs v0.9.0) booted in development,
+took a registration and shut down on SIGTERM in order (HTTP, then delivery: "worker pool stopped"
+then "delivery runtime stopped") with no wait warning. A dev-mode send completes too quickly to
+SIGTERM it mid-send there; the two-replica program above covers that case.
 
 ## Tracer exports no error text by default (#310 — integrations/tracing/otel v0.4.0 — published 2026-11-01)
 

@@ -111,6 +111,17 @@ const authAssetBasePath = "/assets/goth"
 // keeps 8082 instead of falling back to the sdk tag default.
 const defaultPort = "8082"
 
+// deliveryDrainTimeout bounds how long the jobs-mode delivery runtime keeps
+// in-flight sends going after shutdown starts (jobs FencedRuntimePolicy
+// DrainTimeout); it must not exceed the 30-second claim lease.
+// deliveryStopWait is how long shutdown waits for the delivery runtime to
+// return. It must cover the drain, or the process exits mid-send and the
+// claim is sent again after its lease.
+const (
+	deliveryDrainTimeout = 25 * time.Second
+	deliveryStopWait     = deliveryDrainTimeout + 2*time.Second
+)
+
 // newAuthBundle constructs the immutable ui/goth presentation bundle the auth pages
 // render through. StylesOnly is the smallest safe profile for the native auth forms;
 // the externalized fragment-reader script is served separately and covered by the
@@ -571,10 +582,11 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 		}
 		// Bound each provider attempt inside the default 30-second claim lease. The
 		// fenced queue has no enqueue wake, so a one-second idle interval keeps mail
-		// prompt instead of waiting out the 30-second default.
+		// prompt instead of waiting out the 30-second default. On shutdown, in-flight
+		// sends finish and settle within deliveryDrainTimeout.
 		df, err := authjobs.NewRuntime(deliveryJobs.Queue, deliveryRuntime,
 			queue.WithFencedRuntimeLogger(log),
-			queue.WithFencedRuntimePolicy(queue.FencedRuntimePolicy{PollInterval: time.Second, IdleInterval: time.Second, ProcessTimeout: 20 * time.Second}))
+			queue.WithFencedRuntimePolicy(queue.FencedRuntimePolicy{PollInterval: time.Second, IdleInterval: time.Second, ProcessTimeout: 20 * time.Second, DrainTimeout: deliveryDrainTimeout}))
 		if err != nil {
 			return err
 		}
@@ -832,8 +844,8 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	// Stop the delivery runtime after HTTP drains (its own context, like the poller).
 	log.InfoContext(context.Background(), "stopping delivery runtime")
 	cancelDelivery()
-	if !supervisor.Wait(5 * time.Second) {
-		log.WarnContext(context.Background(), "delivery runtime did not stop within 5s")
+	if !supervisor.Wait(deliveryStopWait) {
+		log.WarnContext(context.Background(), "delivery runtime did not stop in time", "waited", deliveryStopWait)
 	}
 	log.InfoContext(context.Background(), "delivery runtime stopped")
 	// If the delivery runtime exited unexpectedly (it drove this shutdown, not a signal),
