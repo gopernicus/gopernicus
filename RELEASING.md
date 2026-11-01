@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## Tracer exports no error text by default (#310 — integrations/tracing/otel v0.4.0)
+## Tracer exports no error text by default (#310 — integrations/tracing/otel v0.4.0 — published 2026-11-01)
 
-**Status: pending merge and tag.** **MINOR, a default change.** `SpanFinisher.RecordError` used to
+**Status: released.** **MINOR, a default change.** `SpanFinisher.RecordError` used to
 export `err.Error()` twice: as an `exception` event and as the span status description. Errors
 reaching it (raw Redis errors from `goredis.TracingHook`, application errors) can carry user
 input, ids or SQL fragments. Now:
@@ -16,6 +16,14 @@ input, ids or SQL fragments. Now:
 **Migration:** a dashboard or alert that matched on span status text or `exception.message`
 now sees `error` and no event. Set `TRACING_RECORD_ERROR_TEXT=true` to keep the old behaviour.
 No other module changes; `examples/cms` stays on v0.3.0 until it repins.
+
+| Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|
+| `integrations/tracing/otel/v0.4.0` | `9a705738` → `6f75786c` | #317 | 41331937949 @ `6f75786c` | OK; MVS selects sdk v0.9.0 |
+
+Annotated, not signed. Confirmed on origin and on the proxy. The cold build (`GOWORK=off`, an
+empty module cache) reported `all modules verified`, and its binary recorded an error through the
+stdout exporter as status `Error` / `error` with no events.
 
 ## Bundled user-administration and invitation routes refuse act-as-user API keys (#312 — published 2026-10-31)
 
