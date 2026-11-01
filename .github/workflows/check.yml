@@ -77,7 +77,7 @@ jobs:
       - run: make check
       # Only main saves, so PR runs never evict main's entry from the
       # repository's cache quota; every PR restores from main's latest.
-      - if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'ci/check-single-run-and-cache' # TEMP: verification only, removed before merge
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
