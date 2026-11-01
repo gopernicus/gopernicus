@@ -10,6 +10,8 @@ github.com/gopernicus/gopernicus/pockets v0.1.0 h1:2WcybbfPw1km00DmG37CekPbxYmOb
 github.com/gopernicus/gopernicus/pockets v0.1.0/go.mod h1:A2H/Tl9Pn2v2mFLOgkCQngMRFkMN10E1MEzGCQICsEw=
 github.com/gopernicus/gopernicus/pockets/authentication v0.39.0 h1:ml4HPgeDRzjgJCWmGcsBGPGCGciwFzQ0XHbgNTp3RhI=
 github.com/gopernicus/gopernicus/pockets/authentication v0.39.0/go.mod h1:QdOoDpjAE7NGVqWqnyYdo3fPLOr7oZXC7NKsFLgbiKs=
+github.com/gopernicus/gopernicus/pockets/authentication v0.40.0 h1:zmJUamA+x2A4YABN2sWeca8o+nbaSU0w0BYeLB8IyMo=
+github.com/gopernicus/gopernicus/pockets/authentication v0.40.0/go.mod h1:QdOoDpjAE7NGVqWqnyYdo3fPLOr7oZXC7NKsFLgbiKs=
 github.com/gopernicus/gopernicus/sdk v0.25.0 h1:Hu7VrYHngYzjhTcXNDe5oF4EtfSApS/6UyY8n7d9WXw=
 github.com/gopernicus/gopernicus/sdk v0.25.0/go.mod h1:zo9DGgXEfFANGvuo3VAIRWyRmlN4YRqavdncRsnCzu8=
 golang.org/x/oauth2 v0.36.0 h1:peZ/1z27fi9hUOFCAZaHyrpWG5lwe0RJEEEeH0ThlIs=

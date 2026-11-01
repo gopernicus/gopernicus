@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## Member-added notice opens the app, not the accept landing (#304 — pockets/authentication v0.40.0)
+## Member-added notice opens the app, not the accept landing (#304 — pockets/authentication v0.40.0 — published 2026-11-01)
 
-**Status: pending merge and tag.** **MINOR.** The member-added notice ("You were added … Open it:
+**Status: released.** **MINOR.** The member-added notice ("You were added … Open it:
 <link>") fell back to `LinksConfig.InvitationURL` when the invitation had no `Redirect`. That is
 the accept landing, which expects a `#token=` fragment, so a signed-out recipient was sent to sign
 in to nothing and a signed-in one saw a "no invitation" state. A host could not fix it with
@@ -16,6 +16,33 @@ in to nothing and a signed-in one saw a "no invitation" state. A host could not 
 
 **Migration:** none required. A host whose app is not at the `InvitationURL` origin root sets
 `AUTH_MEMBER_ADDED_URL`. No store, migration, sdk or views change.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/authentication/v0.40.0` | `4ccd454f` → `c6721656` | #324 | 41349215677 @ `c6721656` | OK; MVS selects sdk v0.24.0 |
+| — | none | — | PR-2: auth-cms, external-identity, production-baseline repin | — | each builds, vets and tests with `GOWORK=off` |
+
+Annotated, not signed. Confirmed on origin and on the proxy. **Run and look.** auth-cms with
+`AUTH_INVITATION_URL=…/invitations/accept`: an admin invites a user, who accepts with the token
+from the mail log, and the member-added email is read back.
+- On v0.39.0: `Open it: http://localhost:8082/invitations/accept`.
+- On v0.40.0 (the repinned binary, `go version -m`: authentication v0.40.0):
+  `Open it: http://localhost:8082/`.
+- With `AUTH_MEMBER_ADDED_URL=…/projects`: `Open it: …/projects`.
+- The invitation link stays `…/invitations/accept#token=…` in all three. auth-cms's `.env.example`
+  documents `AUTH_MEMBER_ADDED_URL`.
+
+## Open reports the caller's deadline at a ping timeout (integrations/kvstores/goredis v0.4.1 — published 2026-11-01)
+
+**Status: released.** **PATCH.** go-redis sets the socket deadline from the caller's ctx deadline,
+so `Open`'s ping can fail with `i/o timeout` a moment before ctx reports `DeadlineExceeded`. `Open`
+checked only `ctx.Err()`, so `errors.Is(err, context.DeadlineExceeded)` was sometimes false, and
+`TestOpenHonorsDeadlineAfterConnection` flaked on `main` (133 of 800 runs under CPU load; 0 after).
+A deadline at or past now now counts as exceeded. No API change; no consumer repin needed.
+
+| Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|
+| `integrations/kvstores/goredis/v0.4.1` | `96d72294` → `75fa2298` | #322 | 41344742688 @ `6e31c149` (goredis unchanged since `75fa2298`) | OK; MVS selects sdk v0.18.0; a ping against a silent listener under a 150ms deadline reports `errors.Is(err, context.DeadlineExceeded) = true` |
 
 ## Fenced runtime drains on shutdown (#231 — pockets/jobs v0.9.0 — published 2026-11-01)
 
