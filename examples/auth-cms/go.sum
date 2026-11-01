@@ -47,6 +47,8 @@ github.com/gopernicus/gopernicus/pockets v0.1.0 h1:2WcybbfPw1km00DmG37CekPbxYmOb
 github.com/gopernicus/gopernicus/pockets v0.1.0/go.mod h1:A2H/Tl9Pn2v2mFLOgkCQngMRFkMN10E1MEzGCQICsEw=
 github.com/gopernicus/gopernicus/pockets/authentication v0.39.0 h1:ml4HPgeDRzjgJCWmGcsBGPGCGciwFzQ0XHbgNTp3RhI=
 github.com/gopernicus/gopernicus/pockets/authentication v0.39.0/go.mod h1:QdOoDpjAE7NGVqWqnyYdo3fPLOr7oZXC7NKsFLgbiKs=
+github.com/gopernicus/gopernicus/pockets/authentication v0.40.0 h1:zmJUamA+x2A4YABN2sWeca8o+nbaSU0w0BYeLB8IyMo=
+github.com/gopernicus/gopernicus/pockets/authentication v0.40.0/go.mod h1:QdOoDpjAE7NGVqWqnyYdo3fPLOr7oZXC7NKsFLgbiKs=
 github.com/gopernicus/gopernicus/pockets/authentication/views/goth v0.9.0 h1:eKZHLCBE/hZ6fDHr8vGNPjFPcTMpHDwXVjOcmZpWzeI=
 github.com/gopernicus/gopernicus/pockets/authentication/views/goth v0.9.0/go.mod h1:qskO/fTIE0Uyi850hY0aMGqZJN+SA87Qv377zvEi93U=
 github.com/gopernicus/gopernicus/pockets/authorization v0.34.0 h1:Frk7/o6/+fyQjESLojUhJsakL/2tZSnN8neqHaaf57I=
