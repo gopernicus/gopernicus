@@ -3,11 +3,11 @@
 # and the compile-only -tags=integration vet of the turso stores and the goredis
 # store).
 #
-# Triggered on every push and every pull_request (plain push + PR, as the task
-# title "make check on every push/PR" implies). A push to a PR branch does run
-# twice (push event + pull_request event); the concurrency group below cancels
-# superseded runs per ref so only the latest survives, and the two event
-# contexts share the same job/check-run name.
+# Triggered on every pull_request and on pushes to main only. Branch pushes are
+# covered by their PR's run, and tag pushes by the main run of the commit they
+# tag. (A push trigger on every branch ran each PR push twice: the push and
+# pull_request runs have different refs, so the concurrency group never
+# cancelled one for the other.)
 #
 # The check-run context name this workflow reports is "check" — the job id,
 # confirmed via the commit check-runs API (.check_runs[].name) and `gh pr
@@ -29,14 +29,15 @@ name: check
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 # Least-privilege: this gate only reads the tree.
 permissions:
   contents: read
 
-# Cancel superseded runs for the same ref (covers the push+PR double-fire and
-# rapid re-pushes); the newest commit's run is the one that matters.
+# Cancel superseded runs for the same ref (rapid re-pushes to a PR or to main);
+# the newest commit's run is the one that matters.
 concurrency:
   group: check-${{ github.ref }}
   cancel-in-progress: true
@@ -51,11 +52,38 @@ jobs:
           # go.work declares `go 1.26.10`; GOTOOLCHAIN stays auto (unset) so the
           # exact toolchain self-downloads if the runner's Go differs.
           go-version-file: go.work
-          # Module caching keyed off every module's go.sum (no root go.sum in a
-          # go.work multi-module tree).
-          cache: true
-          cache-dependency-path: "**/go.sum"
+          # Caching is handled below: setup-go's cache is keyed only on go.sum,
+          # so its build cache was saved once per dependency change and never
+          # refreshed, and every run re-ran every test.
+          cache: false
+      - id: gopaths
+        run: |
+          echo "gocache=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "gomodcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      # Restore the newest main-branch cache (module + build/test cache). Keys
+      # are per commit; restore-keys fall back to the latest one, so unchanged
+      # packages build and test from cache. A test that opens files is cached
+      # by path, size and mtime, and a fresh checkout resets mtimes, so those
+      # tests still re-run.
+      - uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ${{ steps.gopaths.outputs.gocache }}
+            ${{ steps.gopaths.outputs.gomodcache }}
+          key: check-go-${{ runner.os }}-${{ hashFiles('go.work', '**/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            check-go-${{ runner.os }}-${{ hashFiles('go.work', '**/go.sum') }}-
+            check-go-${{ runner.os }}-
       - run: make check
+      # Only main saves, so PR runs never evict main's entry from the
+      # repository's cache quota; every PR restores from main's latest.
+      - if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'ci/check-single-run-and-cache' # TEMP: verification only, removed before merge
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ${{ steps.gopaths.outputs.gocache }}
+            ${{ steps.gopaths.outputs.gomodcache }}
+          key: check-go-${{ runner.os }}-${{ hashFiles('go.work', '**/go.sum') }}-${{ github.sha }}
 
   # Vulnerability gate (SOC 2 CC7.1 / CC6.8): govulncheck with symbol-level
   # reachability in every Makefile MODULE (`make vuln`). It is its own job, not
