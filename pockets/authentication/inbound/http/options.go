@@ -185,8 +185,11 @@ func WithGlobalSessionRevocationRoute(enabled bool) Option {
 }
 
 // WithMFAAPIKeysExempt lets an API key pass every MFA gate (MFAConfig.
-// APIKeysExempt): RequireMFA(), the admin and the machine gates. False (the
-// default) refuses a key there with a 403 mfa_credential_not_eligible.
+// APIKeysExempt): RequireMFA(), the admin and the machine gates. A key cannot
+// hold AAL2, so RequireMFA() and the machine gate admit it unverified, and the
+// admin gate admits a self-acting key by default and an act-as-user key only
+// under an override that admits one. False (the default) refuses a key there
+// with a 403 mfa_credential_not_eligible.
 func WithMFAAPIKeysExempt(exempt bool) Option {
 	return func(c *adapterConfig) { c.MFAAPIKeysExempt = exempt }
 }

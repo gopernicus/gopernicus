@@ -1,5 +1,97 @@
 # Releasing gopernicus modules
 
+## Bundled user-administration and invitation routes refuse act-as-user API keys (#312)
+
+**Status: pending.** One annotated tag (not signed) on one module, `pockets/authentication`
+**v0.39.0**, to be cut after PR-1 (this change) and PR-1b (audit attribution) are both on `main`
+with a green `live-stores` dispatch. Then it is pushed, confirmed on origin and on the proxy, and
+cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache). The examples repin
+in PR-2. No migration, no store tag, no sdk, views, `pockets` or workshop tag. Rulings: the
+default for both groups is `RequirePrincipal(Live(), RefuseActAsUserKeys())` (the human-only
+class was not adopted); `/auth/me` and `/auth/csrf` are unchanged; an override that admits
+act-as-user keys beside `MFAConfig.APIKeysExempt` WARNs and never refuses; the resource-rule
+gap is documented and WARNed. The audit entry is **AUDIT-064**. The reference is the
+authentication README's "Act-as-user API keys on user administration and invitations
+(v0.39.0)".
+
+A host reported (#312) that when it wires `ServiceAccounts` + `APIKeys`, the bundled
+`UserAdministration` and `Invitations` groups admitted every wired credential, act-as-user API
+keys included. Such a key resolves to `Principal{user, owner}`, so `UserAdminCheck` and
+`InviteCheck` saw a human administrator and could not tell a key from a session. Because the
+machine lifecycle routes let a gate holder name any existing user as the act-as owner,
+administrator A could mint a key owned by administrator B and, as a header-only bearer (no
+`Origin`, so the browser-safe gate is skipped), reach erase, deactivate/reactivate, the
+resends, the passkey/TOTP resets, the security-event read and every authenticated invitation
+route, with the audit rows naming B.
+
+**What changed (authentication v0.39.0, MINOR — a behavior change).**
+- **`RefuseActAsUserKeys()`**, a new `PrincipalOption`. It refuses an API key whose account
+  acts as a human with the same opaque 401 as a kind outside the set, and still admits a
+  self-acting key. It holds under nested narrowing and `Optional()`, is inert on a set that
+  admits no API key, and `Accept` does not reset it.
+- **The two defaults.** `UserAdministration` (all nine routes: list, get, deactivate,
+  reactivate, resend-verification, erase, `GET /auth/admin/security-events`, the passkey and
+  TOTP resets) and `Invitations` (all seven authenticated routes: create, list-by-resource,
+  mine, accept, sync, cancel, resend) default to `RequirePrincipal(Live(),
+  RefuseActAsUserKeys())`. A self-acting service account still reaches `UserAdminCheck` as
+  itself. `SessionHydration`, `CSRFBootstrap` and every liveness floor are unchanged.
+- **The refusal row.** The refused request keeps its resolution-time `apikey_auth` success row
+  and adds one `apikey_auth` row with status `blocked`, budgeted per client IP. `Actor` is the
+  service account; Details are `reason=act_as_user_refused`, `group` (the slot name, or `route`
+  for a host route carrying the option), `api_key_id` and `service_account_id` — never the key,
+  its prefix or its hash. It is written from the inbound authenticator through a new optional
+  `ActAsUserRefusalRecorder` port (implemented by `*authlogic.Service`), so logic never learns
+  route posture.
+- **`CheckCredential`.** `UserAdminCheckRequest.Credential` and `InviteCheckRequest.Credential`
+  carry a comparable `{Kind, ActAsUser, APIKeyID, ServiceAccountID}`, ids only.
+- **Boot WARNs**, every boot, every mode, for a `BundledRouteAuth` override of either group
+  whose set admits an act-as-user key while machine identity is wired:
+  `posture_warning=bundled_group_admits_act_as_user_keys group=<slot>`, plus
+  `posture_warning=bundled_group_act_as_user_mfa_exempt group=<slot>` beside
+  `MFAConfig.APIKeysExempt`. The `APIKeysExempt` boot WARN text now says the admin gate admits
+  a self-acting key by default and an act-as-user key only under an override that admits one.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/authentication/v0.39.0` | pending | pending (PR-1, PR-1b) | pending | pending |
+
+> **Read first:** `grep -rnE 'BundledRouteAuth|UserAdministration|Invitations|APIKeysExempt|act_as_user|ActAsUser' --include='*.go'`.
+> - **Pins:** authentication **v0.39.0**; stores, views and sdk unchanged. Repin with explicit
+>   `GOWORK=off go get github.com/gopernicus/gopernicus/pockets/authentication@v0.39.0`, then
+>   `GOWORK=off go mod tidy`; never `go work sync`.
+
+| # | Flip | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | `UserAdministration` default refuses act-as-user keys | an act-as-user key gets 401 on every `/auth/admin/users…` route and `GET /auth/admin/security-events`; `UserAdminCheck` is never consulted for it | `BundledRouteAuth.UserAdministration = PrincipalStrategy(Live())`, then refuse `Credential.ActAsUser` in the check | authentication@v0.39.0 |
+| 2 | `Invitations` default refuses act-as-user keys | an act-as-user key gets 401 on create, list-by-resource, mine, accept, sync, cancel and resend | `BundledRouteAuth.Invitations = PrincipalStrategy(Live())`; `InviteCheck` sees `Credential` on create only under a resource rule | authentication@v0.39.0 |
+| 3 | `RefuseActAsUserKeys()` option | additive; usable on host routes (its refusal row names `group=route`) | — | authentication@v0.39.0 |
+| 4 | `CheckCredential` on `UserAdminCheckRequest` / `InviteCheckRequest` | additive field; keyed literals compile unchanged; `UserAdminCheckRequest` stays comparable | — | authentication@v0.39.0 |
+| 5 | `posture_warning=bundled_group_admits_act_as_user_keys` | one WARN per admitting overridden group, every boot | add `RefuseActAsUserKeys()` to the strategy | authentication@v0.39.0 |
+| 6 | `posture_warning=bundled_group_act_as_user_mfa_exempt` | one more WARN per such group beside `APIKeysExempt` | as above, or drop `APIKeysExempt` | authentication@v0.39.0 |
+| 7 | the blocked `apikey_auth` refusal row | one extra row per refused request (`reason=act_as_user_refused`, ids only, budgeted); a test comparing exact row sets for such a request sees it | — | authentication@v0.39.0 |
+
+**Upgrade notes by host shape.**
+- **(a) No machine identity** (`ServiceAccounts`/`APIKeys` unwired): no change.
+- **(b) Self-acting keys only:** no change. A self-acting operator key still reaches
+  `UserAdminCheck` as `Type=service_account`; the security-events pull keeps working.
+- **(c) Act-as-user keys on user administration:** move the automation to a self-acting
+  service account that `UserAdminCheck` grants on `Type=service_account`, or override
+  `UserAdministration` and refuse `Credential.ActAsUser` per action.
+- **(d) Act-as-user keys on invitations:** no self-acting path exists (a self-acting account
+  fails the handlers' `CurrentUser`). Use an access token from a real administrator session.
+- **(e) An override admitting act-as-user keys beside `APIKeysExempt`:** the two WARNs above
+  repeat at every boot by design; the admin MFA gate admits that key unverified.
+
+**Diagnostic.** A key that gets 200 on `/auth/me` but 401 on `/auth/admin/*` or
+`/auth/invitations/*` is an act-as-user key refused by v0.39.0's default; look for the blocked
+`apikey_auth` row with `reason=act_as_user_refused`.
+
+**Deliberate residuals.** `/auth/me` still hydrates an act-as-user key as its owner, which
+discloses the owner's profile to the key holder (no follow-up). Delegated act-as-user creation
+(owner ≠ creator) stays a `MachineRoutesGate` decision: the `service_account_created` row's
+`delegated` detail marks it, and a host that does not want it refuses a non-empty
+`act_as_user_id` there.
+
 ## Neutral authorization fixtures (sdk v0.26.0 — published 2026-10-29)
 
 **MINOR (breaking in the test-helper package only).** `sdk/capabilities/authorization/authorizationtest`

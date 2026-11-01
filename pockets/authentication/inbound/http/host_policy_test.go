@@ -168,6 +168,9 @@ func (s *policyAdminService) CurrentUser(context.Context) (string, bool) {
 func (s *policyAdminService) CurrentPrincipal(context.Context) (sdk.Principal, bool) {
 	return sdk.Principal{Type: "service", ID: "operator"}, true
 }
+func (s *policyAdminService) CurrentCredential(context.Context) (Credential, bool) {
+	return Credential{}, false
+}
 func (s *policyAdminService) GetUserSummary(_ context.Context, id string) (user.Summary, error) {
 	s.reads++
 	s.lastTarget = id

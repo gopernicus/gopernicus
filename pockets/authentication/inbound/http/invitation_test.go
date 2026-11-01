@@ -551,7 +551,8 @@ func TestInvitationDeclineOriginGated(t *testing.T) {
 // authenticated invitation mutation carries the double-submit gate on a cookie
 // transport — the native session cookie and a provider cookie
 // (WithExternalCookies) alike — while bearer-only callers (native access token,
-// provider token, act-as-user API key) need no token.
+// provider token) need no token. An act-as-user API key bearer is refused by
+// the Invitations authenticator before the CSRF gate is consulted.
 func TestInvitationMutationsRequireCSRFOnCookieTransport(t *testing.T) {
 	h := newExternalHarness(t, externalSetup{cookies: []string{extCookie}})
 	mux, _ := newExternalRoutes(t, h, RouteAuthentication{})
@@ -569,7 +570,7 @@ func TestInvitationMutationsRequireCSRFOnCookieTransport(t *testing.T) {
 		"native cookie":   {Name: "session", Value: h.accessJWT},
 		"provider cookie": {Name: extCookie, Value: h.token},
 	}
-	bearers := map[string]string{"native bearer": h.accessJWT, "provider bearer": h.token, "api key": apiKey}
+	bearers := map[string]string{"native bearer": h.accessJWT, "provider bearer": h.token}
 	for _, rt := range routes {
 		for name, c := range cookies {
 			t.Run(rt.name+"/"+name, func(t *testing.T) {
@@ -600,6 +601,15 @@ func TestInvitationMutationsRequireCSRFOnCookieTransport(t *testing.T) {
 				}
 			})
 		}
+		t.Run(rt.name+"/act-as-user api key", func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, routeRequest("POST", rt.path, rt.body, func(r *http.Request) {
+				r.Header.Set("Authorization", "Bearer "+apiKey)
+			}))
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("act-as-user api key bearer = %d, want 401; body=%s", rec.Code, rec.Body)
+			}
+		})
 	}
 }
 

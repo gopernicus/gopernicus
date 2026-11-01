@@ -851,7 +851,7 @@ func logMFAPosture(cfg constructorConfig, log *slog.Logger) {
 	case cfg.RuntimeMode.IsProduction():
 		log.Warn("auth: production posture requirement waived", "posture_waiver", "APIKeysExempt", "runtime_mode", cfg.RuntimeMode.String())
 	default:
-		log.Warn("auth: MFAConfig.APIKeysExempt lets API keys pass every MFA gate; a key cannot hold AAL2, so RequireMFA() and the admin and machine gates admit it unverified")
+		log.Warn("auth: MFAConfig.APIKeysExempt lets API keys pass every MFA gate; a key cannot hold AAL2, so RequireMFA() and the machine gate admit it unverified, and the admin gate admits a self-acting key by default and an act-as-user key only under an override that admits one")
 	}
 }
 

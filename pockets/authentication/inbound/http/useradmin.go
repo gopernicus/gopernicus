@@ -215,8 +215,11 @@ func mountUserAdmin(r pockets.RouteRegistrar, h *handlers, userAdministration, b
 // ok=false on any refusal, so a handler's remaining body runs only for an
 // authorized caller.
 //
-// A machine principal reaches the policy as a real principal: the pocket does
-// not pre-decide whether a service account may administer users.
+// A self-acting machine principal reaches the policy as a real principal: the
+// pocket does not pre-decide whether a service account may administer users. An
+// act-as-user key is refused at the default authenticator, since the policy
+// would see its human owner; under an override that admits one, the request's
+// Credential names the key.
 //
 // With WithAdministrationMFA the caller the check admits must also hold an AAL2
 // credential from a source MFAConfig.Methods admits, or it gets the RFC 9470 401 and one mfa_required_denied row
@@ -232,7 +235,7 @@ func (h *handlers) adminPrincipal(w http.ResponseWriter, r *http.Request, action
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return authlogic.Principal{}, false
 	}
-	if err := h.checkUserAdmin(r.Context(), UserAdminCheckRequest{Principal: principal, Action: action, TargetUserID: targetUserID}); err != nil {
+	if err := h.checkUserAdmin(r.Context(), UserAdminCheckRequest{Principal: principal, Action: action, TargetUserID: targetUserID, Credential: h.checkCredential(r.Context())}); err != nil {
 		// A denial and an infrastructure error both stop here; the shared mapper
 		// turns sdk.ErrForbidden into 403 and anything else into 500, so a policy
 		// outage never reads as permission.

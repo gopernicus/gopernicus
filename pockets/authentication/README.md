@@ -543,7 +543,8 @@ authorized half mounts with the admin surface. See
 
 **User administration — registered only when `AdministrationConfig.UserAdminCheck` is wired
 (deny-by-absence; repository presence alone is NOT enough). Each route is gated
-live session → (mutations only) browser-safe Origin/CSRF → `UserAdminCheck`, and
+live session (an act-as-user API key is refused, v0.39.0) → (mutations only)
+browser-safe Origin/CSRF → `UserAdminCheck`, and
 answers `Cache-Control: no-store`. See
 [Account lifecycle](#account-lifecycle--the-operator-directory-and-deactivation):**
 
@@ -658,8 +659,9 @@ unchanged).
 | resend / cancel | **404**, indistinguishable from an unknown id | same |
 
 **Invitations — registered only when `InvitationsConfig.Granter` is wired; every
-authenticated route is `Invitations`-gated (`RequirePrincipal(Live())` — every
-wired kind — by default, immediate revocation), only decline is public:**
+authenticated route is `Invitations`-gated (`RequirePrincipal(Live(),
+RefuseActAsUserKeys())` — every wired kind except an act-as-user API key — by
+default, immediate revocation), only decline is public:**
 
 - `POST /auth/invitations/{resource_type}/{resource_id}` — `{identifier,
   relation, identifier_kind?, auto_accept?, redirect?, metadata?}` → 201 pending
@@ -1458,6 +1460,7 @@ func Optional() PrincipalOption                      // no credential within the
 func FirstParty() PrincipalOption                    // first-party access tokens only; excludes delegated tokens and API keys
 func Audience(resources ...string) PrincipalOption   // token must name one of these exact resources; replaces the audience set
 func DelegatedAudience(resources ...string) PrincipalOption // opt delegated tokens into exact resources; preserve first-party/key policy
+func RefuseActAsUserKeys() PrincipalOption           // refuse an act-as-user API key (it authenticates as its human owner); a self-acting key still passes
 
 func (s *authenticationhttp.Adapter) RequirePrincipal(opts ...PrincipalOption) web.Middleware
 ```
@@ -1737,8 +1740,8 @@ never per-route, because the posture is a property of what the surface does:
 | `SessionHydration` | `GET /auth/me` | `RequirePrincipal(Live())` — every wired kind |
 | `CredentialManagement` | password change/set/remove, step-up begin/completion, identifier add/confirm/update/delete, OAuth unlink start/completion | `RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Live())` |
 | `MachineLifecycle` | create/list service accounts; mint/list/revoke keys | `RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Live())` |
-| `UserAdministration` | all `/auth/admin/users…` reads and mutations | `RequirePrincipal(Live())` — every wired kind |
-| `Invitations` | authenticated create/list/mine/accept/cancel/resend routes | `RequirePrincipal(Live())` — every wired kind |
+| `UserAdministration` | all `/auth/admin/users…` reads and mutations, and `GET /auth/admin/security-events` | `RequirePrincipal(Live(), RefuseActAsUserKeys())` (v0.39.0) — every wired kind except an act-as-user API key; a self-acting machine principal reaches `UserAdminCheck` |
+| `Invitations` | authenticated create/list/mine/accept/sync/cancel/resend routes | `RequirePrincipal(Live(), RefuseActAsUserKeys())` (v0.39.0) — every wired kind except an act-as-user API key |
 | `BrowserAccount` | HTML account, identifier/password/step-up, OAuth-unlink GETs; HTML-only identifier edit POST | `RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Transports(TransportCookie), Live(), Browser())` |
 
 Under native `all` ([MFAConfig.Required all (native)](#mfaconfigrequired-all-native))
@@ -1751,10 +1754,17 @@ The established-session and human-credential surfaces refuse API keys AND
 external tokens — an API key or a provider user never reaches
 `/auth/delivery/status`, `/auth/methods`, step-up or any credential mutation
 (step-up needs a native session: a provider user is denied, and re-authenticates
-at the provider instead, guided by `FreshAuth`). User administration,
-invitations, `/auth/me` and `/auth/csrf` admit every wired kind (an act-as-user
-key still acts as its effective human principal there; a self-acting service
-account still fails those handlers' `CurrentUser` requirement). Since v0.19.0
+at the provider instead, guided by `FreshAuth`). `/auth/me` and `/auth/csrf`
+admit every wired kind (an act-as-user key still acts as its effective human
+principal there; a self-acting service account still fails `/auth/me`'s
+`CurrentUser` requirement). Since v0.39.0 user administration and invitations
+admit every wired kind EXCEPT an act-as-user API key: such a key authenticates
+as its human owner, so a host policy behind those groups would see the owner
+rather than the key. A self-acting service account still reaches
+`UserAdminCheck` as itself, and still fails the invitation handlers'
+`CurrentUser` requirement — see [Act-as-user API keys on user administration
+and invitations](#act-as-user-api-keys-on-user-administration-and-invitations-v0390).
+Since v0.19.0
 `/auth/csrf` has its own `CSRFBootstrap` slot: an override of
 `SessionSecurityReads` no longer reaches it. Every group runs inside a floor of
 `RequirePrincipal(Stateless())` — the default set, so it admits wired external
@@ -1790,6 +1800,58 @@ strategy can authenticate a caller but cannot manufacture the live session id
 those handlers require — they still fail closed at the inbound handler
 boundary rather than treating "credential accepted" as "credential can satisfy
 the route's application input."
+
+#### Act-as-user API keys on user administration and invitations (v0.39.0)
+
+An act-as-user API key authenticates as its human owner (`CurrentPrincipal` is
+the owner; `CurrentCredential.ActAsUser` is true). On a surface that asks a host
+policy about the caller that is a misrepresentation — `UserAdminCheck` and
+`InviteCheck` would see an administrator, not a key — so since v0.39.0 the
+`UserAdministration` and `Invitations` defaults carry `RefuseActAsUserKeys()`:
+
+- **Refused at the authenticator.** An act-as-user key gets the same opaque 401
+  as any credential outside the set on all nine `UserAdministration` routes and
+  all seven authenticated `Invitations` routes. The host policy is never
+  consulted and no user-administration, erase, status-change, security-event-read
+  or invitation row is written. A header bearer is authoritative, so the key
+  beside a valid session cookie is refused too.
+- **On the audit rail.** The refused request leaves the resolution-time
+  `apikey_auth` success row (unchanged) plus ONE `apikey_auth` row with status
+  `blocked`, `Actor` the service account, and Details `reason=act_as_user_refused`,
+  `group` (the bundled slot name, or `route` for a host route carrying
+  `RefuseActAsUserKeys()`), `api_key_id` and `service_account_id` — never the
+  key, its prefix or its hash. It is budgeted per client IP like the other
+  failure rows.
+- **A self-acting service account is unaffected.** It still reaches
+  `UserAdminCheck` as `Type=service_account` — the operator-key pull of
+  `GET /auth/admin/security-events` keeps working — and the host decides.
+- **No machine path on invitations.** A self-acting account fails the invitation
+  handlers' `CurrentUser`, so no API key reaches an invitation handler by
+  default. Invitation automation uses an access token from a real administrator
+  session.
+- **Opting back in.** A host that needs act-as-user keys there overrides the
+  group, e.g. `BundledRouteAuth.UserAdministration =
+  PrincipalStrategy(Live())`. Its policy then reads the request's
+  `Credential` (`CheckCredential{Kind, ActAsUser, APIKeyID, ServiceAccountID}` —
+  ids only, comparable, never key material) and refuses `Credential.ActAsUser`
+  for the actions it cares about. With an `InvitationResourceRule`, list,
+  resend and cancel go through `InvitationCan`, which receives no credential:
+  `InviteCheck` sees `Credential` on **create only**.
+- **Boot WARNs, every boot, every mode.** An override of either group whose set
+  admits an act-as-user key while machine identity is wired logs one
+  `posture_warning=bundled_group_admits_act_as_user_keys group=<slot>` line;
+  with `MFAConfig.APIKeysExempt` also set it logs one more,
+  `posture_warning=bundled_group_act_as_user_mfa_exempt group=<slot>`, because
+  the admin MFA gate then admits that key unverified. Both describe admission at
+  the authenticator (an override's own `Check` cannot be introspected). They
+  warn, never refuse.
+
+Deliberate residuals: an act-as-user key still acts as its owner on host routes
+and on `/auth/me` (which discloses the owner's profile to the key holder); an
+invitation created under an opted-in key records the owner as `InvitedBy`; and
+delegated act-as-user creation (`act_as_user_id` naming another user) remains a
+`MachineRoutesGate` decision — the `service_account_created` row's `delegated`
+detail marks it, and a host that does not want it refuses it there.
 
 ## External identity providers (v0.19)
 
@@ -2307,7 +2369,8 @@ code, 2026-10-24):
   after JIT, as after native verification.
 - **Direct add** at invite-create time does not see external users (it looks up
   login/recovery identifiers only), so they get a pending invitation instead.
-- The bundled `Invitations` group admits every wired kind. When authorization
+- The bundled `Invitations` group admits every wired kind except an act-as-user
+  API key. When authorization
   later runs on an external provider, the invitation settlement changes; that
   belongs to the authorization plan.
 
@@ -3254,7 +3317,7 @@ store upgrade is needed.
 | `SMSBodies` (map purpose → template) | empty → the bundled SMS bodies. Same rules as `EmailSubjects` for the body-only rail; an entry for an email-only purpose (registration verification, password reset, OAuth pending link) is `ErrDeliveryOverrideInvalid` — an override customizes an existing rail, it never enables a new kind. |
 | `RequireVerifiedEmail` | false. true → login AND `/auth/token` refuse an unverified user with 403 (**requires a WORKING Mailer**, else total login lockout). |
 | `PasswordFlowsDisabled` | false (every route mounted). true → the password credential is OFF as a posture: `Register` mounts NONE of `/auth/register`, `/auth/login`, `/auth/verify`, `/auth/verification/resend`, `/auth/password/{forgot,reset,change,set,remove,remove/start}`, `/auth/step-up/password` (password POST routes and their dedicated HTML pages — deny-by-absence, 404; shared `GET /auth/login` stays available for configured alternatives), and the matching `Service` use-cases refuse with `ErrPasswordFlowsDisabled` (wraps `sdk.ErrNotFound`). For a Google-only / passwordless-only host. `Hasher` and `Passwords` may be omitted. |
-| `MachineRoutesGate` (web.Middleware) | **nil → the bundled machine-identity lifecycle routes are NOT mounted** (404, deny-by-absence) even when `ServiceAccounts` + `APIKeys` are wired, and `New` WARNs so an upgrading host learns the posture at boot instead of from production 404s. Key AUTHENTICATION is unaffected (`RequireAPIKey()` and the bearer path of `RequirePrincipal` still follow `MachineEnabled`). Non-nil → `POST`/`GET /auth/service-accounts`, `POST`/`GET /auth/service-accounts/{id}/keys` and `POST /auth/api-keys/{id}/revoke` mount, each as `BundledRouteAuth.MachineLifecycle` (`RequireAccessTokenLive()` by default) → (on the three POSTs) the browser-safe `Origin`/CSRF gate → this gate: human credential only by default (an API key, act-as-user or not, is 401), immediately revocable, CSRF-safe for cookie clients, then the host's authorization. Typical: `authorizer.Require(authorizationhttp.Can("steward", authorizationhttp.Fixed("platform", "global")))`. Set with the machine subsystem unwired (both repositories nil — a half-wired pair fails earlier with `ErrMachineReposRequired`) → `ErrMachineRoutesGateWithoutRepos` (a policy that can never be consulted is contradictory wiring). A **single** middleware, not the `[]web.Middleware` of `cms.Config.AdminMiddleware` / `events.WithStreamMiddleware`: nil is the unambiguous "no policy", where an empty non-nil slice would mean "mounted, ungated". **Scope behind the gate:** ownership is fixed (the caller is the creator; delegation is the explicit, validated, audited `act_as_user_id`, and `owner_user_id` is refused by name), but **listing is GLOBAL** — a gate holder sees every service account, lists the keys of any account, and mints/revokes by any id. A host that needs a creator-scoped list or per-object authorization leaves the gate nil and serves its own routes over `CreateServiceAccount` / `MintAPIKey` / `ListServiceAccounts` / `ListAPIKeys` / `RevokeAPIKey`. |
+| `MachineRoutesGate` (web.Middleware) | **nil → the bundled machine-identity lifecycle routes are NOT mounted** (404, deny-by-absence) even when `ServiceAccounts` + `APIKeys` are wired, and `New` WARNs so an upgrading host learns the posture at boot instead of from production 404s. Key AUTHENTICATION is unaffected (`RequireAPIKey()` and the bearer path of `RequirePrincipal` still follow `MachineEnabled`). Non-nil → `POST`/`GET /auth/service-accounts`, `POST`/`GET /auth/service-accounts/{id}/keys` and `POST /auth/api-keys/{id}/revoke` mount, each as `BundledRouteAuth.MachineLifecycle` (`RequireAccessTokenLive()` by default) → (on the three POSTs) the browser-safe `Origin`/CSRF gate → this gate: human credential only by default (an API key, act-as-user or not, is 401), immediately revocable, CSRF-safe for cookie clients, then the host's authorization. Typical: `authorizer.Require(authorizationhttp.Can("steward", authorizationhttp.Fixed("platform", "global")))`. Set with the machine subsystem unwired (both repositories nil — a half-wired pair fails earlier with `ErrMachineReposRequired`) → `ErrMachineRoutesGateWithoutRepos` (a policy that can never be consulted is contradictory wiring). A **single** middleware, not the `[]web.Middleware` of `cms.Config.AdminMiddleware` / `events.WithStreamMiddleware`: nil is the unambiguous "no policy", where an empty non-nil slice would mean "mounted, ungated". **Scope behind the gate:** ownership is fixed (the caller is the creator; delegation is the explicit, validated, audited `act_as_user_id`, and `owner_user_id` is refused by name), but **listing is GLOBAL** — a gate holder sees every service account, lists the keys of any account, and mints/revokes by any id. A host that needs a creator-scoped list or per-object authorization leaves the gate nil and serves its own routes over `CreateServiceAccount` / `MintAPIKey` / `ListServiceAccounts` / `ListAPIKeys` / `RevokeAPIKey`. **Delegation is this gate's decision:** a gate holder may create an act-as-user account owned by another existing user (the `service_account_created` row's `delegated` detail marks it); the bundled user-administration and invitation routes refuse such keys by default (v0.39.0), but host routes treat them as the owner, so a host that does not want delegated impersonation refuses a non-empty `act_as_user_id` here. |
 | `BundledRouteAuth` (BundledRouteAuthentication) | every field zero → the audited default authenticator for that bundled route group (see [The middleware surface](#the-middleware-surface-what-other-pockets-and-host-routes-gate-on)). A non-zero field, built with `PrincipalStrategy(opts...)`, replaces ONLY that group's authentication; it configures authentication alone and never substitutes for `MachineRoutesGate` / `UserAdminCheck` / `InviteCheck`. Resolved once at `New` into concrete middleware and held immutable for the process's life. |
 | `RateLimiter` | `ratelimiter.NewMemory()` — an in-process limiter (not "unlimited"). **Production rejects a per-process limiter** (`ErrNonDurableRateLimiter`): a multi-instance host needs a shared/durable one. |
 | `PublicRouteLimits` | every field zero → the default per-IP budgets of [Per-IP budgets by route](#per-ip-budgets-by-route). Each field is a `ratelimiter.Limit`; one `Limit.Normalize` refuses fails `New` (`sdk.ErrInvalidInput` naming the field). No off switch: a host behind its own edge throttle sets a large budget. |
@@ -3268,13 +3331,13 @@ store upgrade is needed.
 | `InvitationURL` (`AUTH_INVITATION_URL`) | the absolute landing URL an invitation links to when no allowlisted `redirect` was requested, BEFORE `#token=<token>` is appended. **REQUIRED in production beside a Granter** (`ErrInvitationURLRequired`); development permits empty with one startup WARN and keeps the relative `/`. Absolute http(s), a host, no fragment (`ErrInvitationURLInvalid`), HTTPS in production (`ErrInvitationURLInsecure`). See [The invitation link and the landing page](#the-invitation-link-and-the-landing-page). |
 | `InvitationTokenInQuery` (`AUTH_INVITATION_TOKEN_IN_QUERY`) | false → the invitation token rides the fragment. True restores `?token=` for ONE release (production: one `posture_waiver=InvitationTokenInQuery` WARN; development: one WARN); the next minor removes the field. |
 | `SecurityEventsRoute` | false → `GET /auth/admin/security-events` is not mounted. True mounts it under the admin gates with the action `read-audit`; requires `Repositories.SecurityEvents` and `UserAdminCheck` (`ErrSecurityEventsRouteRequires`). See [Reading the rail over HTTP](#reading-the-rail-over-http). |
-| `UserAdminCheck` | **nil → the bundled admin routes are NOT registered**, even when the store supplies `Repositories.UserAdmin` — turning a store capability into an HTTP surface is the host's decision, not the store's. Non-nil → `GET /auth/admin/users`, `GET /auth/admin/users/{id}`, and the deactivate/reactivate POSTs mount, and BOTH `Repositories.UserAdmin` and `Repositories.ActiveSessions` become required (`ErrUserAdminReposRequired`). Authentication never invents a role named `admin` and never imports authorization — see [Account lifecycle](#account-lifecycle--the-operator-directory-and-deactivation). |
+| `UserAdminCheck` | **nil → the bundled admin routes are NOT registered**, even when the store supplies `Repositories.UserAdmin` — turning a store capability into an HTTP surface is the host's decision, not the store's. Non-nil → `GET /auth/admin/users`, `GET /auth/admin/users/{id}`, and the deactivate/reactivate POSTs mount, and BOTH `Repositories.UserAdmin` and `Repositories.ActiveSessions` become required (`ErrUserAdminReposRequired`). Authentication never invents a role named `admin` and never imports authorization — see [Account lifecycle](#account-lifecycle--the-operator-directory-and-deactivation). Since v0.39.0 an act-as-user API key never reaches it under the default `UserAdministration` posture, and `UserAdminCheckRequest.Credential` (`CheckCredential`: `Kind`, `ActAsUser`, `APIKeyID`, `ServiceAccountID` — ids only) summarizes the proof behind `Principal`. |
 | `TokenEncrypter` (cryptids.Encrypter) | provider tokens NOT persisted (login/linking still work). Wire `cryptids.NewAESGCM` to store them. |
 | `OAuthCallbackBase`, `RedirectAllowlist` | callback HTTP(S) origin with optional clean mount prefix (no trailing slash, query, credentials or fragment; HTTPS in production) / exact-match allowlist for ABSOLUTE redirect targets (open-redirect guard). Safe same-origin relative paths are honored without allowlisting in the browser lanes; any other target falls back to `/`. The invitation lane's mailed-link destination stays exact-match only. |
 | `TokenSigner` (cryptids.JWTSigner) | **REQUIRED.** `integrations/cryptids/golang-jwt` implements HS256/HS384/HS512 with explicit expiration and 60-second clock tolerance; there is no SDK implementation. **Multi-instance hosts MUST share the signing secret** (§1.6). |
 | `AccessTokenTTL` | 0 → 15m (bounds the stateless revocation window). `AUTH_ACCESS_TOKEN_TTL`. |
 | `RefreshTTL` | 0 → 7d — the FIXED refresh horizon; rotation never extends it. `AUTH_REFRESH_TTL`. |
-| `Granter` / `ResourcePermissions` + `Can` / `InviteCheck` / `MemberCheck` / `Fencer` / `BodySenders` | invitation subsystem seams (see the invitation section). `Granter` now takes a structured `GrantInput` (operation-scoped, fail-loud). With a `Granter`, a complete resource rule (`ResourcePermissions` + `Can`) or `InviteCheck` is REQUIRED — neither → `ErrInviteCheckRequired`; a half-wired or invalid rule → `ErrInvitationResourceRuleIncomplete`; a rule without a `Granter` → `ErrInvitationResourceRuleWithoutGranter`; `InviteCheck` without a `Granter` → `ErrInviteCheckWithoutGranter`. With the rule on, `InviteCheck` is the optional create-only refinement. `Fencer` (optional terminal settlement) without a `Granter` → `ErrFencerWithoutGranter`. |
+| `Granter` / `ResourcePermissions` + `Can` / `InviteCheck` / `MemberCheck` / `Fencer` / `BodySenders` | invitation subsystem seams (see the invitation section). `Granter` now takes a structured `GrantInput` (operation-scoped, fail-loud). With a `Granter`, a complete resource rule (`ResourcePermissions` + `Can`) or `InviteCheck` is REQUIRED — neither → `ErrInviteCheckRequired`; a half-wired or invalid rule → `ErrInvitationResourceRuleIncomplete`; a rule without a `Granter` → `ErrInvitationResourceRuleWithoutGranter`; `InviteCheck` without a `Granter` → `ErrInviteCheckWithoutGranter`. With the rule on, `InviteCheck` is the optional create-only refinement. Since v0.39.0 `InviteCheckRequest.Credential` (`CheckCredential`) summarizes the proof behind `Principal`; with the rule on, `InviteCheck` — and so `Credential` — is seen on create only. `Fencer` (optional terminal settlement) without a `Granter` → `ErrFencerWithoutGranter`. |
 | `ListStrategy` | `"cursor"` default; `"offset"` allowed; anything else `ErrInvalidListStrategy`. |
 | `IDs` (sdk.IDGenerator) | entity-ID strategy; NEVER mints secrets (codes/tokens/keys keep their own high-entropy generator). The zero value selects the class default: NanoID for identities (users, service accounts, invitations; the user id is the JWT `sub`, so a time-ordered id would reveal signup time), UUIDv7 (`sdk.UUIDv7`) for every other record id (identifiers, API keys, security events, passkeys, recovery codes, challenges, contact changes, authentication grants). A configured generator wins everywhere and must yield unique ids — a constant generator collides on primary keys and defeats the contact-change stale-request guard. To force NanoIDs for records too, pass `sdk.NewIDGenerator(nano)` with `nano` from `sdk.NanoID("", 0)`. |
 | `Logger` | best-effort WARN sink for audit-write failures + the ephemeral-key/console-transport warnings; nil → `slog.Default()`. |
@@ -4275,7 +4338,11 @@ administration := authentication.AdministrationConfig{
 A nil return authorizes. A denial and an infrastructure error **both** fail
 closed — the pocket never treats "the policy could not answer" as permission.
 The resolved `Principal` reaches the check verbatim, machine principals included:
-whether a service account may administer users is the host's call.
+whether a service account may administer users is the host's call. By default
+that machine principal is always the service account itself — an act-as-user
+key is refused before the check — and `req.Credential` summarizes the proof
+(`Kind`, `ActAsUser`, `APIKeyID`, `ServiceAccountID`), so a host that overrides
+`UserAdministration` to admit act-as-user keys can refuse `ActAsUser` per action.
 
 **Self-deactivation is not generically forbidden.** A host policy may allow an
 administrator to act on their own account, and it may refuse. A last-admin data
@@ -4880,7 +4947,11 @@ a secret.
 `password_removed`, `password_reset`; the OAuth events (`oauth_login`,
 `oauth_register`, `oauth_link_verified`, `oauth_linked`,
 `oauth_pending_link_sent` (`UserID` = the matched account; Details `provider`
-only), `oauth_unlink_code_sent`, `oauth_unlinked`); `apikey_auth`; `token_issued`;
+only), `oauth_unlink_code_sent`, `oauth_unlinked`); `apikey_auth` (Details
+`key_prefix` and, on a denial, `reason`; an act-as-user key refused by
+`RefuseActAsUserKeys()` adds a blocked, budgeted row with Details `reason`
+`act_as_user_refused`, `group`, `api_key_id` and `service_account_id` — no
+prefix); `token_issued`;
 `refresh` (with a `grace` detail) and `refresh_reuse` (blocked + unconditional
 WARN even when `SecurityEvents` is nil, so a nil-audit host is never blind to
 token theft); `step_up_challenge_sent`, `step_up` (success/failure/blocked); the

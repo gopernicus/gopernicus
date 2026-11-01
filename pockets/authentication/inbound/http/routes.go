@@ -201,11 +201,14 @@ type RouteAuthentication struct {
 //     no native session, so no step-up) substitutes for a session;
 //   - MachineLifecycle — Accept(CredentialAccessToken), FirstParty(), Live(): a
 //     key never creates, reads, mints, or revokes keys;
-//   - UserAdministration — Live(), every wired kind: a machine principal
-//     deliberately REACHES WithUserAdminCheck, and the host decides;
-//   - Invitations — Live(), every wired kind: an act-as-user key acts as its
-//     effective human principal, while a self-acting service account fails the
-//     handlers' CurrentUser requirement;
+//   - UserAdministration — Live(), RefuseActAsUserKeys(): a SELF-ACTING
+//     machine principal deliberately REACHES WithUserAdminCheck and the host
+//     decides; an act-as-user key is refused, because the check would see its
+//     human owner rather than the key;
+//   - Invitations — Live(), RefuseActAsUserKeys(): the same refusal, and a
+//     self-acting service account still fails the handlers' CurrentUser
+//     requirement, so no machine path reaches the invitation surface by design
+//     (automation uses an access token from a real administrator session);
 //   - BrowserAccount — cookie-only, live, redirecting on denial: the bundled
 //     browser UI reads only its own cookie and never a header.
 //
@@ -239,10 +242,10 @@ func (a RouteAuthentication) withDefaults(svc authService, relaxed bool) RouteAu
 		a.MachineLifecycle = svc.RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Live())
 	}
 	if a.UserAdministration == nil {
-		a.UserAdministration = svc.RequirePrincipal(Live())
+		a.UserAdministration = svc.RequirePrincipal(Live(), RefuseActAsUserKeys(), bundledGroup("UserAdministration"))
 	}
 	if a.Invitations == nil {
-		a.Invitations = svc.RequirePrincipal(Live())
+		a.Invitations = svc.RequirePrincipal(Live(), RefuseActAsUserKeys(), bundledGroup("Invitations"))
 	}
 	if a.BrowserAccount == nil {
 		a.BrowserAccount = svc.RequirePrincipal(
@@ -539,11 +542,12 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// absence, design §6): an unwired host returns 404 for the entire surface.
 	// Every authenticated invitation route rides the Invitations authenticator
 	// (design §6/D3): a revoked session's outstanding access JWT cannot create,
-	// list, read-mine, accept, cancel, or resend an invitations. User-only semantics
-	// are preserved by the handlers, which resolve CurrentUser (Type=user) and
-	// reject a service-account principal — the authenticator admits an act-as-user
-	// API key, which acts as its human owner, so the invitation surface is NOT a
-	// service-account administration API. Decline stays public and IP-rate-limited.
+	// list, read-mine, accept, cancel, or resend an invitations. By default the
+	// authenticator refuses an act-as-user API key (RefuseActAsUserKeys), which
+	// would otherwise act as its human owner, and the handlers resolve CurrentUser
+	// (Type=user) and reject a self-acting service-account principal, so the
+	// invitation surface is NOT a machine API. Decline stays public and
+	// IP-rate-limited.
 	if inv != nil {
 		mountInvitations(r, h, auth.Invitations, svc.rateLimitByIP("invitation_decline", limits.InvitationDecline))
 	}

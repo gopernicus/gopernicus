@@ -97,6 +97,9 @@ func (s *Adapter) RequirePrincipal(opts ...PrincipalOption) web.Middleware {
 				cred, _ = s.service.CurrentCredential(ctx)
 			}
 			if !set.admits(cred) {
+				if set.refusedActAsUser(cred) && s.actAsUserRefusals != nil {
+					s.actAsUserRefusals.RecordActAsUserKeyRefused(ctx, cred, set.refusalGroup())
+				}
 				s.denyPrincipal(w, r, set, errCredentialRefused, false)
 				return
 			}

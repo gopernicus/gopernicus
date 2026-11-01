@@ -14,6 +14,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/apikey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
@@ -59,6 +60,10 @@ type postureFixture struct {
 	idents    *memIdentifiers
 	passwords *memPasswords
 	inv       *spyInvitationService
+	events    *spySecurityEvents
+	// extra adjusts the mount beyond the shared surface (an eraser, the
+	// security-event listing, passkeys, TOTP), on every remount too.
+	extra []func(*mountDeps)
 
 	mu sync.Mutex
 	// adminChecks records every principal that reached WithUserAdminCheck.
@@ -68,7 +73,7 @@ type postureFixture struct {
 	machineGateRuns int
 }
 
-func newPostureFixture(t *testing.T, routeAuth RouteAuthentication) *postureFixture {
+func newPostureFixture(t *testing.T, routeAuth RouteAuthentication, extra ...func(*mountDeps)) *postureFixture {
 	t.Helper()
 	users := newMemUsers()
 	idents := newMemIdentifiers(users)
@@ -80,7 +85,7 @@ func newPostureFixture(t *testing.T, routeAuth RouteAuthentication) *postureFixt
 	if err != nil {
 		t.Fatalf("delivery.NewRouter: %v", err)
 	}
-	f := &postureFixture{users: users, idents: idents, passwords: passwords, inv: &spyInvitationService{}}
+	f := &postureFixture{users: users, idents: idents, passwords: passwords, inv: &spyInvitationService{}, events: newSpySecurityEvents(), extra: extra}
 	f.svc = newServiceWithFakes(authenticationFixture{
 		Users:               users,
 		Identifiers:         idents,
@@ -99,7 +104,8 @@ func newPostureFixture(t *testing.T, routeAuth RouteAuthentication) *postureFixt
 		ServiceAccounts: &memServiceAccounts{m: map[string]serviceaccount.ServiceAccount{}},
 		APIKeys:         &memAPIKeys{m: map[string]apikey.APIKey{}},
 
-		UserAdmin: memUserAdmin{},
+		UserAdmin:      memUserAdmin{},
+		SecurityEvents: f.events,
 
 		OAuthAccounts:     &memOAuthAccounts{},
 		OAuthStates:       &memOAuthStates{m: map[string]oauthstate.State{}},
@@ -107,8 +113,7 @@ func newPostureFixture(t *testing.T, routeAuth RouteAuthentication) *postureFixt
 		OAuthCallbackBase: "https://app.example.com",
 		PublicAuthBaseURL: "https://auth.example.com",
 	})
-	h := web.NewWebHandler()
-	mount(h, mountDeps{
+	deps := mountDeps{
 		Auth:        f.svc,
 		Invitations: f.inv, InvitationSync: f.svc,
 		InviteCheck: allowInviteCheck, UserAdminCheck: f.recordAdminCheck,
@@ -116,7 +121,12 @@ func newPostureFixture(t *testing.T, routeAuth RouteAuthentication) *postureFixt
 		MachineGate:  f.countingMachineGate,
 		Views:        stubViews{},
 		RouteAuth:    routeAuth,
-	})
+	}
+	for _, adjust := range f.extra {
+		adjust(&deps)
+	}
+	h := web.NewWebHandler()
+	mount(h, deps)
 	f.h = h
 	return f
 }
@@ -216,17 +226,89 @@ func (f *postureFixture) request(method, path, body, bearerToken string, cookie 
 
 // --- the audited defaults ---
 
-// TestDefaultUserAdministrationAdmitsAMachinePrincipal pins the audit's
-// deliberate exception: user administration keeps its documented contract that a
-// machine principal REACHES WithUserAdminCheck, and the host — not the pocket
-// — decides whether a service account may administer users.
-func TestDefaultUserAdministrationAdmitsAMachinePrincipal(t *testing.T) {
-	f := newPostureFixture(t, RouteAuthentication{})
-	rawKey, saID := f.key(t, "bot", false, "")
+// adminPasskeys and adminTOTP are the passkey and TOTP capabilities reduced to
+// what mounts the two admin reset routes; any other method is never reached by
+// the posture cases.
+type adminPasskeys struct{ passkeyService }
 
-	rec := f.request("GET", "/auth/admin/users", "", rawKey, nil)
+func (adminPasskeys) PasskeysEnabled() bool { return true }
+func (adminPasskeys) ResetUserPasskeys(context.Context, authlogic.Principal, string) (int, error) {
+	return 0, nil
+}
+
+type adminTOTP struct{ totpService }
+
+func (adminTOTP) TOTPEnabled() bool { return true }
+func (adminTOTP) ResetUserTOTP(context.Context, authlogic.Principal, string) (bool, error) {
+	return false, nil
+}
+
+// withFullUserAdministration mounts every optional UserAdministration route:
+// erase, the security-event listing and the passkey and TOTP resets.
+func withFullUserAdministration(eraser *fakeEraser, reader *fakeSecurityEventReader) func(*mountDeps) {
+	return func(d *mountDeps) {
+		d.Eraser = eraser
+		d.SecurityEvents = reader
+		d.Passkeys = adminPasskeys{}
+		d.TOTP = adminTOTP{}
+	}
+}
+
+// userAdministrationRoutes is every route the UserAdministration group gates.
+var userAdministrationRoutes = []struct{ method, path, body string }{
+	{"GET", "/auth/admin/users", ""},
+	{"GET", "/auth/admin/users/u2", ""},
+	{"POST", "/auth/admin/users/u2/deactivate", `{}`},
+	{"POST", "/auth/admin/users/u2/reactivate", `{}`},
+	{"POST", "/auth/admin/users/u2/verification/resend", `{}`},
+	{"POST", "/auth/admin/users/u2/erase", `{}`},
+	{"GET", "/auth/admin/security-events", ""},
+	{"POST", "/auth/admin/users/u2/passkeys/reset", `{}`},
+	{"POST", "/auth/admin/users/u2/totp/reset", `{}`},
+}
+
+// invitationRoutes is every authenticated route the Invitations group gates.
+var invitationRoutes = []struct{ method, path, body string }{
+	{"POST", "/auth/invitations/project/p1", `{"identifier":"bob@example.com","relation":"member"}`},
+	{"GET", "/auth/invitations/project/p1", ""},
+	{"GET", "/auth/invitations/mine", ""},
+	{"POST", "/auth/invitations/accept", `{"token":"t"}`},
+	{"POST", "/auth/invitations/sync", `{}`},
+	{"POST", "/auth/invitations/inv-1/cancel", ""},
+	{"POST", "/auth/invitations/inv-1/resend", ""},
+}
+
+// TestDefaultUserAdministrationRefusesActAsUserKeys pins the v0.39.0 default:
+// an act-as-user key — whose principal is its human owner — is refused at the
+// authenticator on every UserAdministration route before the host check runs,
+// while a SELF-ACTING service account still reaches WithUserAdminCheck as
+// itself and the host decides.
+func TestDefaultUserAdministrationRefusesActAsUserKeys(t *testing.T) {
+	eraser := &fakeEraser{}
+	f := newPostureFixture(t, RouteAuthentication{}, withFullUserAdministration(eraser, &fakeSecurityEventReader{}))
+	f.seedAccount("u1", "alice@example.com")
+	actKey, _ := f.key(t, "personal", true, "u1")
+	f.events.reset()
+
+	for _, p := range userAdministrationRoutes {
+		if rec := f.request(p.method, p.path, p.body, actKey, nil); rec.Code != http.StatusUnauthorized {
+			t.Errorf("act-as-user key on %s %s = %d, want 401; body=%s", p.method, p.path, rec.Code, rec.Body)
+		}
+	}
+	if got := f.refusalRows("UserAdministration"); got != len(userAdministrationRoutes) {
+		t.Errorf("UserAdministration refusal rows = %d, want one per route (%d): the 401s must come from the authenticator", got, len(userAdministrationRoutes))
+	}
+	if checks := f.checks(); len(checks) != 0 {
+		t.Errorf("host checks = %d for a refused key, want 0: %+v", len(checks), checks)
+	}
+	if len(eraser.calls) != 0 {
+		t.Errorf("eraser calls = %v, want none", eraser.calls)
+	}
+
+	selfKey, saID := f.key(t, "bot", false, "")
+	rec := f.request("GET", "/auth/admin/users", "", selfKey, nil)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("service-account key on /auth/admin/users = %d, want 200; body=%s", rec.Code, rec.Body)
+		t.Fatalf("self-acting key on /auth/admin/users = %d, want 200; body=%s", rec.Code, rec.Body)
 	}
 	checks := f.checks()
 	if len(checks) != 1 {
@@ -237,10 +319,11 @@ func TestDefaultUserAdministrationAdmitsAMachinePrincipal(t *testing.T) {
 	}
 }
 
-// TestDefaultSessionHydrationAndInvitationsPreserveActAsUserKeys pins the other
-// two API-key-capable groups: an act-as-user key acts as its human owner, while a
-// SELF-acting service account is refused by the handlers' CurrentUser requirement.
-func TestDefaultSessionHydrationAndInvitationsPreserveActAsUserKeys(t *testing.T) {
+// TestDefaultSessionHydrationPreservesActAsUserKeys pins /auth/me, which keeps
+// its default: an act-as-user key hydrates as its human owner, while a
+// SELF-acting service account is refused by the handler's CurrentUser
+// requirement.
+func TestDefaultSessionHydrationPreservesActAsUserKeys(t *testing.T) {
 	f := newPostureFixture(t, RouteAuthentication{})
 	f.seedAccount("u1", "alice@example.com")
 	actKey, _ := f.key(t, "personal", true, "u1")
@@ -260,17 +343,55 @@ func TestDefaultSessionHydrationAndInvitationsPreserveActAsUserKeys(t *testing.T
 	if rec := f.request("GET", "/auth/me", "", selfKey, nil); rec.Code != http.StatusUnauthorized {
 		t.Errorf("self-acting key on /auth/me = %d, want 401", rec.Code)
 	}
+}
 
-	mine := f.request("GET", "/auth/invitations/mine", "", actKey, nil)
-	if mine.Code != http.StatusOK {
-		t.Fatalf("act-as-user key on /auth/invitations/mine = %d, want 200; body=%s", mine.Code, mine.Body)
+// TestDefaultInvitationsRefuseActAsUserKeys pins the invitation surface: an
+// act-as-user key is refused at the authenticator on all seven authenticated
+// routes, so neither the invitation service nor the host's invite check is
+// consulted; a self-acting key still fails the handlers' CurrentUser
+// requirement, so no API key reaches an invitation handler by default.
+func TestDefaultInvitationsRefuseActAsUserKeys(t *testing.T) {
+	var inviteChecks int
+	f := newPostureFixture(t, RouteAuthentication{}, func(d *mountDeps) {
+		d.InviteCheck = func(context.Context, InviteCheckRequest) error {
+			inviteChecks++
+			return nil
+		}
+	})
+	f.seedAccount("u1", "alice@example.com")
+	actKey, _ := f.key(t, "personal", true, "u1")
+	selfKey, _ := f.key(t, "bot", false, "")
+	f.events.reset()
+
+	for _, k := range []struct{ name, raw string }{{"act-as-user key", actKey}, {"self-acting key", selfKey}} {
+		for _, p := range invitationRoutes {
+			if rec := f.request(p.method, p.path, p.body, k.raw, nil); rec.Code != http.StatusUnauthorized {
+				t.Errorf("%s on %s %s = %d, want 401; body=%s", k.name, p.method, p.path, rec.Code, rec.Body)
+			}
+		}
 	}
-	if !f.inv.mineCalled {
-		t.Error("the act-as-user key never reached the invitation service")
+	inv := f.inv
+	if inv.createCalled || inv.listCalled || inv.mineCalled || inv.acceptCalled || inv.cancelCalled || inv.resendCalled {
+		t.Errorf("a refused key reached the invitation service: %+v", inv)
 	}
-	if rec := f.request("GET", "/auth/invitations/mine", "", selfKey, nil); rec.Code != http.StatusUnauthorized {
-		t.Errorf("self-acting key on /auth/invitations/mine = %d, want 401", rec.Code)
+	if inviteChecks != 0 {
+		t.Errorf("invite checks = %d, want 0", inviteChecks)
 	}
+	if got := f.refusalRows("Invitations"); got != len(invitationRoutes) {
+		t.Errorf("Invitations refusal rows = %d, want one per route (%d) for the act-as-user key alone", got, len(invitationRoutes))
+	}
+}
+
+// refusalRows counts the blocked act-as-user refusal rows naming group.
+func (f *postureFixture) refusalRows(group string) int {
+	n := 0
+	for _, e := range f.events.recorded() {
+		if e.EventType == securityevent.TypeAPIKeyAuth && e.EventStatus == securityevent.StatusBlocked &&
+			e.Details["reason"] == securityevent.ReasonActAsUserRefused && e.Details["group"] == group {
+			n++
+		}
+	}
+	return n
 }
 
 // TestDefaultSessionAndCredentialSurfacesRefuseEveryAPIKey pins the tightening
@@ -412,7 +533,7 @@ func (f *postureFixture) bearerAccessToken(t *testing.T, emailAddr string) strin
 // --- overrides: one slot at a time ---
 
 // slotProbe is one route that is representative of a bundled group. Under every
-// audited default a live session cookie is ADMITTED on all eight (the status then
+// audited default a live session cookie is ADMITTED on all nine (the status then
 // depends on the handler and, for the mutations, on the browser-safe gate — never
 // 401), so a single override is visible as the one probe that turns 401.
 type slotProbe struct {
@@ -428,6 +549,7 @@ func slotProbes() []slotProbe {
 	return []slotProbe{
 		{"OAuthLinkStart", "GET", "/auth/oauth/google/link/start", "", func(a *RouteAuthentication, mw web.Middleware) { a.OAuthLinkStart = mw }},
 		{"SessionSecurityReads", "GET", "/auth/methods", "", func(a *RouteAuthentication, mw web.Middleware) { a.SessionSecurityReads = mw }},
+		{"CSRFBootstrap", "GET", "/auth/csrf", "", func(a *RouteAuthentication, mw web.Middleware) { a.CSRFBootstrap = mw }},
 		{"SessionHydration", "GET", "/auth/me", "", func(a *RouteAuthentication, mw web.Middleware) { a.SessionHydration = mw }},
 		{"CredentialManagement", "POST", "/auth/step-up/begin", `{}`, func(a *RouteAuthentication, mw web.Middleware) { a.CredentialManagement = mw }},
 		{"MachineLifecycle", "GET", "/auth/service-accounts", "", func(a *RouteAuthentication, mw web.Middleware) { a.MachineLifecycle = mw }},
@@ -437,9 +559,64 @@ func slotProbes() []slotProbe {
 	}
 }
 
+// TestBundledRouteDefaultManifest pins which credential kinds each bundled
+// group's DEFAULT authenticator admits, by slot name, on a host wiring every
+// kind: a session (cookie), an external token, a self-acting key and an
+// act-as-user key (bearers). It reads the authenticators themselves, so a
+// handler's own CurrentUser refusal never masks an admission, and any future
+// default change fails here by slot.
+func TestBundledRouteDefaultManifest(t *testing.T) {
+	h := newExternalHarness(t, externalSetup{})
+	selfKey, _, _ := h.mintKey(t, "bot", false, "", time.Time{})
+	actKey, _, _ := h.mintKey(t, "personal", true, h.userID, time.Time{})
+	auth := RouteAuthentication{}.withDefaults(h.svc, false)
+
+	type admits struct{ session, external, selfKey, actKey bool }
+	manifest := map[string]struct {
+		mw   web.Middleware
+		want admits
+	}{
+		"OAuthLinkStart":       {auth.OAuthLinkStart, admits{true, false, false, false}},
+		"SessionSecurityReads": {auth.SessionSecurityReads, admits{true, false, false, false}},
+		"CSRFBootstrap":        {auth.CSRFBootstrap, admits{true, true, true, true}},
+		"SessionHydration":     {auth.SessionHydration, admits{true, true, true, true}},
+		"CredentialManagement": {auth.CredentialManagement, admits{true, false, false, false}},
+		"MachineLifecycle":     {auth.MachineLifecycle, admits{true, false, false, false}},
+		"UserAdministration":   {auth.UserAdministration, admits{true, true, true, false}},
+		"Invitations":          {auth.Invitations, admits{true, true, true, false}},
+		"BrowserAccount":       {auth.BrowserAccount, admits{true, false, false, false}},
+	}
+	probes := slotProbes()
+	if len(manifest) != len(probes) {
+		t.Fatalf("manifest covers %d slots, slotProbes %d", len(manifest), len(probes))
+	}
+	for _, p := range probes {
+		entry, ok := manifest[p.slot]
+		if !ok {
+			t.Errorf("slot %s has no manifest entry", p.slot)
+			continue
+		}
+		for _, c := range []struct {
+			name           string
+			header, cookie string
+			want           bool
+		}{
+			{"session", "", h.accessJWT, entry.want.session},
+			{"external token", h.token, "", entry.want.external},
+			{"self-acting key", selfKey, "", entry.want.selfKey},
+			{"act-as-user key", actKey, "", entry.want.actKey},
+		} {
+			_, got := serveGuarded(h.credentialHarness, entry.mw, h.credentialRequest(c.header, c.cookie))
+			if got.reached != c.want {
+				t.Errorf("%s default with a %s: admitted = %v, want %v", p.slot, c.name, got.reached, c.want)
+			}
+		}
+	}
+}
+
 // TestBundledRouteDefaultsAdmitALiveSession is the control the override matrix
 // reads against: with every slot unset, one live session cookie is admitted by
-// all eight authenticators.
+// all nine authenticators.
 func TestBundledRouteDefaultsAdmitALiveSession(t *testing.T) {
 	f := newPostureFixture(t, RouteAuthentication{})
 	f.seedAccount("u1", "alice@example.com")
@@ -454,7 +631,7 @@ func TestBundledRouteDefaultsAdmitALiveSession(t *testing.T) {
 // TestBundledRouteOverridesAreIsolated configures each slot in isolation with a
 // machines-only authenticator and proves the substitution is exactly one surface
 // wide: the overridden group refuses the live session cookie every default
-// admits, and all SEVEN unconfigured groups keep their audited defaults.
+// admits, and all EIGHT unconfigured groups keep their audited defaults.
 func TestBundledRouteOverridesAreIsolated(t *testing.T) {
 	probes := slotProbes()
 	for _, target := range probes {
@@ -490,8 +667,7 @@ func TestBundledRouteOverridesAreIsolated(t *testing.T) {
 // it freezes WithRouteAuthentication.
 func newPostureFixtureWith(t *testing.T, base *postureFixture, routeAuth RouteAuthentication) *postureFixture {
 	t.Helper()
-	h := web.NewWebHandler()
-	mount(h, mountDeps{
+	deps := mountDeps{
 		Auth:        base.svc,
 		Invitations: base.inv,
 		InviteCheck: allowInviteCheck, UserAdminCheck: base.recordAdminCheck,
@@ -499,7 +675,12 @@ func newPostureFixtureWith(t *testing.T, base *postureFixture, routeAuth RouteAu
 		MachineGate:  base.countingMachineGate,
 		Views:        stubViews{},
 		RouteAuth:    routeAuth,
-	})
+	}
+	for _, adjust := range base.extra {
+		adjust(&deps)
+	}
+	h := web.NewWebHandler()
+	mount(h, deps)
 	base.h = h
 	return base
 }

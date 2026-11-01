@@ -678,3 +678,37 @@ func TestTokenIssuerConstruction(t *testing.T) {
 		t.Errorf("a distinct audience: %v", err)
 	}
 }
+
+// TestActAsUserAdmissionWarnsThroughNew pins the boot WARN through the root
+// constructor: a BundledRouteAuth override admitting act-as-user keys logs one
+// line per group, and MFAConfig.APIKeysExempt adds one escalation line each.
+func TestActAsUserAdmissionWarnsThroughNew(t *testing.T) {
+	one := []authlogic.ExternalProvider{idp("idp", "https://idp.example.test", false)}
+	override := inbound.BundledRouteAuthentication{
+		UserAdministration: inbound.PrincipalStrategy(inbound.Live()),
+		Invitations:        inbound.PrincipalStrategy(inbound.Live()),
+	}
+	for _, tc := range []struct {
+		name                string
+		wiring              mfaWiring
+		admits, escalations int
+	}{
+		{"override", mfaWiring{providers: one, ack: true, machine: true, routeAuth: override}, 2, 0},
+		{"override with APIKeysExempt", mfaWiring{providers: one, ack: true, machine: true, apiKeysExempt: true, routeAuth: override}, 2, 2},
+		{"defaults", mfaWiring{providers: one, ack: true, machine: true, apiKeysExempt: true}, 0, 0},
+		{"machine identity unwired", mfaWiring{providers: one, ack: true, apiKeysExempt: true, routeAuth: override}, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, logs, err := tc.wiring.build(environment.ModeDevelopment)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(logs, "posture_warning=bundled_group_admits_act_as_user_keys"); got != tc.admits {
+				t.Errorf("admission lines = %d, want %d:\n%s", got, tc.admits, logs)
+			}
+			if got := strings.Count(logs, "posture_warning=bundled_group_act_as_user_mfa_exempt"); got != tc.escalations {
+				t.Errorf("escalation lines = %d, want %d:\n%s", got, tc.escalations, logs)
+			}
+		})
+	}
+}

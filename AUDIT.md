@@ -6219,3 +6219,60 @@ against the live Auth emulator.
 - From the tags (this record): every example at `GOWORK=off`; auth-cms boot (`/auth/me` 401);
   production-baseline two-role bootstrap on PostgreSQL 18.6; an escaped `DB_URL` refused with
   no server-side authentication attempt.
+
+## AUDIT-064: Bundled user-administration and invitation routes refuse act-as-user API keys (#312)
+
+- **Status:** implemented; release pending as `pockets/authentication` v0.39.0 (with the
+  audit-attribution change that ships on the same tag). Record: `RELEASING.md`, "Bundled
+  user-administration and invitation routes refuse act-as-user API keys (#312)".
+- **Modules:** `pockets/authentication`. Untouched: sdk, the authentication stores, views/goth,
+  `pockets`, workshop. No migration; `security_events.details` gains additive keys only.
+- **Old behavior:**
+  - With machine identity wired, the bundled `UserAdministration` and `Invitations` groups
+    defaulted to `RequirePrincipal(Live())`, admitting every wired kind. An act-as-user API key
+    resolved to its human owner, so `UserAdminCheck` / `InviteCheck` saw that owner and could
+    not tell the key from a session.
+  - A gate holder on the machine lifecycle routes could mint a key acting as another
+    administrator and use it, header-only, on erase, deactivate/reactivate, the resends, the
+    passkey/TOTP resets, the security-event read and every authenticated invitation route; the
+    rows named the owner.
+- **New behavior:**
+  - Both defaults are `RequirePrincipal(Live(), RefuseActAsUserKeys())`: an act-as-user key is
+    a 401 on all nine user-administration and all seven authenticated invitation routes, before
+    any host policy. A self-acting service account still reaches `UserAdminCheck` as itself.
+    `/auth/me` and `/auth/csrf` are unchanged.
+  - The refusal is on the rail: the `apikey_auth` success row plus one blocked `apikey_auth`
+    row (`reason=act_as_user_refused`, `group`, `api_key_id`, `service_account_id`; `Actor` the
+    service account; budgeted; no key material).
+  - `RefuseActAsUserKeys()` is a public `PrincipalOption`.
+  - `UserAdminCheckRequest.Credential` / `InviteCheckRequest.Credential` (`CheckCredential`,
+    ids only) let an opted-in policy refuse `ActAsUser`. Under an `InvitationResourceRule`,
+    `InviteCheck` (and so `Credential`) runs on create only.
+  - An override admitting act-as-user keys WARNs at every boot
+    (`posture_warning=bundled_group_admits_act_as_user_keys`, and
+    `bundled_group_act_as_user_mfa_exempt` beside `MFAConfig.APIKeysExempt`); never a refusal.
+
+**Migration:**
+- A host using act-as-user keys against these routes moves to a self-acting account its
+  `UserAdminCheck` grants (user administration), or to an administrator's access token
+  (invitations), or overrides the group and refuses `Credential.ActAsUser` per action.
+
+**Residuals (deliberate):**
+- An act-as-user key still acts as its owner on host routes and on `/auth/me`, which discloses
+  the owner's profile to the key holder (no follow-up).
+- An invitation created under an opted-in act-as-user key records the owner as `InvitedBy`;
+  shipped rows are not rewritten.
+- Delegated act-as-user creation remains a `MachineRoutesGate` decision; the
+  `service_account_created` row's `delegated` detail marks it.
+- Declined: a `gopernicus guard --posture` check flagging a `UserAdministration` or
+  `Invitations` strategy without `RefuseActAsUserKeys()`.
+
+**Verification:**
+- Pocket tests: the option's admission table (outermost, nested, `Optional()`, header beside a
+  valid cookie, option order); all nine and all seven routes refused with no host check and
+  one refusal row each; the end-to-end delegated mint → erase 401 with exactly the two rows; a
+  per-slot default manifest over session, external token, self-acting and act-as-user keys; the
+  `Credential` summary under an override; the WARN line counts through the adapter and the
+  root `New`.
+- Pending for the release: `live-stores` on `main`, cold verification, the examples repinned
+  and the live drill.

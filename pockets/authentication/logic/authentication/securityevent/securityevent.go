@@ -82,7 +82,11 @@ const (
 	TypeOAuthUnlinkCodeSent = "oauth_unlink_code_sent"
 	// TypeOAuthUnlinked is a completed code-gated provider unlink (design §5.4).
 	TypeOAuthUnlinked = "oauth_unlinked"
-	// TypeAPIKeyAuth is an API-key authentication attempt.
+	// TypeAPIKeyAuth is an API-key authentication attempt. A key the inbound
+	// authenticator resolved and then refused as an act-as-user key records a
+	// second, blocked row (Budgeted per client IP; Actor the service account):
+	// reason act_as_user_refused, group, api_key_id and service_account_id —
+	// never the key, its prefix or its hash.
 	TypeAPIKeyAuth = "apikey_auth"
 	// TypeTokenIssued is a bearer-JWT issuance (POST /auth/token): success,
 	// failure or blocked, with the same reasons as a password login.
@@ -512,6 +516,9 @@ const (
 	// ReasonServiceAccountDisabled is an API key refused because its service
 	// account is disabled.
 	ReasonServiceAccountDisabled = "service_account_disabled"
+	// ReasonActAsUserRefused is an act-as-user API key a surface refused
+	// because it authenticates as its human owner.
+	ReasonActAsUserRefused = "act_as_user_refused"
 	// ReasonInvalidRequest is an OAuth2 token-endpoint parameter value the
 	// server evaluated and refused.
 	ReasonInvalidRequest = "invalid_request"

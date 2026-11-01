@@ -581,6 +581,31 @@ func (s *Service) recordAPIKeyAuth(ctx context.Context, key apikey.APIKey, actor
 	})
 }
 
+// RecordActAsUserKeyRefused records the blocked apikey_auth row of an
+// act-as-user API key the inbound authenticator resolved and then refused on
+// group, the surface that refused it. The resolution-time success row stays as
+// it is; this row names the key and its account by id only — never the key, its
+// prefix or its hash — with the service account as Actor, and is Budgeted per
+// client IP because a key holder can drive it. A credential that is not an
+// act-as-user API key records nothing.
+func (s *Service) RecordActAsUserKeyRefused(ctx context.Context, cred Credential, group string) {
+	if cred.Kind != CredentialAPIKey || !cred.ActAsUser {
+		return
+	}
+	s.recordSecurityEvent(ctx, securityEventInput{
+		Actor:  saPrincipal(cred.ServiceAccountID),
+		Type:   securityevent.TypeAPIKeyAuth,
+		Status: securityevent.StatusBlocked,
+		Details: map[string]any{
+			"reason":             securityevent.ReasonActAsUserRefused,
+			"group":              group,
+			"api_key_id":         cred.APIKeyID,
+			"service_account_id": cred.ServiceAccountID,
+		},
+		Budgeted: true,
+	})
+}
+
 // saPrincipal builds the service-account attribution for a key whose owning
 // account was not (or need not be) resolved — the denied-key audit path.
 func saPrincipal(serviceAccountID string) securityevent.Principal {
