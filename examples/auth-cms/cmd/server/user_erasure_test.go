@@ -37,7 +37,7 @@ func newErasureHost(t *testing.T) *erasureHost {
 		linkHost: newLinkHostTuned(t, func(cfg *authenticationConfig) {
 			cfg.UserAdminCheck = policy.UserAdmin
 			cfg.UserErasureRoute = true
-			cfg.BeforeErase = beforeErase(components.Roles, components.Mutations, authzIntegrityPolicy())
+			cfg.BeforeErase = beforeErase(components.Roles, components.Mutations, authorizationIntegrityPolicy())
 		}),
 		system: components.Mutations,
 	}, authz: components}

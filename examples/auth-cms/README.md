@@ -103,7 +103,7 @@ history:
   invitation `Granter` is the engine's ledger-backed `integrityRelationshipGranter`,
   paired with the `integrityOperationFencer` that settles an `accepting` claim on cancel.
 
-**Principal admission and data integrity.** `authzSchema` declares project
+**Principal admission and data integrity.** `authorizationModel` declares project
 `view` and `manage_access` permissions and platform administration. The host's
 principal policies live in `pockets/access/inbound`: access management admits a
 platform administrator or a resource owner within one decision snapshot. Bundled
@@ -111,7 +111,7 @@ role writes call this policy after validating the exact command and before the
 principal-free tuple writer runs. Revocation after admission affects later calls;
 it does not retract an admitted operation.
 
-`authzIntegrityPolicy` requires one concrete project owner. Logic defines that
+`authorizationIntegrityPolicy` requires one concrete project owner. Logic defines that
 minimum and the memory store checks it under the same lock as the write. Two
 concurrent last-owner removals produce one success and one integrity conflict.
 Ordinary role, relationship and canonical tuple writers enforce the same policy.
@@ -136,7 +136,7 @@ HTTP operations.
 
 **Exact roles share the canonical tuple authority.** A roles-only host supplies
 `Repositories.Tuples` and needs no permission model. This example uses one
-`authorization.WithModel(authzSchema())`: `view` and `manage_access` use declared
+`authorization.WithModel(authorizationModel())`: `view` and `manage_access` use declared
 relationship predicates, while `audit` uses exact `RoleIn("auditor")`.
 
 - `GET /demo/audit` uses the pocket's coordinate permission gate and returns 200
@@ -467,7 +467,7 @@ routes (`/auth/service-accounts…`, `/auth/api-keys/{id}/revoke`) are mounted o
 because this host sets `auth.AdministrationConfig.MachineRoutesGate` (`main.go`, right after
 `buildAuthConfig`) to
 `authz.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed("platform", "main")))` — the coordinate
-`authzSchema()` already declares. Each route therefore runs
+`authorizationModel()` already declares. Each route therefore runs
 `RequireUser` → `RequireLiveSession` → (on the three POSTs) the browser-safe
 `Origin`/CSRF gate → that gate: no credential is **401**, an API-key
 bearer is **401** (a key never administers machine identities here), a cookie POST with

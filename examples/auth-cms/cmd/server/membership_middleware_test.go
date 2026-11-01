@@ -47,7 +47,7 @@ func TestMembershipPolicySharesSnapshotAndFailsClosed(t *testing.T) {
 			}}); err != nil {
 				t.Fatal(err)
 			}
-			components, err := authorization.New(authorization.Repositories{Tuples: store}, authorization.WithModel(authzSchema()))
+			components, err := authorization.New(authorization.Repositories{Tuples: store}, authorization.WithModel(authorizationModel()))
 			if err != nil {
 				t.Fatal(err)
 			}
