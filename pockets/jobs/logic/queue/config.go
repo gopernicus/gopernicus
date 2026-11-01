@@ -36,6 +36,10 @@ var (
 	// provider call bounded by a timeout at or beyond the lease could still be running
 	// after the lease lapses and a second worker reclaims the job (AV3D-3.4).
 	ErrProcessTimeoutExceedsLease = errors.New("jobs: FencedRuntimePolicy.ProcessTimeout must be shorter than LeaseFor")
+	// ErrDrainTimeoutExceedsLease is returned by NewFencedRuntime when
+	// FencedRuntimePolicy.DrainTimeout is longer than LeaseFor. Draining past the
+	// lease can only produce lost-lease conflicts or a second send.
+	ErrDrainTimeoutExceedsLease = errors.New("jobs: FencedRuntimePolicy.DrainTimeout must not exceed LeaseFor")
 )
 
 // Repositories supplies either or both durable queue protocols.

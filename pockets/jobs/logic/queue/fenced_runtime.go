@@ -3,8 +3,10 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
@@ -84,6 +86,14 @@ func NewFencedRuntime(svc *Service, inputHandlers map[string]FencedHandlerFunc, 
 	if cfg.ProcessTimeout > 0 && cfg.ProcessTimeout >= leaseFor {
 		return nil, ErrProcessTimeoutExceedsLease
 	}
+	drainTimeout := cfg.DrainTimeout
+	if drainTimeout > leaseFor {
+		return nil, ErrDrainTimeoutExceedsLease
+	}
+	if drainTimeout == 0 {
+		drainTimeout = leaseFor
+	}
+	margin := leaseMargin(leaseFor)
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -102,6 +112,17 @@ func NewFencedRuntime(svc *Service, inputHandlers map[string]FencedHandlerFunc, 
 			// An unregistered kind cannot be processed here; returning an error takes the
 			// dead-letter path so it never wedges the pool.
 			return errUnhandledKind
+		}
+		if st, ok := ctx.Value(drainStateKey{}).(*drainState); ok {
+			st.jobID.Store(j.JobID)
+		}
+		// Stop the handler before the lease lapses: past LeasedUntil another
+		// worker may reclaim the job and send it again. LeasedUntil was stamped
+		// from this runtime's clock (the store uses the now Claim was given).
+		if !j.LeasedUntil.IsZero() {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, j.LeasedUntil.Sub(clock())-margin)
+			defer cancel()
 		}
 		claim := FencedClaim{
 			ExecutionID: j.JobID,
@@ -144,7 +165,11 @@ func NewFencedRuntime(svc *Service, inputHandlers map[string]FencedHandlerFunc, 
 		})
 	}
 
-	pool := workers.NewPool(runner.WorkFunc(),
+	work := runner.WorkFunc()
+	if drainTimeout > 0 {
+		work = drainFenced(work, drainTimeout, logger)
+	}
+	pool := workers.NewPool(work,
 		workers.WithMiddleware(cfg.WorkerMiddleware...),
 		workers.WithName("fenced-delivery"),
 		workers.WithWorkerCount(workerCount),
@@ -156,8 +181,74 @@ func NewFencedRuntime(svc *Service, inputHandlers map[string]FencedHandlerFunc, 
 	return &FencedRuntime{pool: pool}, nil
 }
 
-// Run blocks running the fenced pool; cancel ctx to drain gracefully.
+// Run blocks running the fenced pool. Cancelling ctx stops new claims; claims
+// already in flight keep processing and settle (complete, fail, reschedule or
+// defer) on a context the cancel does not reach. Each claim's handler still
+// stops before its lease lapses, and Run waits at most
+// FencedRuntimePolicy.DrainTimeout (default: the lease) after the cancel. A
+// claim still running at that point is cancelled and left reclaimable, so it
+// may be sent again; one cut off between a successful send and settlement is
+// reclaimed the same way. A negative DrainTimeout disables the drain: cancel
+// aborts in-flight claims immediately, as before v0.9.0.
 func (r *FencedRuntime) Run(ctx context.Context) error { return r.pool.Run(ctx) }
+
+// drainStateKey carries the iteration's drain state through the detached
+// context: the parent (Run's) context for the claim gate, and the claimed job
+// id for the drain log lines.
+type drainStateKey struct{}
+
+type drainState struct {
+	parent context.Context
+	jobID  atomic.Value // string
+}
+
+// errDrainDeadline is the cancel cause when DrainTimeout elapses.
+var errDrainDeadline = errors.New("jobs: fenced drain deadline")
+
+// drainFenced runs each iteration on a context detached from Run's
+// cancellation (values, including the worker id, are kept). When Run's ctx is
+// cancelled mid-iteration it arms a bound timer; if the timer fires first, the
+// detached context is cancelled and the sdk runner leaves the claim reclaimable.
+// It sits inside the worker middleware, as drainInFlight does for Runtime.
+func drainFenced(work workers.WorkFunc, bound time.Duration, log *slog.Logger) workers.WorkFunc {
+	return func(ctx context.Context) error {
+		st := &drainState{parent: ctx}
+		dctx, cancel := context.WithCancelCause(context.WithValue(context.WithoutCancel(ctx), drainStateKey{}, st))
+		defer cancel(nil)
+		// The timer is armed even while the iteration is still claiming: a
+		// claim that wins the race with the cancel is bounded too. A claim the
+		// gate refuses returns at once and dctx.Done ends the wait.
+		stop := context.AfterFunc(ctx, func() {
+			if jobID, _ := st.jobID.Load().(string); jobID != "" {
+				log.Info("fenced drain started", "pool", "fenced-delivery", "job_id", jobID, "drain_timeout", bound)
+			}
+			t := time.NewTimer(bound)
+			defer t.Stop()
+			select {
+			case <-t.C:
+				jobID, _ := st.jobID.Load().(string)
+				log.Warn("fenced drain deadline hit; claim left reclaimable and may be sent again",
+					"pool", "fenced-delivery", "job_id", jobID, "drain_timeout", bound)
+				cancel(errDrainDeadline)
+			case <-dctx.Done():
+			}
+		})
+		defer stop()
+		err := work(dctx)
+		if err != nil && errors.Is(context.Cause(dctx), errDrainDeadline) {
+			// The deadline cut settlement short. The Warn above already names
+			// the job; report the shutdown, not an iteration failure.
+			return ctx.Err()
+		}
+		return err
+	}
+}
+
+// leaseMargin is the slack left between a handler's deadline and its lease
+// expiry for settlement I/O: a tenth of the lease, at most one second.
+func leaseMargin(leaseFor time.Duration) time.Duration {
+	return min(time.Second, leaseFor/10)
+}
 
 // kindScopedFenced adapts the FencedQueueRepository (whose Claim takes a kinds
 // filter) to the kernel's workers.FencedStore by closing over the runtime's
@@ -171,7 +262,24 @@ type kindScopedFenced struct {
 var _ workers.FencedStore[Job] = kindScopedFenced{}
 
 func (q kindScopedFenced) Claim(ctx context.Context, now time.Time, leaseID string, leaseFor time.Duration) (Job, error) {
-	return q.repo.Claim(ctx, now, leaseID, leaseFor, q.kinds)
+	st, ok := ctx.Value(drainStateKey{}).(*drainState)
+	if !ok {
+		return q.repo.Claim(ctx, now, leaseID, leaseFor, q.kinds)
+	}
+	// Draining: never claim after Run's ctx is cancelled. The claim itself runs
+	// under that cancellation; a claim cut off mid-commit holds a lease that
+	// simply expires.
+	if st.parent.Err() != nil {
+		return Job{}, workers.ErrNoWork
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(st.parent, cancel)()
+	j, err := q.repo.Claim(cctx, now, leaseID, leaseFor, q.kinds)
+	if err != nil && st.parent.Err() != nil {
+		return Job{}, workers.ErrNoWork
+	}
+	return j, err
 }
 
 func (q kindScopedFenced) Complete(ctx context.Context, id, leaseID string, now time.Time) error {

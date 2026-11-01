@@ -138,8 +138,7 @@ it; no host wiring can accidentally substitute a different channel.
 allows active handlers and persistence to finish. The runtime joins queue and
 scheduler errors and cancels a sibling pool after a fatal failure. Hosts must
 bound handler execution and store I/O; an unbounded in-flight call can prevent
-draining. Fenced runtime cancellation instead cancels active processing and
-leaves the lease reclaimable.
+draining. The fenced runtime drains too, within its lease (below).
 
 **Kind ownership.** Both queue claims and schedule processing use the sorted
 registered handler kinds. Work for another binary remains pending without
@@ -206,9 +205,26 @@ seam.
 that claims due jobs, hands each handler a checkpoint-capable `FencedClaim`, and
 applies the retry/dead-letter policy. Like `Runtime`, it starts nothing —
 Construction starts no goroutine. The host runs `rt.Run(ctx)` and handles its error.
-Cancellation reaches processing; the runner waits for it to return and leaves
-the claim recoverable, without recording a shutdown failure. This differs from
-the ordinary runtime's detached drain.
+
+**Fenced shutdown drain.** Cancelling `Run` stops new claims, including one an
+iteration was about to make. Claims already in flight keep processing and
+settle (complete, fail, reschedule or defer) on a context the cancel does not
+reach. Two bounds apply:
+
+- **The lease, always.** A handler's context ends at its claim's
+  `LeasedUntil` minus a margin (a tenth of the lease, at most 1s), shutdown or
+  not. Past the lease another worker may reclaim the job and send it again.
+- **`DrainTimeout` after the cancel** (`JOBS_DRAIN_TIMEOUT`; 0 selects
+  `LeaseFor`; longer than `LeaseFor` is refused with
+  `ErrDrainTimeoutExceedsLease`). A claim still running then is cancelled and
+  left reclaimable, logged at WARN `fenced drain deadline hit`. It may be sent
+  again, and so may one cut off between a successful send and settlement.
+
+`Run` therefore blocks for up to `DrainTimeout` after the cancel: a host must
+wait that long (plus margin) before exiting, and its orchestrator grace period
+must cover any HTTP drain plus `DrainTimeout`. A negative `DrainTimeout`
+disables the drain: cancel aborts in-flight claims at once and leaves them
+reclaimable, as before v0.9.0.
 `ProcessTimeout` must be shorter than `LeaseFor` (`ErrProcessTimeoutExceedsLease`),
 with additional margin for Claim latency and persistence. Timeouts require
 cooperative middleware/handlers; they cannot stop a function that ignores context.

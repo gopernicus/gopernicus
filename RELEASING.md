@@ -1,5 +1,35 @@
 # Releasing gopernicus modules
 
+## Fenced runtime drains on shutdown (#231 — pockets/jobs v0.9.0)
+
+**Status: pending merge and tag.** **MINOR, a default change to shutdown.** Cancelling
+`FencedRuntime.Run` used to cancel in-flight processing and skip settlement. A SIGTERM during a
+deploy could therefore cut off a send the provider had already accepted, and after the lease the
+job was reclaimed and **sent again**. Now:
+
+- **Cancel stops new claims**, including one an iteration was about to make. In-flight claims keep
+  processing and settle on a context the cancel does not reach.
+- **Bounded by the lease, always.** A handler's context ends at its claim's `LeasedUntil` minus a
+  margin (a tenth of the lease, at most 1s), whether or not shutdown has started. A handler can no
+  longer run past its lease while another worker reclaims the job.
+- **And by `FencedRuntimePolicy.DrainTimeout`** (`JOBS_DRAIN_TIMEOUT`) after the cancel. 0 selects
+  `LeaseFor`. Longer than `LeaseFor` is refused (`ErrDrainTimeoutExceedsLease`). **Negative
+  disables the drain** (the v0.8.0 behaviour). A claim still running at the deadline is cancelled
+  and left reclaimable, with WARN `fenced drain deadline hit; claim left reclaimable and may be
+  sent again`. INFO `fenced drain started` marks the start.
+
+**Migration.**
+- `Run` now blocks for up to `DrainTimeout` (default: the lease, 30s) after its ctx is cancelled.
+  A host that waits a fixed time for it before exiting must wait at least `DrainTimeout` plus a
+  margin, or the process exits mid-drain and the duplicate returns.
+- The orchestrator grace period must cover the host's HTTP drain plus `DrainTimeout`. Kubernetes'
+  default of 30s is too short for a 10s HTTP drain plus a 30s drain.
+- A handler that ran past its lease (no `ProcessTimeout`) is now cancelled at the lease.
+- Set `DrainTimeout: -1` to keep the old abort.
+
+No other module changes; jobs stays on sdk v0.21.0. The examples repin in a follow-up PR, with
+auth-cms's delivery wait raised.
+
 ## Tracer exports no error text by default (#310 — integrations/tracing/otel v0.4.0 — published 2026-11-01)
 
 **Status: released.** **MINOR, a default change.** `SpanFinisher.RecordError` used to
