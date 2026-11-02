@@ -1,5 +1,14 @@
 # Releasing gopernicus modules
 
+## Route-pattern span names under a global Use (#308 — integrations/tracing/otel v0.6.0)
+
+**Status: pending merge and tag.** **MINOR, additive, opt-in.** `otel.RouteNames()`, installed as
+the last `web.WebHandler.Use`, records the matched `ServeMux` pattern in a private context slot
+that `otel.Middleware` reads when its span finishes: `GET /users/{id}` with `http.route` for a
+match, `GET unmatched` for a 404 or 405 with no match, never the request path. Without it,
+spans keep today's names; a route-mounted `otel.Middleware` is unchanged. No `web` or sdk
+change. AUDIT-070.
+
 ## A REPEATABLE READ transaction that applies settings (#306 — integrations/datastores/pgxdb v0.19.0 — published 2026-11-02)
 
 **Status: released.** **MINOR, additive.**
