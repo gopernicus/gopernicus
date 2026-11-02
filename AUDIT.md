@@ -6338,8 +6338,9 @@ against the live Auth emulator.
 
 ## AUDIT-067: OTLP/HTTP exporter with secret headers (#307)
 
-- **Status:** pending tag as `integrations/tracing/otel` v0.5.0. Record: `RELEASING.md`,
-  "OTLP/HTTP exporter with secret headers (#307)".
+- **Status:** released as `integrations/tracing/otel` v0.5.0 (tag object `dcd678bd` → `c55f2440`,
+  #334 + #335). Record: `RELEASING.md`, "OTLP/HTTP exporter with secret headers (#307 —
+  published 2026-11-02)".
 - **Modules:** `integrations/tracing/otel`. New dependency `otlptracehttp` v1.45.0, a companion
   of the OpenTelemetry family the module already isolates (G13 holds). The `sdk` requirement
   rises from v0.9.0 to v0.18.0 (root `sdk.Secret`). #334 merged with the stale v0.9.0 floor;
