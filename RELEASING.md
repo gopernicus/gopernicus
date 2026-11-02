@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## A REPEATABLE READ transaction that applies settings (#306 — integrations/datastores/pgxdb v0.19.0)
+## A REPEATABLE READ transaction that applies settings (#306 — integrations/datastores/pgxdb v0.19.0 — published 2026-11-02)
 
-**Status: pending merge and tag.** **MINOR, additive.**
+**Status: released.** **MINOR, additive.**
 `(*DB).TransactSnapshotWithSettings(ctx, settings, fn)` is `TransactWithSettings` over
 `TransactSnapshot`: read-write REPEATABLE READ with `set_config` as the first statement (which also
 takes the snapshot). Validation before begin, nesting (`ErrNestedTransact`), cleanup and
@@ -16,9 +16,23 @@ refusal now names the calling function.
 
 No sdk change. No authorization code change (its README gains the recipe). AUDIT-069.
 
-## Fenced claims carry their kind (#311 — pockets/jobs v0.11.0)
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `integrations/datastores/pgxdb/v0.19.0` | `a29d2ee7` → `8f5a8f3c` | #339 | 41485240585 @ `8f5a8f3c` | OK; MVS selects sdk v0.25.0; the empty-settings refusal returns before any connection |
+| — | none | — | PR-2: `pockets/authorization/stores/pgx` requires pgxdb v0.19.0 (from v0.15.0; sdk v0.21.0 → v0.25.0) and adds the issue-case live test | — | store suite with `GOWORK=off` on PostgreSQL 18, bare and with `POSTGRES_TEST_SCHEMA` |
 
-**Status: pending merge and tag.** **MINOR, additive.** `queue.FencedClaim` gains `Kind`, the
+Annotated, not signed. The store module is not tagged: it gains a test, not code. Its next tag
+carries the raised pgxdb/sdk floor.
+
+**Run and look.** On PostgreSQL 18 against the published v0.19.0:
+`ListRelationshipsBySubject` under `TransactWithSettings` returns `ErrSnapshotIsolation`; under
+`TransactSnapshotWithSettings` it reads the grant, sees `app.tenant_id`, and removes the seat in
+the same transaction, which is gone after commit
+(`TestCanonicalSQLReadsInsideSnapshotWithSettings`).
+
+## Fenced claims carry their kind (#311 — pockets/jobs v0.11.0 — published 2026-11-02)
+
+**Status: released.** **MINOR, additive.** `queue.FencedClaim` gains `Kind`, the
 claimed job's kind, set by the fenced runtime from the job it dispatched on. Job middleware
 (`queue.WithFencedJobMiddleware`) can now name spans `job <kind>` and label metrics by kind,
 including for handlers a pocket builds internally (authentication's `authentication.delivery`),
@@ -27,6 +41,15 @@ so they are safe as labels.
 
 A host that builds `FencedClaim` positionally (a test fixture) needs field names. No store,
 migration or sdk change. AUDIT-068.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/jobs/v0.11.0` | `5deba091` → `02e347eb` | #338 | 41484506076 @ `02e347eb` | OK; MVS selects sdk v0.27.0; fenced job middleware sees the claimed kind |
+| — | none | — | PR-2: auth-cms, jobs-minimal repin | — | each builds, vets and tests with `GOWORK=off` |
+
+Annotated, not signed. **Run and look (auth-cms, jobs delivery mode).** A job middleware on
+`authjobs.NewRuntime` saw a registration's verification mail as `authentication.delivery` and
+the mail was delivered.
 
 ## OTLP/HTTP exporter with secret headers (#307 — integrations/tracing/otel v0.5.0 — published 2026-11-02)
 
