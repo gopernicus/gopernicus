@@ -159,6 +159,7 @@ func RunAudit(t *testing.T, factory func(*testing.T, bool) Repositories) {
 	t.Run("PurgeBound", func(t *testing.T) { specAuditPurgeBound(t, factory(t, true)) })
 	t.Run("PagingAndOwnership", func(t *testing.T) { specAuditPaging(t, factory(t, true)) })
 	t.Run("CorrelationIDs", func(t *testing.T) { specAuditCorrelation(t, factory(t, true)) })
+	t.Run("Expiry", func(t *testing.T) { runAuditExpiry(t, func(t *testing.T) Repositories { return factory(t, true) }) })
 }
 
 // RunAuditIDs proves a host generator reaches every recorded event ID.

@@ -66,7 +66,7 @@ func assertFreshIndexes(t *testing.T, db *tursodb.DB) {
 func TestFreshCanonicalSchema(t *testing.T) {
 	db := canonicalFixture(t, false)
 	assertFreshIndexes(t, db)
-	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_operations", "iam_tuples"}) {
+	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_audit_purges", "iam_audit_retention", "iam_operations", "iam_tuples"}) {
 		t.Fatalf("primary tables: %v", got)
 	}
 	repos, err := testRepositories(t.Context(), db, WithAudit())
@@ -232,7 +232,7 @@ func TestFreshCacheInstallationOrderAndRollback(t *testing.T) {
 		if err := tursodb.RunMigrations(ctx, db, broken, TupleCacheMigrationsDir); err == nil {
 			t.Fatal("broken optional migration succeeded")
 		}
-		if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_operations", "iam_tuples"}) {
+		if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_audit_purges", "iam_audit_retention", "iam_operations", "iam_tuples"}) {
 			t.Fatalf("cache DDL escaped rollback: %v", got)
 		}
 		found, err := repos.Tuples.Contains(ctx, fact)
@@ -295,7 +295,7 @@ func TestFreshOperationsSchemaMatchesFixture(t *testing.T) {
 	if got := operationsDDL(t, db); got != canonicalOperationsDDL {
 		t.Fatalf("fresh iam_operations:\n%s\nwant:\n%s", got, canonicalOperationsDDL)
 	}
-	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_operations", "iam_tuples"}) {
+	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_audit_purges", "iam_audit_retention", "iam_operations", "iam_tuples"}) {
 		t.Fatalf("tables after 0004: %v", got)
 	}
 }
@@ -333,7 +333,7 @@ func TestOperationsFencedUpgrade(t *testing.T) {
 	if after := operationRows(t, db); !slices.Equal(after, before) || len(after) != len(seeded) {
 		t.Fatalf("rebuild changed records: before=%v after=%v", before, after)
 	}
-	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_operations", "iam_tuples"}) {
+	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_audit_purges", "iam_audit_retention", "iam_operations", "iam_tuples"}) {
 		t.Fatalf("tables after 0004: %v", got)
 	}
 	repos, err := testRepositories(t.Context(), db)

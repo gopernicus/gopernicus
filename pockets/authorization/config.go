@@ -57,6 +57,11 @@ type Repositories struct {
 	// ErrOperationExpiryNotConfigured and keeps every operation record; production
 	// then logs one WARN.
 	OperationExpiry mutations.OperationExpirer
+	// AuditExpiry enables Mutations.ExpireAudit over the same authority as
+	// Audit, and requires Mutations. It purges nothing until WithAuditRetention
+	// is set: ExpireAudit then returns ErrAuditRetentionNotConfigured. Nil leaves
+	// ExpireAudit returning ErrAuditExpiryNotConfigured.
+	AuditExpiry audit.Expirer
 
 	// Audit reads committed change history. The host controls access and retention.
 	// Production (WithRuntimeMode) requires it, and RoleRoutes.AuditGate serves it.
@@ -80,4 +85,6 @@ type config struct {
 	AuditDisabledAcknowledged bool
 	OperationRetention        time.Duration
 	OperationRetentionSet     bool
+	AuditRetention            time.Duration
+	AuditRetentionSet         bool
 }

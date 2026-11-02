@@ -430,7 +430,8 @@ a row exactly at the cutoff is eligible.
 | `event_outbox` | published, `outbox.PurgePublished(before)` — unbounded, so its own step | host-chosen | none | runtime role |
 | cms `inquiries` | `created_at <= before` (`PurgeBefore`); `Delete(id)`; `DeleteByEmail(email)` (ASCII case-fold equality) | host-chosen | none | runtime role, through the `messaging.InquiryEraser` wired as `Repositories.InquiryMaintenance` |
 | `oauth_refresh_history` | pruned by `PruneOAuth2` only past the store's reuse-detection horizon; never by erasure | — | — | — |
-| `iam_audit`, `secrets_audit` | **host-owned**: no function ships; the definer-function template in *Production database posture* is the recipe | host | host | host migration + host cron |
+| `iam_audit` | `occurred_at <=` the cutoff, oldest first by `(occurred_at, id)`, one `iam_audit_purges` evidence row per call | `authorization.WithAuditRetention`: **no default** (history is kept until set; `Register` logs `audit_retention=unbounded`); below `MinAuditRetention` (366 days) refused | **365 days**: pgx `iam_audit_retention_floor()`; turso row 1 of `iam_audit_retention.floor_days` (a footgun guard, not a control) | pgx: the runtime role calls `iam_audit_purge_before`, a migrator-owned `SECURITY DEFINER` function (`GRANT EXECUTE` it); turso: the store's capture-drop-restore transaction; both through `Mutations.ExpireAudit` over `Repositories.AuditExpiry` (authorization `0008`) |
+| `secrets_audit` | **host-owned**: no function ships; the definer-function template in *Production database posture* is the recipe | host | host | host migration + host cron |
 | `ratelimit_windows` | the pgxdb README's cron, `DELETE … WHERE expires_at < now()` | host | — | host cron |
 
 The pocket cannot see whether the host runs its maintenance, so the host says so:

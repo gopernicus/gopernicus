@@ -296,6 +296,34 @@ the age of the oldest open `accepting` invitation claim (keep authentication's
 index the expiry walks; it is admitted, not required, and the pgx store WARNs
 `index_missing=idx_iam_operations_committed` without it.
 
+### Audit retention
+
+`iam_audit` is append-only and is kept until the host opts in: there is no default retention.
+Since v0.36.0 (stores pgx v0.25.0, turso v0.24.0, migration `0008_iam_audit_retention.sql`) wire
+`Repositories.AuditExpiry` — an `audit.Expirer` over the same authority as `Audit`, requiring
+`Mutations`; the bundled SQL `Repositories` set it and the memory store exposes `AuditExpiry()` —
+set `WithAuditRetention`, and call `components.Mutations.ExpireAudit(ctx, limit)` beside
+`ExpireOperations`, until it returns less than `limit`.
+
+```go
+components, err := authorization.New(repos, // repos.AuditExpiry set by the store
+    authorization.WithAuditRetention(400*24*time.Hour), // no default; below 366 days refused
+)
+n, err := components.Mutations.ExpireAudit(ctx, 1000)
+```
+
+Each call deletes at most `limit` (clamped to 10000) records with `occurred_at` at or before now
+minus the retention, oldest first, and returns the count. The stores refuse a cutoff younger than
+their 365-day floor (`audit.ErrBelowRetentionFloor`) and append one `iam_audit_purges` row per
+call, a zero count included; `iam_audit` never takes a summary row. Without the slot
+`ExpireAudit` returns `ErrAuditExpiryNotConfigured`, without a retention
+`ErrAuditRetentionNotConfigured`; `WithAuditRetention` below 366 days is
+`ErrAuditRetentionTooShort`, and without the slot `ErrAuditRetentionWithoutExpirer`. `Register`
+logs `audit_retention` (the duration or `unbounded`); production does not WARN on an unbounded
+history. On PostgreSQL the runtime role needs `GRANT EXECUTE ON FUNCTION
+iam_audit_purge_before(pg_catalog.timestamptz, pg_catalog.int4)` and nothing on `iam_audit`.
+Export the rows below the cutoff with `Audit.List` first if they must be archived.
+
 Erasing a person in the authentication pocket leaves their facts here: list them with
 `Roles.ListRoleAssignmentsBySubject` and remove each through the role routes or
 `Mutations.UnassignRole` (*Operations runbooks*, "Erase a person").

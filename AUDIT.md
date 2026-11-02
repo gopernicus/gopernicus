@@ -6403,3 +6403,25 @@ against the live Auth emulator.
   request path never reaches a span name or attribute (tested with ids and a token in the path).
 - **Residuals (deliberate):** a misplaced `RouteNames` leaves method-only names, and over a
   handler that itself answers 404/405 it names that span `<METHOD> unmatched`. Documented.
+
+## AUDIT-071: Supported retention for `iam_audit` (#305)
+
+- **Status:** pending tag as `pockets/authorization` v0.36.0, `pockets/authorization/stores/pgx`
+  v0.25.0 and `pockets/authorization/stores/turso` v0.24.0. Record: `RELEASING.md`, "Supported
+  retention for `iam_audit` (#305)".
+- **Modules:** `pockets/authorization`, `pockets/authorization/stores/pgx`,
+  `pockets/authorization/stores/turso`; the baseline ledger copy and the `G35` allow-list.
+- **Old behavior:** `iam_audit` was append-only (0006) and the pocket shipped no purge, so a host
+  kept the history forever or deleted it outside the store contract with its own definer function.
+- **New behavior:** opt-in `Mutations.ExpireAudit` over `Repositories.AuditExpiry`, with no
+  default retention and a 366-day Go minimum over a 365-day database floor no procedure lowers.
+  pgx purges through a migrator-owned `SECURITY DEFINER` function the runtime role is granted
+  `EXECUTE` on; it keeps no `DELETE` on `iam_audit`. turso drops exactly the triggers it captured,
+  deletes and restores the captured text in one transaction, and logs ERROR
+  `rail_triggers_changed` if the set differs after COMMIT. Each call appends one row to the
+  append-only `iam_audit_purges`, a zero count included; `iam_audit` never takes a summary row
+  that a reader would decode as a tuple change.
+- **Residuals (deliberate):** the cutoff is `occurred_at`, the writer's clock, not `recorded_at`;
+  a purge leaves a `seq` gap below the oldest surviving row. No archive hook (`Audit.List` exports
+  below the cutoff first), no Go reader for `iam_audit_purges`, no per-type recording (#343,
+  #344), no `secrets_audit` retention. The turso floor is a footgun guard, not a control.

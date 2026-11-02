@@ -126,6 +126,7 @@ func Repositories(ctx context.Context, db *tursodb.DB, opts ...Option) (authoriz
 		Operations:      mutationStore,
 		OperationExpiry: mutationStore,
 		Audit:           &auditStore{db: db},
+		AuditExpiry:     &auditExpiry{db: db},
 	}
 	if source != nil {
 		repos.TupleSource = source

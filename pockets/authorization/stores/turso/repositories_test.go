@@ -3,6 +3,7 @@ package turso
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -36,6 +37,27 @@ func testRepositories(ctx context.Context, db *tursodb.DB, opts ...Option) (stor
 		}
 		if err != nil {
 			t.Fatalf("set committed_at on %q: %v", operationID, err)
+		}
+	}, SetAuditOccurredAt: func(t *testing.T, id string, occurredAt time.Time) {
+		t.Helper()
+		// The 0006 trigger refuses every UPDATE, so it is dropped and re-created
+		// around the rewrite in one transaction.
+		err := db.InTx(context.Background(), func(tx *tursodb.Tx) error {
+			if _, err := tx.Exec(context.Background(), "DROP TRIGGER IF EXISTS main.iam_audit_immutable_update"); err != nil {
+				return err
+			}
+			result, err := tx.Exec(context.Background(), "UPDATE main.iam_audit SET occurred_at=? WHERE id=?", tursodb.FormatTime(occurredAt), id)
+			if err != nil {
+				return err
+			}
+			if n, err := result.RowsAffected(); err != nil || n != 1 {
+				return fmt.Errorf("rows %d: %v", n, err)
+			}
+			_, err = tx.Exec(context.Background(), iamAuditImmutableUpdate)
+			return err
+		})
+		if err != nil {
+			t.Fatalf("set occurred_at on %q: %v", id, err)
 		}
 	}}, nil
 }

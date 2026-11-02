@@ -146,6 +146,30 @@ func (s *Service) ExpireOperations(ctx context.Context, limit int) (int, error) 
 	}
 	return s.expirer.Expire(ctx, time.Now().Add(-s.retention), limit)
 }
+
+// ExpireAudit deletes at most limit audit records that occurred at or before
+// now minus the configured audit retention, oldest first, and returns how many
+// it deleted. The store refuses a cutoff younger than its retention floor
+// (audit.ErrBelowRetentionFloor) and records one purge evidence row per call.
+// It refuses limit <= 0, an unwired expirer (ErrAuditExpiryNotConfigured) and an
+// unset retention (ErrAuditRetentionNotConfigured). The host's schedule owns
+// the cadence.
+func (s *Service) ExpireAudit(ctx context.Context, limit int) (int, error) {
+	if s == nil || s.auditExpirer == nil {
+		return 0, ErrAuditExpiryNotConfigured
+	}
+	if s.auditRetention == 0 {
+		return 0, ErrAuditRetentionNotConfigured
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("authorization: audit expiry limit must be positive, got %d: %w", limit, sdk.ErrInvalidInput)
+	}
+	return s.auditExpirer.Expire(ctx, time.Now().Add(-s.auditRetention), limit)
+}
+
 func semanticValidatorFor(model *decisions.CompiledModel) SemanticValidator {
 	if model == nil {
 		return nil

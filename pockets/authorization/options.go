@@ -19,7 +19,20 @@ var (
 	// ErrOperationRetentionWithoutExpirer is returned by New when
 	// WithOperationRetention is set without Repositories.OperationExpiry.
 	ErrOperationRetentionWithoutExpirer = mutations.ErrOperationRetentionWithoutExpirer
+	// ErrAuditRetentionTooShort is returned by New when WithAuditRetention is
+	// below MinAuditRetention.
+	ErrAuditRetentionTooShort = mutations.ErrAuditRetentionTooShort
+	// ErrAuditRetentionWithoutExpirer is returned by New when WithAuditRetention
+	// is set without Repositories.AuditExpiry.
+	ErrAuditRetentionWithoutExpirer = mutations.ErrAuditRetentionWithoutExpirer
+	// ErrAuditRetentionNotConfigured is returned by Mutations.ExpireAudit when
+	// Repositories.AuditExpiry is wired without WithAuditRetention.
+	ErrAuditRetentionNotConfigured = mutations.ErrAuditRetentionNotConfigured
 )
+
+// MinAuditRetention is the shortest WithAuditRetention New accepts: 366 days,
+// one above the bundled stores' 365-day floor.
+const MinAuditRetention = mutations.MinAuditRetention
 
 // Option configures construction. Options apply in order; each replaces its
 // complete setting or group. New validates the final settings. Nil is invalid.
@@ -122,4 +135,15 @@ func WithDecisionObserver(observer decisions.DecisionObserver) Option {
 // expired applies again.
 func WithOperationRetention(retention time.Duration) Option {
 	return func(cfg *config) { cfg.OperationRetention = retention; cfg.OperationRetentionSet = true }
+}
+
+// WithAuditRetention sets how long Mutations.ExpireAudit keeps an audit record:
+// it purges records that occurred at or before now minus retention. There is no
+// default; without it the history is kept and ExpireAudit returns
+// ErrAuditRetentionNotConfigured. New refuses a retention below
+// MinAuditRetention (ErrAuditRetentionTooShort) and one set without
+// Repositories.AuditExpiry (ErrAuditRetentionWithoutExpirer). The cutoff is the
+// record's occurred_at, the writer's clock at the write.
+func WithAuditRetention(retention time.Duration) Option {
+	return func(cfg *config) { cfg.AuditRetention = retention; cfg.AuditRetentionSet = true }
 }

@@ -634,6 +634,32 @@ permission. Bundled role handlers supply authenticated attribution themselves.
 Records use `tuple/v2`, with event grouping, source and time. Hosts own retention
 and audit access.
 
+**Retention.** History is kept until the host opts in; there is no default.
+Wire `Repositories.AuditExpiry` (an `audit.Expirer` over the same authority as
+`Audit`; the bundled SQL stores set it in `Repositories`, the memory store
+exposes `AuditExpiry()`), set `WithAuditRetention(d)`, and call
+`Components.Mutations.ExpireAudit(ctx, limit)` from the host's schedule beside
+`ExpireOperations`, repeating while it returns `limit`. It deletes at most
+`min(limit, audit.MaxExpireLimit)` (10000) records with `occurred_at` at or
+before now minus the retention, oldest first by `(occurred_at, id)`, and returns
+the count. Each store refuses a cutoff younger than its 365-day floor
+(`audit.ErrBelowRetentionFloor`); the SQL stores append one `iam_audit_purges`
+row per call, a zero count included, in the purge's own transaction, and refuse
+an ambient transaction of their own `*DB` (`ErrMutationInsideTransaction`).
+`iam_audit` itself never takes a summary row. `ExpireAudit` returns
+`ErrAuditExpiryNotConfigured` without the slot and
+`ErrAuditRetentionNotConfigured` without a retention; it refuses `limit <= 0`.
+`AuditExpiry` without `Mutations` fails construction. `WithAuditRetention` is
+refused below `MinAuditRetention`, 366 days (`ErrAuditRetentionTooShort`), and
+without `Repositories.AuditExpiry` (`ErrAuditRetentionWithoutExpirer`).
+`Register` logs `audit_retention` (the duration, or `unbounded`); an unbounded
+history is a legitimate posture and production does not WARN on it. The cutoff
+is `occurred_at`, the writing process's clock, not the database's `recorded_at`:
+a host with skewed writers purges by event time. Export below the cutoff first
+with `Audit.List` if the history must be archived. The PostgreSQL store needs
+migration `0008_iam_audit_retention.sql` and `GRANT EXECUTE` on its definer
+function; see [schema adoption](stores/UPGRADE.md).
+
 **Event ids.** One `EventID` groups the records of one write; each record `ID` is
 `<EventID>:<20-digit ordinal>`. `audit.NewRecordsWith(ctx, changes, now, ids)`
 mints the event id from `ids`; the zero `sdk.IDGenerator` selects the record

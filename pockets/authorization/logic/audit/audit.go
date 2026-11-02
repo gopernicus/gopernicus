@@ -20,6 +20,14 @@ const MaxReasonLen = 1024
 // MaxCorrelationIDLen bounds Source.RequestID and Source.TraceID in bytes.
 const MaxCorrelationIDLen = 128
 
+// MaxExpireLimit is the most records one Expirer.Expire call deletes: a larger
+// limit is clamped to it, as the bundled stores' purge clamps it.
+const MaxExpireLimit = 10000
+
+// ErrBelowRetentionFloor is returned by Expirer.Expire for a cutoff younger
+// than the store's retention floor (365 days in every bundled store).
+var ErrBelowRetentionFloor = fmt.Errorf("authorization audit: cutoff is younger than the store's retention floor: %w", sdk.ErrInvalidInput)
+
 // recordIDs is the record-class default. One shared generator keeps event IDs
 // minted in this process in mint order.
 var recordIDs = sdk.UUIDv7()
@@ -164,6 +172,19 @@ var DefaultOrder = list.NewOrder("occurred_at", list.DESC)
 // it as GET /authorization/audit only behind a host RoleRoutes.AuditGate.
 type Reader interface {
 	List(ctx context.Context, filter Filter, req list.Request) (list.Page[Record], error)
+}
+
+// Expirer deletes retained history over the same authority as the Reader. It
+// is an optional capability; hosts reach it through Mutations.ExpireAudit.
+type Expirer interface {
+	// Expire deletes at most min(limit, MaxExpireLimit) records whose
+	// occurred_at is at or before before, oldest first (occurred_at, then ID),
+	// and returns how many it deleted. A cutoff younger than the store's
+	// retention floor is ErrBelowRetentionFloor and deletes nothing; limit <= 0
+	// is sdk.ErrInvalidInput. A SQL store appends one evidence row per call that
+	// passes the floor, a zero count included, in the same transaction, and
+	// refuses an ambient transaction of its own database.
+	Expire(ctx context.Context, before time.Time, limit int) (int, error)
 }
 
 // RecordingReporter reports whether a tuple authority or mutation repository

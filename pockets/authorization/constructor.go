@@ -42,6 +42,7 @@ type Components struct {
 	log             *slog.Logger
 	posture         auditPosture
 	operationExpiry bool
+	auditRetention  string
 	integrityRules  int
 }
 
@@ -66,7 +67,7 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	for _, dep := range []struct {
 		name  string
 		value any
-	}{{"Repositories.Tuples", repos.Tuples}, {"Repositories.Mutations", repos.Mutations}, {"Repositories.Operations", repos.Operations}, {"Repositories.OperationExpiry", repos.OperationExpiry}, {"Repositories.Audit", repos.Audit}, {"Repositories.TupleSource", repos.TupleSource}, {"WithTupleCache", cfg.TupleBackend}} {
+	}{{"Repositories.Tuples", repos.Tuples}, {"Repositories.Mutations", repos.Mutations}, {"Repositories.Operations", repos.Operations}, {"Repositories.OperationExpiry", repos.OperationExpiry}, {"Repositories.AuditExpiry", repos.AuditExpiry}, {"Repositories.Audit", repos.Audit}, {"Repositories.TupleSource", repos.TupleSource}, {"WithTupleCache", cfg.TupleBackend}} {
 		if isTypedNil(dep.value) {
 			return Components{}, fmt.Errorf("authorization: %s is typed nil: %w", dep.name, sdk.ErrInvalidInput)
 		}
@@ -83,6 +84,12 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	if cfg.OperationRetentionSet && repos.OperationExpiry == nil {
 		return Components{}, ErrOperationRetentionWithoutExpirer
 	}
+	if repos.AuditExpiry != nil && repos.Mutations == nil {
+		return Components{}, fmt.Errorf("authorization: Repositories.AuditExpiry requires Repositories.Mutations: %w", sdk.ErrInvalidInput)
+	}
+	if cfg.AuditRetentionSet && repos.AuditExpiry == nil {
+		return Components{}, ErrAuditRetentionWithoutExpirer
+	}
 	if cfg.RoleRoutesGate != nil && repos.Mutations == nil {
 		return Components{}, authorizationhttp.ErrRoleRoutesWithoutMutations
 	}
@@ -94,7 +101,10 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 		return Components{}, err
 	}
 	posture.observed = cfg.DecisionObserver != nil
-	comps := Components{Audit: repos.Audit, log: cfg.Logger, posture: posture, operationExpiry: repos.OperationExpiry != nil}
+	comps := Components{Audit: repos.Audit, log: cfg.Logger, posture: posture, operationExpiry: repos.OperationExpiry != nil, auditRetention: "unbounded"}
+	if cfg.AuditRetentionSet {
+		comps.auditRetention = cfg.AuditRetention.String()
+	}
 	if comps.log == nil {
 		comps.log = slog.Default()
 	}
@@ -140,9 +150,12 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	}
 	comps.Relationships, comps.RelationshipWriter = parts.Service, parts.RelationshipWriter
 	if repos.Mutations != nil {
-		mutationOptions := []mutations.Option{mutations.WithModel(comps.Decisions.CompiledModel()), mutations.WithLimits(cfg.Limits), mutations.WithLogger(comps.log), mutations.WithLedger(repos.Operations), mutations.WithOperationExpiry(repos.OperationExpiry)}
+		mutationOptions := []mutations.Option{mutations.WithModel(comps.Decisions.CompiledModel()), mutations.WithLimits(cfg.Limits), mutations.WithLogger(comps.log), mutations.WithLedger(repos.Operations), mutations.WithOperationExpiry(repos.OperationExpiry), mutations.WithAuditExpiry(repos.AuditExpiry)}
 		if cfg.OperationRetentionSet {
 			mutationOptions = append(mutationOptions, mutations.WithOperationRetention(cfg.OperationRetention))
+		}
+		if cfg.AuditRetentionSet {
+			mutationOptions = append(mutationOptions, mutations.WithAuditRetention(cfg.AuditRetention))
 		}
 		comps.Mutations, err = mutations.NewService(repos.Mutations, mutationOptions...)
 		if err != nil {
@@ -185,7 +198,7 @@ func (c Components) Register(m pockets.Mount) error {
 	if c.HTTP == nil {
 		return fmt.Errorf("authorization: components are not initialized: %w", sdk.ErrInvalidInput)
 	}
-	c.log.Info("registered authorization pocket", "relationships", c.Relationships != nil, "roles", c.Roles != nil, "model", c.Decisions.CompiledModel() != nil, "baseline_relationship_writes", c.RelationshipWriter != nil, "role_routes", c.HTTP.RoutesEnabled(), "audit_read_route", c.HTTP.AuditRouteEnabled(), "integrity_rules", c.integrityRules, "audit_recording", c.posture.recording, "audit_reader", c.Audit != nil, "decision_observer", c.posture.observed, "operation_expiry", c.operationExpiry, "runtime_mode", c.posture.mode.String())
+	c.log.Info("registered authorization pocket", "relationships", c.Relationships != nil, "roles", c.Roles != nil, "model", c.Decisions.CompiledModel() != nil, "baseline_relationship_writes", c.RelationshipWriter != nil, "role_routes", c.HTTP.RoutesEnabled(), "audit_read_route", c.HTTP.AuditRouteEnabled(), "integrity_rules", c.integrityRules, "audit_recording", c.posture.recording, "audit_reader", c.Audit != nil, "decision_observer", c.posture.observed, "operation_expiry", c.operationExpiry, "audit_retention", c.auditRetention, "runtime_mode", c.posture.mode.String())
 	return c.HTTP.Register(m.Router)
 }
 
