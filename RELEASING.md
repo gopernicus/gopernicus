@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## Pool statistics and SQL statement spans (#348, #349 — integrations/datastores/pgxdb v0.20.0, integrations/tracing/otel v0.7.0)
+## Pool statistics and SQL statement spans (#348, #349 — integrations/datastores/pgxdb v0.20.0, integrations/tracing/otel v0.7.0 — published 2026-11-02)
 
-**Status: pending merge and tag.** **MINOR, additive, opt-in.** Split from #309.
+**Status: released.** **MINOR, additive, opt-in.** Split from #309.
 
 - **pgxdb `(*DB).Stats() PoolStats`:** pool statistics as a pgxdb-owned value (connections,
   cumulative acquires and wait time, churn), safe after `Close`. Replaces hosts reading
@@ -17,6 +17,17 @@
   `sdk.TraceIDFromContext`.
 
 Independent releases: pgxdb works with today's otel through the fallback. No sdk change. AUDIT-072.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `integrations/tracing/otel/v0.7.0` | `c1698fd2` → `3961ac33` | #351 | — (no store) | OK at the sdk floor (v0.18.0): `HasActiveSpan` false bare, true inside a span |
+| 1 | `integrations/datastores/pgxdb/v0.20.0` | `b69c51eb` → `3961ac33` | #351 | 41514496001 @ `3961ac33` | OK; MVS selects sdk v0.25.0; `SpanTracer` is a query and batch tracer; nil `Stats` is zero |
+
+Annotated, not signed. No example repin (additive, opt-in). **Run and look.** `otel.Middleware` +
+`RouteNames()` + `pgxdb.NewSpanTracer(otelTracer)` on PostgreSQL 18, stdout exporter: `GET
+/members/{id}` had two `SELECT` children parented to it with `$1` in `db.query.text`; the ping and
+pgxdb's own `Open` checks made no spans; `u_secret_123` (path and bind argument) appeared nowhere
+in the export; `Stats` acquires 3 → 5, 0 acquired after.
 
 ## Supported retention for `iam_audit` (#305 — pockets/authorization v0.36.0, stores pgx v0.25.0, turso v0.24.0 — published 2026-11-02)
 

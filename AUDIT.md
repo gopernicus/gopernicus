@@ -6429,9 +6429,9 @@ against the live Auth emulator.
 
 ## AUDIT-072: Pool statistics and SQL statement spans (#348, #349)
 
-- **Status:** pending tag as `integrations/datastores/pgxdb` v0.20.0 and
-  `integrations/tracing/otel` v0.7.0. Record: `RELEASING.md`, "Pool statistics and SQL statement
-  spans (#348, #349)".
+- **Status:** released as `integrations/datastores/pgxdb` v0.20.0 (`b69c51eb`) and
+  `integrations/tracing/otel` v0.7.0 (`c1698fd2`), both → `3961ac33` (#351). Record:
+  `RELEASING.md`, "Pool statistics and SQL statement spans (#348, #349 — published 2026-11-02)".
 - **Modules:** `integrations/datastores/pgxdb`, `integrations/tracing/otel`. No sdk change.
 - **Old behavior:** no SQL spans upstream; hosts ran their own OpenTelemetry query tracer.
   Pool statistics only through `Underlying()`.
