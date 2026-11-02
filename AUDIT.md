@@ -6391,8 +6391,9 @@ against the live Auth emulator.
 
 ## AUDIT-070: Route-pattern span names under a global Use (#308)
 
-- **Status:** pending tag as `integrations/tracing/otel` v0.6.0. Record: `RELEASING.md`,
-  "Route-pattern span names under a global Use (#308)".
+- **Status:** released as `integrations/tracing/otel` v0.6.0 (tag object `bb863138` → `d7c7002d`,
+  #341). Record: `RELEASING.md`, "Route-pattern span names under a global Use (#308 — published
+  2026-11-02)".
 - **Modules:** `integrations/tracing/otel`. No sdk or `web` change.
 - **Old behavior:** a globally mounted `otel.Middleware` named every server span by method
   alone (the mux had not matched yet, and its pattern lands only on the request it receives);
