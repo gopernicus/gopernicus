@@ -6464,8 +6464,8 @@ against the live Auth emulator.
 
 ## AUDIT-074: An sdk metrics port (#350, part 2)
 
-- **Status:** pending tag as `sdk` v0.28.0 (otel v0.9.0 and pgxdb v0.21.0 follow). Record:
-  `RELEASING.md`, "An sdk metrics port (#350, part 2)".
+- **Status:** `sdk` v0.28.0 released (`28f0a1cf` → `a0d012fa`, #355); otel v0.9.0 and pgxdb
+  v0.21.0 pending tag. Record: `RELEASING.md`, "An sdk metrics port (#350, part 2)".
 - **Modules:** `sdk` (new `capabilities/metrics`); then `integrations/tracing/otel`,
   `integrations/datastores/pgxdb`.
 - **Old behavior:** no metrics vocabulary; hosts built meter providers and HTTP metrics

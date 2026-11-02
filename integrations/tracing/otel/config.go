@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
@@ -19,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	stdouttrace "go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	otellog "go.opentelemetry.io/otel/log"
+	otelmetric "go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -117,6 +119,14 @@ type Config struct {
 	// Stdout is the destination for ExporterStdout. Nil defaults to os.Stdout;
 	// tests can redirect it to a buffer.
 	Stdout io.Writer
+
+	// MeterProvider is the caller-supplied meter provider OpenMetrics adapts
+	// in ExporterProvider mode; required there, ignored otherwise. Its
+	// lifecycle stays the caller's.
+	MeterProvider otelmetric.MeterProvider
+	// MetricInterval is how often OpenMetrics' periodic reader collects and
+	// exports. Zero means 60s; negative is refused.
+	MetricInterval time.Duration `env:"TRACING_METRIC_INTERVAL" default:"60s"`
 
 	// LoggerProvider is the caller-supplied log provider OpenLogs adapts in
 	// ExporterProvider mode; required there, ignored otherwise. Its lifecycle

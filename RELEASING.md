@@ -1,16 +1,27 @@
 # Releasing gopernicus modules
 
-## An sdk metrics port (#350, part 2 — sdk v0.28.0; otel v0.9.0 and pgxdb v0.21.0 follow)
+## An sdk metrics port (#350, part 2 — sdk v0.28.0, otel v0.9.0, pgxdb v0.21.0)
 
-**Status: pending merge and tag.** **MINOR, additive.** `sdk/capabilities/metrics`: a `Meter`
+**Status: sdk v0.28.0 released; otel v0.9.0 and pgxdb v0.21.0 pending merge and tag.** **MINOR, additive.** `sdk/capabilities/metrics`: a `Meter`
 creating a monotonic int64 `Counter`, a float64 `Histogram` and an observable `Gauge` (callback
 plus unregister), `Spec{Name, Description, Unit}`, its own string `Attribute`, and a `Noop`
 default. Stdlib-only, the sibling of `capabilities/tracing`. The package doc makes attribute
 cardinality the caller's contract (bounded values only, never ids, paths or error text).
 
-This step adds a package and nothing else. otel (`OpenMetrics`, HTTP request metrics on
-`otel.Middleware`) and pgxdb (`RegisterPoolMetrics`) follow once sdk v0.28.0 is tagged.
+- **otel v0.9.0** (requires sdk v0.28.0; its floor moves from v0.18.0): `OpenMetrics(ctx, Config)`
+  implements the port with the same `Config`, validation, posture and env isolation as traces and
+  logs (OTLP/HTTP to `<Endpoint>/v1/metrics`; provider mode via `Config.MeterProvider`), on a
+  periodic reader every `Config.MetricInterval` (`TRACING_METRIC_INTERVAL`, 60s). `HTTPConfig.Meter`
+  makes `otel.Middleware` record `http.server.request.duration` with only `http.request.method`,
+  `http.route` (template or `unmatched`) and the status class.
+- **pgxdb v0.21.0** (requires sdk v0.28.0): `(*DB).RegisterPoolMetrics(meter,
+  PoolMetricsConfig{PoolName})` registers ten `db.client.connection.*` gauges from `Stats()`.
+
 AUDIT-074.
+
+| Step | Tag | Tag object → commit | PR | Cold verification |
+|---|---|---|---|---|
+| 1 | `sdk/v0.28.0` | `28f0a1cf` → `a0d012fa` | #355 | OK; `metrics.Noop` counter and gauge resolve and run |
 
 ## Logs over OTLP beside traces (#350, part 1 — integrations/tracing/otel v0.8.0 — published 2026-11-02)
 
