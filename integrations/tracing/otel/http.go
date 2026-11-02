@@ -7,12 +7,14 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
+	"github.com/gopernicus/gopernicus/sdk/capabilities/metrics"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/tracing"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -24,6 +26,22 @@ type HTTPConfig struct {
 	// False ignores these headers and retains any existing local context parent.
 	// Baggage is never extracted by this middleware.
 	TrustTraceContext bool
+
+	// Meter, when set, records http.server.request.duration (seconds) for
+	// every request as its span finishes. Its attributes come from a fixed
+	// allowlist: http.request.method (bounded; _OTHER otherwise), http.route
+	// (the matched template from RouteNames, "unmatched" for a 404/405 the mux
+	// matched nothing for, absent when no route is known) and
+	// http.response.status_code as a class ("2xx" … "5xx"). Never the path,
+	// query, user agent or peer address. Nil records no metrics.
+	Meter metrics.Meter
+}
+
+// requestDurationSpec is the HTTP server duration histogram's spec.
+var requestDurationSpec = metrics.Spec{
+	Name:        "http.server.request.duration",
+	Description: "Duration of HTTP server requests.",
+	Unit:        "s",
 }
 
 // Middleware starts server spans with current typed HTTP attributes and reuses
@@ -36,7 +54,11 @@ func Middleware(t *Tracer, cfg HTTPConfig) web.Middleware {
 	if t == nil {
 		return tracing.Middleware(nil)
 	}
-	return tracing.Middleware(serverTracer{Tracer: t, config: cfg})
+	st := serverTracer{Tracer: t, config: cfg}
+	if cfg.Meter != nil {
+		st.duration = cfg.Meter.Histogram(requestDurationSpec)
+	}
+	return tracing.Middleware(st)
 }
 
 // RouteNames records the route the mux matched so Middleware can name its span
@@ -90,6 +112,8 @@ func routeFromPattern(pattern string) string {
 type serverTracer struct {
 	*Tracer
 	config HTTPConfig
+	// duration is the request-duration histogram when config.Meter is set.
+	duration metrics.Histogram
 }
 
 var _ tracing.HTTPTracer = serverTracer{}
@@ -137,7 +161,8 @@ func (t serverTracer) StartHTTPSpan(r *http.Request) (context.Context, tracing.S
 	ctx, span := t.tracer.Start(ctx, name, oteltrace.WithSpanKind(oteltrace.SpanKindServer), oteltrace.WithAttributes(attrs...))
 	slot := &routeSlot{}
 	ctx = context.WithValue(ctx, routeSlotKey{}, slot)
-	return ctx, &httpSpanFinisher{spanFinisher: &spanFinisher{span: span, recordErrorText: t.recordErrorText}, prefix: prefix, slot: slot}
+	return ctx, &httpSpanFinisher{spanFinisher: &spanFinisher{span: span, recordErrorText: t.recordErrorText}, prefix: prefix, slot: slot,
+		method: method, startRoute: route, duration: t.duration, ctx: ctx, started: time.Now()}
 }
 
 type httpSpanFinisher struct {
@@ -147,6 +172,14 @@ type httpSpanFinisher struct {
 	// slot is filled by RouteNames; status is the recorded response status.
 	slot   *routeSlot
 	status int
+
+	// method, startRoute, duration, ctx and started feed the request-duration
+	// histogram (nil duration: no metrics).
+	method     string
+	startRoute string
+	duration   metrics.Histogram
+	ctx        context.Context
+	started    time.Time
 }
 
 var _ tracing.HTTPSpan = (*httpSpanFinisher)(nil)
@@ -161,15 +194,35 @@ func (f *httpSpanFinisher) SetHTTPStatus(status int) {
 // "<prefix> unmatched". No pattern with any other status means RouteNames was
 // not directly on the mux, so the start-time name stays.
 func (f *httpSpanFinisher) Finish() {
+	route := f.startRoute
 	if f.slot != nil && f.slot.seen {
-		if route := routeFromPattern(f.slot.pattern); route != "" {
+		if matched := routeFromPattern(f.slot.pattern); matched != "" {
+			route = matched
 			f.span.SetName(f.prefix + " " + route)
 			f.span.SetAttributes(semconv.HTTPRoute(route))
 		} else if f.status == http.StatusNotFound || f.status == http.StatusMethodNotAllowed {
+			route = "unmatched"
 			f.span.SetName(f.prefix + " unmatched")
 		}
 	}
+	f.recordDuration(route)
 	f.spanFinisher.Finish()
+}
+
+// recordDuration records the request on the duration histogram with the
+// allowlisted attributes only.
+func (f *httpSpanFinisher) recordDuration(route string) {
+	if f.duration == nil {
+		return
+	}
+	attrs := []metrics.Attribute{metrics.StringAttribute("http.request.method", f.method)}
+	if route != "" {
+		attrs = append(attrs, metrics.StringAttribute("http.route", route))
+	}
+	if f.status >= 100 && f.status < 600 {
+		attrs = append(attrs, metrics.StringAttribute("http.response.status_code", strconv.Itoa(f.status/100)+"xx"))
+	}
+	f.duration.Record(f.ctx, time.Since(f.started).Seconds(), attrs...)
 }
 
 // Automatic middleware errors use a fixed category; arbitrary error text is not

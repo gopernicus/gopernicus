@@ -157,6 +157,33 @@ interval, each line carrying `suppressed=<n>`. Pass the console logger, not the 
 `ForceFlush` and `Shutdown` return their export errors to the caller instead. The handler is
 process-wide; `restore` reinstates the previous one.
 
+## Metrics — `OpenMetrics`
+
+`otel.OpenMetrics(ctx, cfg)` returns a `*Metrics` that implements the sdk port
+`sdk/capabilities/metrics.Meter` (`Counter`, `Histogram`, observable `Gauge`). It takes the same
+`Config` as `Open` and `OpenLogs` (OTLP/HTTP sends to `<Endpoint>/v1/metrics`; provider mode adapts
+`Config.MeterProvider`) and exports on a periodic reader every `Config.MetricInterval`
+(`TRACING_METRIC_INTERVAL`, 60s when zero). An instrument with an empty name, or one OpenTelemetry
+refuses, is a no-op plus one WARN, never a panic.
+
+### HTTP request metrics
+
+Set `HTTPConfig.Meter` and `otel.Middleware` records `http.server.request.duration` (seconds) as
+each request's span finishes. Its count is the request rate. Attributes come from a fixed allowlist:
+
+| attribute | value |
+|---|---|
+| `http.request.method` | the method, `_OTHER` outside the known set |
+| `http.route` | the matched template (needs `RouteNames()` last), `unmatched` for a 404/405 the mux matched nothing for, absent when no route is known |
+| `http.response.status_code` | the class: `2xx`, `3xx`, `4xx`, `5xx` |
+
+Never the path, query, user agent or peer address.
+
+```go
+m, err := otel.OpenMetrics(ctx, cfg)
+router.Use(otel.Middleware(tracer, otel.HTTPConfig{Meter: m}), web.Logger(log), web.Panics(log), otel.RouteNames())
+```
+
 ## Child-only consumers — `HasActiveSpan`
 
 `(*Tracer).HasActiveSpan(ctx)` reports whether the context carries a valid span.

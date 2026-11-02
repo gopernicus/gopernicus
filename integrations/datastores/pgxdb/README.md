@@ -392,6 +392,7 @@ the raw driver error sees the sentinel now.
 | `MultiQueryTracer` / `NewMultiQueryTracer` | fans a query trace out to several `pgx.QueryTracer`s (pgx accepts only one), and batch traces to those that are `pgx.BatchTracer`s |
 | `SpanTracer` / `NewSpanTracer(tracer, SpanTracerConfig{OmitQueryText})` | child-only SQL statement spans through any sdk `tracing.Tracer`; no bind arguments, no error text (see "SQL statement spans") |
 | `(*DB).Stats() PoolStats` | pool statistics as a pgxdb-owned value (see "Pool statistics") |
+| `(*DB).RegisterPoolMetrics(meter, PoolMetricsConfig{PoolName})` | `Stats()` as observable gauges on an sdk `metrics.Meter` (see "Pool metrics") |
 | `PrettyPrintSQL(sql) string` | whitespace-normalizes SQL for log lines |
 
 ## The list toolkit — `List[T]` over `ListQuery[T]`
@@ -1004,6 +1005,18 @@ forwards batches too.
 - **Failures.** Only `db.response.status_code` (the SQLSTATE) and
   `db.postgresql.constraint`, and a fixed `sql error <SQLSTATE>` (or `sql
   canceled`) recorded error, never the driver's message, which can repeat values.
+
+## Pool metrics — `RegisterPoolMetrics`
+
+`unregister, err := db.RegisterPoolMetrics(meter, pgxdb.PoolMetricsConfig{PoolName: "primary"})`
+registers `Stats()` as observable gauges on any `sdk/capabilities/metrics.Meter`, read only when
+the meter collects: `db.client.connection.count` (`db.client.connection.state=idle|used`), `.max`,
+`.constructing`, and cumulative `.acquire.count`, `.acquire.canceled`, `.acquire.empty`,
+`.acquire.duration`, `.wait.duration`, `.create.count` and `.destroy.count`
+(`reason=max_lifetime|max_idle`). Every gauge carries `db.system.name=postgresql` and, when set,
+`db.client.connection.pool.name`, which must be a fixed name, never a DSN or host. Cumulative values
+are gauges (the port has no observable counter); a backend's `rate()` gives the per-second rate. A
+failed registration unregisters the gauges already registered.
 
 ## Pool statistics — `Stats()`
 
