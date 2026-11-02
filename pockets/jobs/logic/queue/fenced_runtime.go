@@ -174,6 +174,7 @@ func NewFencedRuntime(svc *Service, inputHandlers map[string]FencedHandlerFunc, 
 		workers.WithName("fenced-delivery"),
 		workers.WithWorkerCount(workerCount),
 		workers.WithPollInterval(cfg.PollInterval),
+		workers.WithDrainBacklog(true),
 		workers.WithIdleInterval(cfg.IdleInterval),
 		workers.WithLogger(logger),
 	)

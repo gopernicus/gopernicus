@@ -67,7 +67,9 @@ type DeadLetterFunc func(ctx context.Context, j Job) error
 // FencedRuntimePolicy controls pool sizing, leases, shutdown drain and retry
 // timing. Nonpositive sizing fields select defaults. A positive ProcessTimeout
 // must be shorter than the resolved LeaseFor. Backoff nil selects a capped
-// exponential.
+// exponential. The pool drains a backlog: after a claim settles the worker
+// claims the next at once, so PollInterval is the wait after an error and
+// IdleInterval the wait after an empty claim.
 //
 // DrainTimeout bounds how long Run keeps in-flight claims going after its ctx
 // is cancelled. Zero selects the resolved LeaseFor. Negative disables the

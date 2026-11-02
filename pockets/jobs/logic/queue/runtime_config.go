@@ -15,6 +15,9 @@ type HandlerFunc func(ctx context.Context, j Job) error
 
 // RuntimePolicy controls the ordinary queue pool and its optional scheduler.
 // Nonpositive Workers selects four workers; zero cadence values select pool defaults.
+// Pools drain a backlog (workers.WithDrainBacklog): after a job settles the
+// worker claims the next at once, so PollInterval is the wait after an error
+// and IdleInterval the wait after an empty claim.
 //
 // Heartbeat zero disables liveness logging.
 type RuntimePolicy struct {
