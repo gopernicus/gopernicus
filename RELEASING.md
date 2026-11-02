@@ -15,7 +15,8 @@ gateway:
 - No `OTEL_EXPORTER_OTLP_*` variable applies: every option is set explicitly.
 - New dependency: `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp` v1.45.0.
 
-Existing exporters are unchanged. No sdk change. AUDIT-067.
+Existing exporters are unchanged. **The module now requires sdk v0.18.0** (was v0.9.0), the
+first release with root `sdk.Secret`; a host on an older sdk moves up to it. AUDIT-067.
 
 ## Global revoke-all runs as a job; the route is removed (#236 — pockets/authentication v0.42.0 — published 2026-11-01)
 

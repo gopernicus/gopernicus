@@ -6341,7 +6341,9 @@ against the live Auth emulator.
 - **Status:** pending tag as `integrations/tracing/otel` v0.5.0. Record: `RELEASING.md`,
   "OTLP/HTTP exporter with secret headers (#307)".
 - **Modules:** `integrations/tracing/otel`. New dependency `otlptracehttp` v1.45.0, a companion
-  of the OpenTelemetry family the module already isolates (G13 holds).
+  of the OpenTelemetry family the module already isolates (G13 holds). The `sdk` requirement
+  rises from v0.9.0 to v0.18.0 (root `sdk.Secret`). #334 merged with the stale v0.9.0 floor;
+  `make check` builds through `go.work`, so only a `GOWORK=off` build caught it, before the tag.
 - **Old behavior:** stdout and OTLP/gRPC only. A host exporting to an authenticated OTLP/HTTP
   gateway built its own `TracerProvider` (no posture checks) or let the SDK read
   `OTEL_EXPORTER_OTLP_HEADERS` as a plain environment string.
