@@ -4,8 +4,8 @@ go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.19.0
-	github.com/gopernicus/gopernicus/pockets/authorization v0.34.0
-	github.com/gopernicus/gopernicus/sdk v0.25.0
+	github.com/gopernicus/gopernicus/pockets/authorization v0.36.0
+	github.com/gopernicus/gopernicus/sdk v0.26.0
 	github.com/jackc/pgx/v5 v5.9.2
 )
 
