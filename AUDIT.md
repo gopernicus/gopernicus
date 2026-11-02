@@ -6313,8 +6313,9 @@ against the live Auth emulator.
 
 ## AUDIT-066: Global revoke-all runs as a job; the HTTP route is removed (#236)
 
-- **Status:** pending tag as `pockets/authentication` v0.42.0. Record: `RELEASING.md`, "Global
-  revoke-all runs as a job; the route is removed (#236)".
+- **Status:** released as `pockets/authentication` v0.42.0 (tag object `c944fbe0` → `84f50fce`,
+  #332). Record: `RELEASING.md`, "Global revoke-all runs as a job; the route is removed (#236 —
+  published 2026-11-01)".
 - **Modules:** `pockets/authentication`. No store, port or migration change.
 - **Old behavior:** `POST /auth/admin/sessions/revoke-all` ran `RevokeAllSessions` detached
   from the request with a 10-minute limit. A run longer than the host server's write timeout

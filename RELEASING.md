@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## Global revoke-all runs as a job; the route is removed (#236 — pockets/authentication v0.42.0)
+## Global revoke-all runs as a job; the route is removed (#236 — pockets/authentication v0.42.0 — published 2026-11-01)
 
-**Status: pending merge and tag.** **MINOR, BREAKING for hosts that mounted the route.** A
+**Status: released.** **MINOR, BREAKING for hosts that mounted the route.** A
 fleet-wide revoke takes minutes, longer than a server `WRITE_TIMEOUT` (15 s by default), so
 `POST /auth/admin/sessions/revoke-all` finished its run but its answer (the counts and the
 cookie-clearing `Set-Cookie`) never reached the client. The route is gone; the revoke runs as a
@@ -30,6 +30,20 @@ own check and MFA and answers 202. Or call `RevokeAllSessions` from a one-shot c
 outcomes from `GET /auth/admin/security-events?event_type=all_sessions_revoked_global`.
 
 No store, migration, sdk or views change. AUDIT-066.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/authentication/v0.42.0` | `c944fbe0` → `84f50fce` | #332 | 41386327059 @ `84f50fce` | OK; MVS selects sdk v0.24.0 |
+| — | none | — | PR-2 (#333): auth-cms, external-identity, production-baseline repin | — | each builds, vets and tests with `GOWORK=off` |
+
+Annotated, not signed. Confirmed on origin and on the proxy. The authentication turso legs
+(`-tags=integration`) also passed locally against libsql (`http://127.0.0.1:8081`); CI skips them.
+
+**Run and look (auth-cms).** `POST /auth/admin/sessions/revoke-all` answers 401 on a `main`
+build before #332 and 404 on v0.42.0 (`/auth/admin/users` stays 401). End to end, on the host's
+real auth wiring with the handler on a `pockets/jobs` memory queue and runtime
+(`MaxAttempts: 1`): two signed-in users went from `/auth/me` 200 to 401 with zero sessions, and
+the rail holds `started` + `success` (`users:2 sessions:2`) attributed to `system:incident-cli`.
 
 ## Pools drain a backlog; jobs takes the host logger (#230 — sdk v0.27.0, then pockets/jobs v0.10.0)
 
