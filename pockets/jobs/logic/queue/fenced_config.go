@@ -32,6 +32,10 @@ const (
 // payload under the current claim's fence (execution + lease); a stale/superseded claim's checkpoint fails
 // and the handler MUST NOT perform its side effect.
 type FencedClaim struct {
+	// Kind is the claimed job's kind: the key the runtime selected the handler
+	// by. It is a bounded, host-registered value, so job middleware may use it
+	// as a span name or a metric label.
+	Kind        string
 	ExecutionID string
 	LeaseID     string
 	Payload     json.RawMessage

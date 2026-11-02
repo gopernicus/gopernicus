@@ -125,6 +125,7 @@ func NewFencedRuntime(svc *Service, inputHandlers map[string]FencedHandlerFunc, 
 			defer cancel()
 		}
 		claim := FencedClaim{
+			Kind:        j.Kind,
 			ExecutionID: j.JobID,
 			LeaseID:     j.LeaseID,
 			Payload:     j.Payload,

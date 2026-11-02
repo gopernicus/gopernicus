@@ -248,6 +248,12 @@ scheduler. Hosts still decide whether to wire scheduling. A worker gate returns
 job middleware; ordinary runtime drain detaches cancellation inside worker
 middleware. Existing `HandlerFunc` wrappers continue to work.
 
+Job middleware sees the job's kind: `Job.Kind` on the ordinary runtime and
+`FencedClaim.Kind` on the fenced one (since v0.11.0). Kinds are bounded,
+host-registered values, so a tracing or metrics middleware can name a span
+`job <kind>` and label by kind, including for handlers a pocket builds itself
+(authentication's delivery kind).
+
 For example, a fenced job gate can inspect the claim's host-defined tenant:
 
 ```go

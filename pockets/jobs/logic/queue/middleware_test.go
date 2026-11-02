@@ -142,3 +142,54 @@ func TestFencedRuntimeJobGateRefundsClaimAttempt(t *testing.T) {
 		}
 	})
 }
+
+// TestFencedClaimCarriesKind: with two kinds on one fenced runtime, job
+// middleware and each handler see the claimed job's kind (#311).
+func TestFencedClaimCarriesKind(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		svc, _ := newFencedService(t)
+		for _, kind := range []string{"alpha", "beta"} {
+			if _, err := svc.Queue.EnqueueOnceIn(context.Background(), queueapi.EnqueueOnceInput{Kind: kind, LogicalKey: "key-" + kind, Payload: []byte{1}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		seen := make(chan string, 2)
+		record := func(next workers.ProcessFunc[queueapi.FencedClaim]) workers.ProcessFunc[queueapi.FencedClaim] {
+			return func(ctx context.Context, c queueapi.FencedClaim) error {
+				seen <- c.Kind
+				return next(ctx, c)
+			}
+		}
+		handled := make(chan [2]string, 2)
+		handler := func(registered string) queueapi.FencedHandlerFunc {
+			return func(_ context.Context, c queueapi.FencedClaim) error {
+				handled <- [2]string{registered, c.Kind}
+				return nil
+			}
+		}
+		rt, err := queueapi.NewFencedRuntime(svc.Queue, map[string]queueapi.FencedHandlerFunc{"alpha": handler("alpha"), "beta": handler("beta")},
+			queueapi.WithFencedRuntimePolicy(queueapi.FencedRuntimePolicy{Workers: 1, PollInterval: 10 * time.Millisecond, IdleInterval: 10 * time.Millisecond}),
+			queueapi.WithFencedRuntimeLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+			queueapi.WithFencedJobMiddleware(record))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- rt.Run(ctx) }()
+		kinds := map[string]bool{}
+		for range 2 {
+			kinds[<-seen] = true
+			if h := <-handled; h[0] != h[1] {
+				t.Errorf("handler %q got claim kind %q", h[0], h[1])
+			}
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if !kinds["alpha"] || !kinds["beta"] {
+			t.Fatalf("middleware saw kinds %v, want alpha and beta", kinds)
+		}
+	})
+}
