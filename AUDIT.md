@@ -6370,3 +6370,20 @@ against the live Auth emulator.
 - **New behavior:** `FencedClaim.Kind` is the claimed job's kind, set by the runtime from the job
   it dispatched on. It is a host-registered, bounded value; it carries no payload data.
 - **Residuals:** none.
+
+## AUDIT-069: A REPEATABLE READ transaction that applies settings (#306)
+
+- **Status:** pending tag as `integrations/datastores/pgxdb` v0.19.0. Record: `RELEASING.md`, "A
+  REPEATABLE READ transaction that applies settings (#306)".
+- **Modules:** `integrations/datastores/pgxdb`. Docs only in `pockets/authorization/stores/pgx`
+  and the row-level-security guide.
+- **Old behavior:** `TransactWithSettings` (READ COMMITTED) was the only way to bind a tenant
+  setting; `TransactSnapshot` took none. A tenant-scoped workflow reading authorization grants
+  hit `tuples.ErrSnapshotIsolation`, so hosts read grants before the transaction and accepted a
+  race window between the read and the write.
+- **New behavior:** `TransactSnapshotWithSettings` applies the settings first inside a
+  REPEATABLE READ transaction. The settings guardrails (validated before any connection, bound
+  values, transaction-local, never reach another pool borrower) are shared code with
+  `TransactWithSettings`, and the no-leak live legs run over both.
+- **Residuals (deliberate):** no automatic retry on 40001; callers own it, as with
+  `TransactSnapshot`. No SERIALIZABLE variant (none asked for).
