@@ -723,6 +723,9 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 		pool := workers.NewPool(poller.Poll,
 			workers.WithName("outbox-poller"),
 			workers.WithWakeChannel(wake),
+			// A non-empty batch polls again at once instead of waiting PollInterval;
+			// Poll returns ErrNoWork for an empty batch, so idle stays idle.
+			workers.WithDrainBacklog(true),
 			workers.WithLogger(log),
 		)
 		var poolCtx context.Context
