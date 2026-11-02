@@ -6310,3 +6310,27 @@ against the live Auth emulator.
   account, subject status); no read cache. Several instances can write `last_used_at` out of
   order within an interval (last write wins). No per-key request counts (owner ruling: a later
   add-on if a host asks).
+
+## AUDIT-066: Global revoke-all runs as a job; the HTTP route is removed (#236)
+
+- **Status:** pending tag as `pockets/authentication` v0.42.0. Record: `RELEASING.md`, "Global
+  revoke-all runs as a job; the route is removed (#236)".
+- **Modules:** `pockets/authentication`. No store, port or migration change.
+- **Old behavior:** `POST /auth/admin/sessions/revoke-all` ran `RevokeAllSessions` detached
+  from the request with a 10-minute limit. A run longer than the host server's write timeout
+  (15 s by default) completed, but its response never reached the client, so an admin could be
+  told nobody was signed out when everyone was, and the once-a-minute budget blocked the retry.
+- **New behavior:**
+  - No route. `Service.RevokeAllSessionsJobHandler()` handles the job kind
+    `authentication.revoke_all_sessions`. Its payload `{"actor_type","actor_id"}` names the
+    actor on the evidence rows. A malformed payload, an unknown field or an empty actor →
+    `ErrRevokeAllSessionsJobInvalid`, with no run and no rows. The run has a 10-minute limit.
+  - The handler is trusted: whoever enqueues the job owns authorization and MFA. The pocket
+    documents one attempt per enqueue (a retry would sign the fleet out again).
+  - `RevokeAllSessions` and its `all_sessions_revoked_global` started/success/failure rows are
+    unchanged and remain the outcome record.
+- **Migration:** hosts drop `AdministrationConfig.GlobalSessionRevocationRoute` and
+  `UserAdminRevokeAllSessions`, then register the handler or keep a one-shot command.
+- **Residuals (deliberate):** the pocket enforces neither the single attempt (it imports no jobs
+  implementation) nor a per-actor budget; both are the trigger's. No status read-back seam:
+  the evidence rows are the record.

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/apikey"
@@ -29,6 +30,14 @@ type recordingRegistrar struct{ routes []registeredRoute }
 func (r *recordingRegistrar) Handle(method, path string, _ http.HandlerFunc, middleware ...web.Middleware) {
 	r.routes = append(r.routes, registeredRoute{method: method, path: path, middleware: middleware})
 }
+
+// noopGlobalRevoker wires the service's global revocation into the fixture.
+type noopGlobalRevoker struct{}
+
+func (noopGlobalRevoker) RevokeAllBatch(context.Context, string, int, time.Time) (session.GlobalRevocationBatch, error) {
+	return session.GlobalRevocationBatch{Done: true}, nil
+}
+func (noopGlobalRevoker) SweepOrphans(context.Context, time.Time) (int, int, error) { return 0, 0, nil }
 
 // TestEveryBundledRouteIsNoStore runs every registered route's middleware chain
 // in front of a handler that writes no Cache-Control: whichever gate answers,
@@ -54,7 +63,7 @@ func TestEveryBundledRouteIsNoStore(t *testing.T) {
 		ServiceAccounts:         sas,
 		APIKeys:                 filteredKeys{keys},
 		UserAdmin:               memUserAdmin{},
-		GlobalSessions:          &fakeGlobalRevoker{sess: sessions},
+		GlobalSessions:          noopGlobalRevoker{},
 		ServiceAccountStatuses:  &memAccountStatus{sas: sas, keys: keys, m: map[string]serviceaccount.Status{}},
 		Machine:                 authlogic.MachineConfig{ServiceAccountStatus: true},
 	})
@@ -62,7 +71,7 @@ func TestEveryBundledRouteIsNoStore(t *testing.T) {
 	// The admin and machine surfaces and every S4d opt-in mount too, so a new
 	// route that forgets the registrar wrap is caught here.
 	mount(rec, mountDeps{Auth: svc, Views: stubViews{}, UserAdminCheck: func(context.Context, UserAdminCheckRequest) error { return nil },
-		MachineGate: allowMachineGate, GlobalRevoker: svc, AccountStatus: svc, KeyFilter: svc})
+		MachineGate: allowMachineGate, AccountStatus: svc, KeyFilter: svc})
 	if len(rec.routes) < 40 {
 		t.Fatalf("recorded %d routes; the fixture should mount the password, OAuth and HTML surfaces", len(rec.routes))
 	}
@@ -70,7 +79,12 @@ func TestEveryBundledRouteIsNoStore(t *testing.T) {
 	for _, route := range rec.routes {
 		mounted[route.method+" "+route.path] = true
 	}
-	for _, want := range []string{"POST /auth/admin/sessions/revoke-all", "POST /auth/service-accounts/{id}/disable", "POST /auth/service-accounts/{id}/enable", "GET /auth/service-accounts/{id}/keys"} {
+	// The fleet-wide revoke runs as a job (RevokeAllSessionsJobHandler), never
+	// a route, even with global revocation wired.
+	if mounted["POST /auth/admin/sessions/revoke-all"] {
+		t.Error("POST /auth/admin/sessions/revoke-all is mounted")
+	}
+	for _, want := range []string{"POST /auth/service-accounts/{id}/disable", "POST /auth/service-accounts/{id}/enable", "GET /auth/service-accounts/{id}/keys"} {
 		if !mounted[want] {
 			t.Errorf("%s is not mounted by the fixture", want)
 		}

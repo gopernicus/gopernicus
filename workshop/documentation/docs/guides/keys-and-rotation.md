@@ -80,9 +80,8 @@ compromised key at once with no legacy id.
 JWT at once, but the session rows survive: every client refreshes and carries on. To end
 sessions, use `RevokeAllSessions` (authentication v0.31.0, SOC 2 S4d):
 
-1. Call `Service.RevokeAllSessions(ctx, actor)`, or `POST /auth/admin/sessions/revoke-all`
-   on a host that sets `AdministrationConfig.GlobalSessionRevocationRoute` (the runbook is in
-   *Operations runbooks*). It bumps every active user's `auth_revision` and deletes their
+1. Call `Service.RevokeAllSessions(ctx, actor)` from a one-shot command, or enqueue the
+   `authentication.revoke_all_sessions` job (the runbook is in *Operations runbooks*). It bumps every active user's `auth_revision` and deletes their
    sessions, step-up grants and `password_reset` challenges, so every refresh, `Live()` route,
    pending magic link and delegated OAuth2 connection is dead at once. It records
    `all_sessions_revoked_global` (`started`, then `success` or `failure` with the counts).

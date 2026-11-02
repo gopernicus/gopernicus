@@ -351,19 +351,9 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	// The security-event listing (SOC 2 S7), behind the same check with the
 	// action UserAdminReadAudit; each page read records one audit_read row.
 	authCfg.SecurityEventsRoute = true
-	// The fleet-wide revoke (SOC 2 S4d): POST /auth/admin/sessions/revoke-all,
-	// behind the same check with the action UserAdminRevokeAllSessions and the
-	// admins MFA gate. AUTH_GLOBAL_SESSION_REVOCATION_ROUTE=false unmounts it.
 	// The service-account status (AUTH_SERVICE_ACCOUNT_STATUS) and the
 	// registration mode (AUTH_REGISTRATION) are the pocket's own keys, read
 	// with the rest in buildAuthConfig.
-	globalRevoke := struct {
-		Enabled bool `env:"AUTH_GLOBAL_SESSION_REVOCATION_ROUTE" default:"true"`
-	}{}
-	if err := environment.ParseEnvTags("", &globalRevoke); err != nil {
-		return err
-	}
-	authCfg.GlobalSessionRevocationRoute = globalRevoke.Enabled
 	// Apply the selected delivery mode to the auth config. buildAuthConfig returns the
 	// jobs-mode posture (in-memory fenced queue on this host); AUTH_DELIVERY_MODE=in_process flips
 	// it to the bounded EPHEMERAL pool here — and announces that posture LOUDLY. Neither mode

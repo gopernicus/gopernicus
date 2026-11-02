@@ -187,7 +187,7 @@ type Repositories struct {
 	TOTP totp.Repository
 
 	// GlobalSessions is the OPTIONAL fleet-wide revocation capability (SOC 2
-	// S4d) behind Service.RevokeAllSessions and the opt-in revoke-all route:
+	// S4d) behind Service.RevokeAllSessions and its RevokeAllSessionsJobHandler:
 	// chunked batches that bump every active user's auth_revision and delete
 	// their sessions, step-up grants and password_reset challenges. It needs no
 	// schema change, so a bundled store fills it unconditionally; it must be

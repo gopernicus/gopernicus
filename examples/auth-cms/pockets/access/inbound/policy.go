@@ -57,8 +57,7 @@ func (p *Policy) UserAdmin(ctx context.Context, request authenticationhttp.UserA
 	switch request.Action {
 	case authenticationhttp.UserAdminList, authenticationhttp.UserAdminRead, authenticationhttp.UserAdminDeactivate,
 		authenticationhttp.UserAdminReactivate, authenticationhttp.UserAdminResendVerification, authenticationhttp.UserAdminErase,
-		authenticationhttp.UserAdminResetPasskeys, authenticationhttp.UserAdminResetTOTP, authenticationhttp.UserAdminReadAudit,
-		authenticationhttp.UserAdminRevokeAllSessions:
+		authenticationhttp.UserAdminResetPasskeys, authenticationhttp.UserAdminResetTOTP, authenticationhttp.UserAdminReadAudit:
 	default:
 		return fmt.Errorf("auth-cms: user administration action %q is not admitted: %w", request.Action, sdk.ErrForbidden)
 	}

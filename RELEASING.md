@@ -1,5 +1,36 @@
 # Releasing gopernicus modules
 
+## Global revoke-all runs as a job; the route is removed (#236 — pockets/authentication v0.42.0)
+
+**Status: pending merge and tag.** **MINOR, BREAKING for hosts that mounted the route.** A
+fleet-wide revoke takes minutes, longer than a server `WRITE_TIMEOUT` (15 s by default), so
+`POST /auth/admin/sessions/revoke-all` finished its run but its answer (the counts and the
+cookie-clearing `Set-Cookie`) never reached the client. The route is gone; the revoke runs as a
+job or a one-shot command.
+
+- **Removed:** the route; `AdministrationConfig.GlobalSessionRevocationRoute`;
+  `authenticationhttp.WithGlobalSessionRevocationRoute`;
+  `authenticationhttp.UserAdminRevokeAllSessions` (`revoke-all-sessions`);
+  `ErrGlobalSessionRevocationRouteRequires`. The per-actor once-a-minute budget went with the
+  route.
+- **Added** (`logic/authentication`): `RevokeAllSessionsJobKind`
+  (`authentication.revoke_all_sessions`), the payload `RevokeAllSessionsJob`
+  (`{"actor_type","actor_id"}`), `NewRevokeAllSessionsJob(actor)`,
+  `Service.RevokeAllSessionsJobHandler()` (a strict decode, then `RevokeAllSessions` under a
+  10-minute limit) and `ErrRevokeAllSessionsJobInvalid` (wraps `sdk.ErrInvalidInput`). The
+  pocket still imports no jobs implementation.
+- **Unchanged:** `Service.RevokeAllSessions`, `Repositories.GlobalSessions`, the stores and the
+  `all_sessions_revoked_global` evidence rows.
+
+**Host migration.** Delete `GlobalSessionRevocationRoute` from your `AdministrationConfig` and
+`UserAdminRevokeAllSessions` from your `UserAdminCheck`. To keep the capability, register
+`RevokeAllSessionsJobHandler()` under `RevokeAllSessionsJobKind` on your jobs runtime and
+enqueue it with `MaxAttempts: 1` from your own tooling: a CLI, or an admin endpoint that does its
+own check and MFA and answers 202. Or call `RevokeAllSessions` from a one-shot command. Read
+outcomes from `GET /auth/admin/security-events?event_type=all_sessions_revoked_global`.
+
+No store, migration, sdk or views change. AUDIT-066.
+
 ## Pools drain a backlog; jobs takes the host logger (#230 — sdk v0.27.0, then pockets/jobs v0.10.0)
 
 **Status: released.** sdk v0.27.0 (PR-1, #329) and pockets/jobs v0.10.0 (PR-2, #330); PR-3 repins the examples. Shipped

@@ -321,11 +321,6 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if cfg.SecurityEventsRoute && (nilDependency(repos.SecurityEvents) || cfg.UserAdminCheck == nil) {
 		return nil, ErrSecurityEventsRouteRequires
 	}
-	// The fleet-wide revoke is an explicit opt-in too: a host whose check
-	// ignores Action must not receive it by upgrading.
-	if cfg.GlobalSessionRevocationRoute && (nilDependency(repos.GlobalSessions) || cfg.UserAdminCheck == nil) {
-		return nil, ErrGlobalSessionRevocationRouteRequires
-	}
 
 	// The shared delivery renderer/router (design §6.1): one kind-aware policy
 	// consumed by BOTH authentication service and invitation service so the outbound email/SMS content
@@ -730,7 +725,6 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		inbound.WithLivenessFloorRelaxed(cfg.LivenessFloorRelaxed),
 		inbound.WithUserErasureRoute(cfg.UserErasureRoute),
 		inbound.WithSecurityEventsRoute(cfg.SecurityEventsRoute),
-		inbound.WithGlobalSessionRevocationRoute(cfg.GlobalSessionRevocationRoute),
 		inbound.WithMFAAPIKeysExempt(cfg.MFAAPIKeysExempt),
 	}
 	if cfg.MFARequired == MFARequiredAdmins || (nativeAll(cfg) && cfg.UserAdminCheck != nil) {
