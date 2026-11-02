@@ -311,3 +311,25 @@ func TestOTLPHTTPHeadersRedacted(t *testing.T) {
 		}
 	}
 }
+
+// TestOTLPHTTPConfigFromEnvironment: ParseEnvTags fills the OTLP/HTTP fields,
+// the sdk.Secret headers included, from the TRACING_* variables.
+func TestOTLPHTTPConfigFromEnvironment(t *testing.T) {
+	t.Setenv("TRACING_EXPORTER", "otlphttp")
+	t.Setenv("TRACING_OTLP_ENDPOINT", "https://collector.example.com/otlp")
+	t.Setenv("TRACING_OTLP_HEADERS", "Authorization=Basic%20ZW52OnRlc3Q=")
+	var cfg Config
+	if err := environment.ParseEnvTags("", &cfg); err != nil {
+		t.Fatalf("ParseEnvTags: %v", err)
+	}
+	if cfg.Exporter != ExporterOTLPHTTP || cfg.Endpoint != "https://collector.example.com/otlp" || cfg.Headers.Reveal() != "Authorization=Basic%20ZW52OnRlc3Q=" {
+		t.Fatalf("cfg = %+v (headers %d bytes)", cfg, len(cfg.Headers.Reveal()))
+	}
+	target, err := parseOTLPHTTP(cfg)
+	if err != nil {
+		t.Fatalf("parseOTLPHTTP: %v", err)
+	}
+	if target.url.String() != "https://collector.example.com/otlp/v1/traces" || target.headers["Authorization"] != "Basic ZW52OnRlc3Q=" {
+		t.Fatalf("target = %s %v", target.url, len(target.headers))
+	}
+}
