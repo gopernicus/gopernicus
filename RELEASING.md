@@ -1,13 +1,22 @@
 # Releasing gopernicus modules
 
-## Route-pattern span names under a global Use (#308 — integrations/tracing/otel v0.6.0)
+## Route-pattern span names under a global Use (#308 — integrations/tracing/otel v0.6.0 — published 2026-11-02)
 
-**Status: pending merge and tag.** **MINOR, additive, opt-in.** `otel.RouteNames()`, installed as
+**Status: released.** **MINOR, additive, opt-in.** `otel.RouteNames()`, installed as
 the last `web.WebHandler.Use`, records the matched `ServeMux` pattern in a private context slot
 that `otel.Middleware` reads when its span finishes: `GET /users/{id}` with `http.route` for a
 match, `GET unmatched` for a 404 or 405 with no match, never the request path. Without it,
 spans keep today's names; a route-mounted `otel.Middleware` is unchanged. No `web` or sdk
 change. AUDIT-070.
+
+| Step | Tag | Tag object → commit | PR | Cold verification |
+|---|---|---|---|---|
+| 1 | `integrations/tracing/otel/v0.6.0` | `bb863138` → `d7c7002d` | #341 | OK at the sdk floor (v0.18.0): `Use(Middleware, Logger, Panics, RouteNames())` names `GET /users/{id}` and `GET unmatched` |
+
+Annotated, not signed. No store, no example repin. **Run and look.** The same stack behind an HTTP
+server with the stdout exporter: `GET /orgs/acme/members/u_123` → `GET /orgs/{org}/members/{id}`;
+404 `/reset/tok_SECRET` → `GET unmatched`; 405 → `DELETE unmatched`; neither the id nor the
+token appears in the exported JSON.
 
 ## A REPEATABLE READ transaction that applies settings (#306 — integrations/datastores/pgxdb v0.19.0 — published 2026-11-02)
 
