@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## An sdk metrics port (#350, part 2 — sdk v0.28.0, otel v0.9.0, pgxdb v0.21.0)
+## An sdk metrics port (#350, part 2 — sdk v0.28.0, otel v0.9.0, pgxdb v0.21.0 — published 2026-11-02)
 
-**Status: sdk v0.28.0 released; otel v0.9.0 and pgxdb v0.21.0 pending merge and tag.** **MINOR, additive.** `sdk/capabilities/metrics`: a `Meter`
+**Status: released.** **MINOR, additive.** `sdk/capabilities/metrics`: a `Meter`
 creating a monotonic int64 `Counter`, a float64 `Histogram` and an observable `Gauge` (callback
 plus unregister), `Spec{Name, Description, Unit}`, its own string `Attribute`, and a `Noop`
 default. Stdlib-only, the sibling of `capabilities/tracing`. The package doc makes attribute
@@ -22,6 +22,15 @@ AUDIT-074.
 | Step | Tag | Tag object → commit | PR | Cold verification |
 |---|---|---|---|---|
 | 1 | `sdk/v0.28.0` | `28f0a1cf` → `a0d012fa` | #355 | OK; `metrics.Noop` counter and gauge resolve and run |
+| 2 | `integrations/tracing/otel/v0.9.0` | `13fd224b` → `c70d5c36` | #356 | OK; `*otel.Metrics` satisfies `metrics.Meter`, stdout export carries the counter |
+| 2 | `integrations/datastores/pgxdb/v0.21.0` | `7898998f` → `c70d5c36` | #356 | OK; `RegisterPoolMetrics` registers 10 gauges; live-stores 41535427800 @ `c70d5c36` |
+
+Annotated, not signed. No example repin (additive, opt-in). govulncheck v1.9.0 on otel: nothing
+reachable. **Run and look.** `grafana/otel-lgtm` behind a proxy requiring `Authorization: Basic …`,
+PostgreSQL 18, `otel.Middleware(HTTPConfig{Meter})` + `RouteNames()` + `RegisterPoolMetrics`:
+Prometheus held `http_server_request_duration_seconds_count` `{GET, /members/{id}, 2xx}` = 5 and
+`{GET, unmatched, 4xx}` = 1, `db_client_connection_count` `idle`/`used` and `max` = 14 with
+`pool_name=primary`, and no series label carrying an id or token.
 
 ## Logs over OTLP beside traces (#350, part 1 — integrations/tracing/otel v0.8.0 — published 2026-11-02)
 
