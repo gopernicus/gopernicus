@@ -15,19 +15,20 @@ import (
 )
 
 const (
-	// otlpHTTPTracesPath is the OTLP/HTTP traces signal path appended to the
-	// base Config.Endpoint, as OTEL_EXPORTER_OTLP_ENDPOINT does.
+	// otlpHTTPTracesPath and otlpHTTPLogsPath are the OTLP/HTTP signal paths
+	// appended to the base Config.Endpoint, as OTEL_EXPORTER_OTLP_ENDPOINT does.
 	otlpHTTPTracesPath = "/v1/traces"
+	otlpHTTPLogsPath   = "/v1/logs"
 
 	// otlpHTTPTimeout bounds one export request. It is set explicitly so
 	// OTEL_EXPORTER_OTLP_TIMEOUT never applies.
 	otlpHTTPTimeout = 10 * time.Second
 )
 
-// otlpHTTPTarget is a validated OTLP/HTTP Config: the full traces URL, whether
-// it is plain HTTP, and the decoded headers.
+// otlpHTTPTarget is a validated OTLP/HTTP Config: the base URL (no signal
+// path), whether it is plain HTTP, and the decoded headers.
 type otlpHTTPTarget struct {
-	url      *url.URL
+	base     *url.URL
 	insecure bool
 	headers  map[string]string
 }
@@ -59,8 +60,10 @@ func parseOTLPHTTP(cfg Config) (otlpHTTPTarget, error) {
 		return otlpHTTPTarget{}, fmt.Errorf("otel: Config.Endpoint %q may not carry a query or fragment: %w", cfg.Endpoint, sdk.ErrInvalidInput)
 	}
 	base := strings.TrimRight(u.Path, "/")
-	if strings.HasSuffix(base, otlpHTTPTracesPath) {
-		return otlpHTTPTarget{}, fmt.Errorf("otel: Config.Endpoint %q is the base URL; drop %s, which the exporter appends: %w", cfg.Endpoint, otlpHTTPTracesPath, sdk.ErrInvalidInput)
+	for _, signal := range []string{otlpHTTPTracesPath, otlpHTTPLogsPath} {
+		if strings.HasSuffix(base, signal) {
+			return otlpHTTPTarget{}, fmt.Errorf("otel: Config.Endpoint %q is the base URL; drop %s, which the exporter appends: %w", cfg.Endpoint, signal, sdk.ErrInvalidInput)
+		}
 	}
 	insecure := u.Scheme == "http"
 	if cfg.Insecure && !insecure {
@@ -70,10 +73,17 @@ func parseOTLPHTTP(cfg Config) (otlpHTTPTarget, error) {
 	if err != nil {
 		return otlpHTTPTarget{}, err
 	}
-	full := *u
-	full.Path = base + otlpHTTPTracesPath
-	full.RawPath = ""
-	return otlpHTTPTarget{url: &full, insecure: insecure, headers: headers}, nil
+	trimmed := *u
+	trimmed.Path = base
+	trimmed.RawPath = ""
+	return otlpHTTPTarget{base: &trimmed, insecure: insecure, headers: headers}, nil
+}
+
+// signalURL returns the base URL with an OTLP signal path appended.
+func (t otlpHTTPTarget) signalURL(path string) string {
+	u := *t.base
+	u.Path = t.base.Path + path
+	return u.String()
 }
 
 // parseOTLPHeaders decodes the OTEL_EXPORTER_OTLP_HEADERS format: comma
@@ -135,7 +145,7 @@ func isHTTPToken(s string) bool {
 // unset), TLS, compression and timeout.
 func openOTLPHTTP(ctx context.Context, cfg Config, target otlpHTTPTarget) (*Tracer, error) {
 	opts := []otlptracehttp.Option{
-		otlptracehttp.WithEndpointURL(target.url.String()),
+		otlptracehttp.WithEndpointURL(target.signalURL(otlpHTTPTracesPath)),
 		otlptracehttp.WithHeaders(target.headers),
 		otlptracehttp.WithCompression(otlptracehttp.GzipCompression),
 		otlptracehttp.WithTimeout(otlpHTTPTimeout),
