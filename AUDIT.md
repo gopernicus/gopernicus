@@ -6358,3 +6358,15 @@ against the live Auth emulator.
     those variables never redirect the export or inject headers (tested by poisoning all of them).
 - **Residuals (deliberate):** no custom CA or mTLS configuration; `HTTPS_PROXY` / `NO_PROXY`
   still apply; OTLP/gRPC takes no headers (out of scope; ask if a host needs it).
+
+## AUDIT-068: Fenced claims carry their kind (#311)
+
+- **Status:** pending tag as `pockets/jobs` v0.11.0. Record: `RELEASING.md`, "Fenced claims
+  carry their kind (#311)".
+- **Modules:** `pockets/jobs`. No store, port or migration change.
+- **Old behavior:** `queue.FencedClaim` carried no kind, so fenced job middleware could not name
+  a span or label a metric by kind; a host could only wrap its own handler map, which misses
+  handlers a pocket builds internally.
+- **New behavior:** `FencedClaim.Kind` is the claimed job's kind, set by the runtime from the job
+  it dispatched on. It is a host-registered, bounded value; it carries no payload data.
+- **Residuals:** none.

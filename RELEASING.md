@@ -1,5 +1,17 @@
 # Releasing gopernicus modules
 
+## Fenced claims carry their kind (#311 — pockets/jobs v0.11.0)
+
+**Status: pending merge and tag.** **MINOR, additive.** `queue.FencedClaim` gains `Kind`, the
+claimed job's kind, set by the fenced runtime from the job it dispatched on. Job middleware
+(`queue.WithFencedJobMiddleware`) can now name spans `job <kind>` and label metrics by kind,
+including for handlers a pocket builds internally (authentication's `authentication.delivery`),
+which wrapping the host's handler map could not reach. Kinds are bounded and host-registered,
+so they are safe as labels.
+
+A host that builds `FencedClaim` positionally (a test fixture) needs field names. No store,
+migration or sdk change. AUDIT-068.
+
 ## OTLP/HTTP exporter with secret headers (#307 — integrations/tracing/otel v0.5.0 — published 2026-11-02)
 
 **Status: released.** **MINOR, additive.** `ExporterOTLPHTTP`
