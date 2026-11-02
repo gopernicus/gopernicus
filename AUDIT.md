@@ -6477,3 +6477,18 @@ against the live Auth emulator.
   and never carry identifiers, paths, emails, tokens or error text. Each built-in caller is
   bounded by construction (fixed label allowlists).
 - **Residuals (deliberate):** the port cannot enforce cardinality for host-written callers.
+
+## AUDIT-075: A dead database is a 503, not a 500 (#123)
+
+- **Status:** pending tag as `integrations/datastores/pgxdb` v0.22.0. Record: `RELEASING.md`, "A
+  dead database is a 503, not a 500 (#123)".
+- **Modules:** `integrations/datastores/pgxdb`. No pocket or store change.
+- **Old behavior:** an unreachable database surfaced from the begin paths unclassified, so
+  authorization's `Require` answered 500 while authentication answered 503 for the same outage.
+  Decisions failed closed either way.
+- **New behavior:** connection-level failures carry `sdk.ErrUnavailable` (original kept) at every
+  exit. Live: with the database stopped, a `Require`-guarded route answers 503 for an allowed and a
+  denied user (control on the previous pgxdb: 500); no denial became an allow.
+- **Residuals:** a commit that fails on a dropped connection is returned as-is (its outcome is
+  unknown, so it is not reclassified). Tuple-cache Redis retries during a Redis outage are a
+  separate issue.

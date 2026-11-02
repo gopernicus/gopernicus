@@ -554,9 +554,18 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 // table's trigger refusing a write) maps to sdk.ErrForbidden and keeps the
 // *pgconn.PgError in the chain, because callers match its SQLSTATE with
 // errors.As. The other codes return the bare sentinel.
+//
+// A connection-level failure (refused or dropped connection, a closed pool,
+// SQLSTATE class 08, 57P01-57P03, 53300) is checked first and returned with
+// sdk.ErrUnavailable added and the original error kept in the chain, so an
+// outage reads as 503, not 500. Caller cancellation, deadlines and
+// statement_timeout are not outages and are never classified so.
 func MapError(err error) error {
 	if err == nil {
 		return nil
+	}
+	if classified := classifyUnavailable(err); classified != err {
+		return classified
 	}
 	if errors.Is(err, jackpgx.ErrNoRows) {
 		return sdk.ErrNotFound

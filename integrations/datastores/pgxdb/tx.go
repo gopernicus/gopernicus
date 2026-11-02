@@ -26,7 +26,7 @@ type Tx struct {
 func (d *DB) Begin(ctx context.Context) (*Tx, error) {
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("beginning transaction: %w", err)
+		return nil, fmt.Errorf("beginning transaction: %w", classifyUnavailable(err))
 	}
 	return &Tx{tx: tx, ctx: ctx}, nil
 }
@@ -36,7 +36,7 @@ func (d *DB) Begin(ctx context.Context) (*Tx, error) {
 func (d *DB) BeginRead(ctx context.Context) (*Tx, error) {
 	tx, err := d.pool.BeginTx(ctx, jackpgx.TxOptions{IsoLevel: jackpgx.RepeatableRead, AccessMode: jackpgx.ReadOnly})
 	if err != nil {
-		return nil, fmt.Errorf("beginning read transaction: %w", err)
+		return nil, fmt.Errorf("beginning read transaction: %w", classifyUnavailable(err))
 	}
 	return &Tx{tx: tx, ctx: ctx}, nil
 }
@@ -82,7 +82,7 @@ func (t *Tx) Query(ctx context.Context, query string, args ...any) (jackpgx.Rows
 
 // QueryRow executes a query that returns at most one row within the transaction.
 func (t *Tx) QueryRow(ctx context.Context, query string, args ...any) jackpgx.Row {
-	return t.tx.QueryRow(ctx, query, args...)
+	return classifiedRow{t.tx.QueryRow(ctx, query, args...)}
 }
 
 // SnapshotIsolation reports whether this transaction currently uses repeatable

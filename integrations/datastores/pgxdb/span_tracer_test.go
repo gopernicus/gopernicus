@@ -50,7 +50,9 @@ type activeKey struct{}
 // reportingTracer answers HasActiveSpan from a context flag.
 type reportingTracer struct{ recTracer }
 
-func (r *reportingTracer) HasActiveSpan(ctx context.Context) bool { return ctx.Value(activeKey{}) != nil }
+func (r *reportingTracer) HasActiveSpan(ctx context.Context) bool {
+	return ctx.Value(activeKey{}) != nil
+}
 
 func runQuery(t *SpanTracer, ctx context.Context, sql string, args []any, err error) {
 	ctx = t.TraceQueryStart(ctx, nil, jackpgx.TraceQueryStartData{SQL: sql, Args: args})
@@ -91,14 +93,14 @@ func TestSpanTracerChildOnly(t *testing.T) {
 func TestSpanTracerNamesAndText(t *testing.T) {
 	parent := sdk.WithTraceID(context.Background(), "t")
 	for sql, want := range map[string]string{
-		"SELECT * FROM iam_tuples WHERE id = $1":           "SELECT",
-		"  \n insert into t (a) values ($1)":               "INSERT",
-		"-- note\n/* hint */ UPDATE t SET a = $1":          "UPDATE",
-		"(SELECT 1) UNION (SELECT 2)":                      "SELECT",
-		"WITH x AS (SELECT 1) DELETE FROM t":               "WITH",
-		"frobnicate everything":                            "db.query",
-		"":                                                 "db.query",
-		"SELECTED_COLUMN_THAT_IS_NOT_A_KEYWORD FROM t":     "db.query",
+		"SELECT * FROM iam_tuples WHERE id = $1":       "SELECT",
+		"  \n insert into t (a) values ($1)":           "INSERT",
+		"-- note\n/* hint */ UPDATE t SET a = $1":      "UPDATE",
+		"(SELECT 1) UNION (SELECT 2)":                  "SELECT",
+		"WITH x AS (SELECT 1) DELETE FROM t":           "WITH",
+		"frobnicate everything":                        "db.query",
+		"":                                             "db.query",
+		"SELECTED_COLUMN_THAT_IS_NOT_A_KEYWORD FROM t": "db.query",
 	} {
 		rt := &recTracer{}
 		runQuery(NewSpanTracer(rt, SpanTracerConfig{}), parent, sql, nil, nil)

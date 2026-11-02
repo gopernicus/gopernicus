@@ -33,7 +33,7 @@ func (d *DB) Close() error {
 
 // Ping checks if the database is reachable.
 func (d *DB) Ping(ctx context.Context) error {
-	return d.pool.Ping(ctx)
+	return classifyUnavailable(d.pool.Ping(ctx))
 }
 
 // Underlying returns the underlying *pgxpool.Pool for advanced operations.
@@ -84,5 +84,5 @@ func (d *DB) Query(ctx context.Context, query string, args ...any) (jackpgx.Rows
 // QueryRow executes a query that returns at most one row. Map the Scan error
 // with MapError to translate jackpgx.ErrNoRows into sdk.ErrNotFound.
 func (d *DB) QueryRow(ctx context.Context, query string, args ...any) jackpgx.Row {
-	return d.pool.QueryRow(ctx, query, args...)
+	return classifiedRow{d.pool.QueryRow(ctx, query, args...)}
 }

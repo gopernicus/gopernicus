@@ -977,6 +977,18 @@ posture WARN naming every source; production refuses all of them (see
 `NewLoggingQueryTracerWithConfig(pgxdb.LoggingQueryTracerConfig{Logger: l,
 LogArgs: false})` — `NewLoggingQueryTracer(l)` is the same safe default.
 
+## Outage errors are `sdk.ErrUnavailable`
+
+A connection-level failure leaves pgxdb with `sdk.ErrUnavailable` added and the original error
+kept in the chain. That covers a refused or dropped connection, a closed pool, a pgx error that
+failed before the query was sent, SQLSTATE class `08` (connection exception), `57P01`–`57P03`
+(admin or crash shutdown, cannot connect now) and `53300` (too many connections). So
+`web.ErrFromDomain`, authorization's `Require` and a health check answer 503 for an outage instead
+of 500. It applies to `MapError` (every `Exec`/`Query`/`QueryOne`/`List`), the begin paths
+(`Begin`, `BeginRead`, `TransactSnapshot`, `InTx`), `QueryRow(...).Scan` (classification only;
+`pgx.ErrNoRows` is untouched), `Ping` and `StatusCheck`. Caller cancellation, deadlines and
+`statement_timeout` (`57014`) are never classified as an outage.
+
 ## SQL statement spans — `SpanTracer`
 
 ```go

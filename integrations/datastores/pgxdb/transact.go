@@ -47,7 +47,7 @@ func (d *DB) TransactSnapshot(ctx context.Context, fn func(ctx context.Context) 
 	}
 	driver, err := d.pool.BeginTx(ctx, jackpgx.TxOptions{IsoLevel: jackpgx.RepeatableRead, AccessMode: jackpgx.ReadWrite})
 	if err != nil {
-		return fmt.Errorf("beginning snapshot transaction: %w", err)
+		return fmt.Errorf("beginning snapshot transaction: %w", classifyUnavailable(err))
 	}
 	tx := &Tx{tx: driver, ctx: ctx}
 	return tx.run(func(tx *Tx) error {
