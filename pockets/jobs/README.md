@@ -119,7 +119,7 @@ Scheduler interface. No root facade is required for either extension.
 | `NewRuntime handlers` | runtime construction requires valid nonempty entries |
 | `queue.RuntimePolicy.Workers` | defaults to 4 |
 | `queue.WithRuntimeWorkerMiddleware` / `queue.WithRuntimeJobMiddleware` | nil adds no wrappers; first wrapper is outermost |
-| `PollInterval` / `IdleInterval` / `Heartbeat` | SDK pool cadence defaults; heartbeat disabled |
+| `PollInterval` / `IdleInterval` / `Heartbeat` | SDK pool cadence defaults; heartbeat disabled. Every jobs pool (queue, scheduler, fenced) drains a backlog: after a job settles it claims the next at once, so `PollInterval` is the wait after an error and `IdleInterval` after an empty claim |
 | `jobs.WithCronParser` / `schedules.WithCronParser` | fixed intervals work; cron expressions return `schedules.ErrCronRequired` |
 | `jobs.WithScheduleBatchSize` / `schedules.WithBatchSize` | defaults to 20 rows for each due-schedule and pending-occurrence query |
 | `schedules.WithEnqueuer` | nil permits schedule management; running WorkFunc returns invalid input |
