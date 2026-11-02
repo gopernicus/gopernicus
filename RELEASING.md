@@ -1,5 +1,19 @@
 # Releasing gopernicus modules
 
+## A dead database is a 503, not a 500 (#123 — integrations/datastores/pgxdb v0.22.0)
+
+**Status: pending merge and tag.** **MINOR, a behavior fix.** Connection-level failures (refused
+or dropped connection, closed pool, pgx's "safe to retry", SQLSTATE `08xxx`, `57P01`–`57P03`,
+`53300`) now carry `sdk.ErrUnavailable` with the original error kept, through `MapError`, the
+begin paths, `QueryRow().Scan`, `Ping` and `StatusCheck`. authorization's `Require` (and anything
+using `web.ErrFromDomain`) therefore answers **503** while the database is unreachable, matching
+the authentication pocket. Cancellation, deadlines, `statement_timeout`, constraint mappings and
+`pgx.ErrNoRows` are unchanged.
+
+**Host note.** A host that matched a 500 during a database outage now sees 503; one that branched
+on `errors.Is(err, sdk.ErrUnavailable)` now sees it for outages. No pocket or store tag is needed:
+repin pgxdb. AUDIT-075.
+
 ## An sdk metrics port (#350, part 2 — sdk v0.28.0, otel v0.9.0, pgxdb v0.21.0 — published 2026-11-02)
 
 **Status: released.** **MINOR, additive.** `sdk/capabilities/metrics`: a `Meter`
