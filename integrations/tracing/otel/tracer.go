@@ -45,6 +45,18 @@ func (t *Tracer) StartSpan(ctx context.Context, operationName string) (context.C
 	return ctx, &spanFinisher{span: span, recordErrorText: t.recordErrorText}
 }
 
+// HasActiveSpan reports whether ctx carries a valid span, local or remote.
+// Consumers that only make child spans ask it through a type assertion:
+// integrations/datastores/pgxdb's SpanTracer (v0.20.0+) starts a statement
+// span only when it is true, so pool pings and pollers make no traces. It is
+// false on a nil *Tracer.
+func (t *Tracer) HasActiveSpan(ctx context.Context) bool {
+	if t == nil || ctx == nil {
+		return false
+	}
+	return oteltrace.SpanFromContext(ctx).SpanContext().IsValid()
+}
+
 // Shutdown flushes any buffered spans and stops the TracerProvider this module
 // created. It is a no-op in ExporterProvider mode, where the caller owns the
 // provider's lifecycle, and safe to call on a nil *Tracer.

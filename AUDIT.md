@@ -6426,3 +6426,22 @@ against the live Auth emulator.
   a purge leaves a `seq` gap below the oldest surviving row. No archive hook (`Audit.List` exports
   below the cutoff first), no Go reader for `iam_audit_purges`, no per-type recording (#343,
   #344), no `secrets_audit` retention. The turso floor is a footgun guard, not a control.
+
+## AUDIT-072: Pool statistics and SQL statement spans (#348, #349)
+
+- **Status:** pending tag as `integrations/datastores/pgxdb` v0.20.0 and
+  `integrations/tracing/otel` v0.7.0. Record: `RELEASING.md`, "Pool statistics and SQL statement
+  spans (#348, #349)".
+- **Modules:** `integrations/datastores/pgxdb`, `integrations/tracing/otel`. No sdk change.
+- **Old behavior:** no SQL spans upstream; hosts ran their own OpenTelemetry query tracer.
+  Pool statistics only through `Underlying()`.
+- **New behavior:** opt-in `SpanTracer`. It is a privacy-relevant feature, so it is bounded by
+  construction: no bind arguments ever, no driver error text (pgx messages can repeat input
+  values), only SQLSTATE and constraint; span names from a fixed keyword list; SQL text capped at
+  2 KiB and omittable for hosts that inline literals; no span without a parent. Tested with a
+  secret in a bind argument and in a unique-violation detail. `Stats()` returns a pgxdb-owned
+  value.
+- **Residuals (deliberate):** SQL text is on by default (gopernicus stores bind every value); a
+  host that inlines literals must set `OmitQueryText`. Copy, prepare and connect tracing are not
+  covered. The trace-id fallback counts only HTTP-request traces as parents for tracers without
+  `HasActiveSpan`.
