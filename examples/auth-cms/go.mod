@@ -17,10 +17,10 @@ require (
 	github.com/gopernicus/gopernicus/pockets/cms v0.7.0
 	github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.3.0
 	github.com/gopernicus/gopernicus/pockets/events v0.3.0
-	github.com/gopernicus/gopernicus/pockets/jobs v0.9.0
+	github.com/gopernicus/gopernicus/pockets/jobs v0.10.0
 	github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx v0.9.0
 	github.com/gopernicus/gopernicus/pockets/jobs/stores/turso v0.8.0
-	github.com/gopernicus/gopernicus/sdk v0.25.0
+	github.com/gopernicus/gopernicus/sdk v0.27.0
 	github.com/gopernicus/gopernicus/ui/goth v0.2.1
 	github.com/jackc/pgx/v5 v5.9.2
 )

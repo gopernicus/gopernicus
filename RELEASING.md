@@ -2,12 +2,13 @@
 
 ## Pools drain a backlog; jobs takes the host logger (#230 — sdk v0.27.0, then pockets/jobs v0.10.0)
 
-**Status: sdk v0.27.0 released (PR-1, #329); jobs v0.10.0 pending merge and tag (PR-2).** Ships
+**Status: released.** sdk v0.27.0 (PR-1, #329) and pockets/jobs v0.10.0 (PR-2, #330); PR-3 repins the examples. Shipped
 in three steps, because the sdk must be tagged before jobs can require it.
 
 | Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
 |---|---|---|---|---|---|
 | 1 | `sdk/v0.27.0` | `ef96a2ac` → `17d8ca35` | #329 | 41365144972 @ `17d8ca35` | OK. A pool with default cadence and 2 workers settles 2 of 200 one-millisecond jobs in 3s without the option, and 200 of 200 with it |
+| 2 | `pockets/jobs/v0.10.0` | `8b6c1e2f` → `24530b37` | #330 | 41371404260 @ `24530b37` | OK. The issue's 180-job measurement against the published module: 180/180 in 530ms |
 
 **Run and look (PR-2).** The issue's measurement: 180 fenced jobs on the in-memory queue under the
 default `FencedRuntimePolicy` (5s poll, 2 workers), 5ms each. Published jobs v0.9.0 settles
@@ -25,7 +26,10 @@ default `FencedRuntimePolicy` (5s poll, 2 workers), 5ms each. Published jobs v0.
 - **jobs v0.10.0 (PR-2).** Requires sdk v0.27.0 and turns `WithDrainBacklog(true)` on for the
   queue, scheduler and fenced pools. Without it, a backlog drains one job per worker per
   `PollInterval` (5s by default).
-- **PR-3.** The examples repin; auth-cms's outbox poller pool turns the option on.
+- **PR-3.** auth-cms (jobs v0.10.0, sdk v0.27.0) and jobs-minimal (jobs v0.10.0) repin.
+  auth-cms's outbox poller pool turns the option on: a backlog of appends that sent no wake
+  signal (for example, events the pocket appends through `WithOutbox`) drains batch after batch
+  instead of one batch per `PollInterval`.
 
 ## No database write per successful API-key request (#314 — pockets/authentication v0.41.0 — published 2026-11-01)
 
