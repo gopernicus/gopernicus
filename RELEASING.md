@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## OTLP/HTTP exporter with secret headers (#307 — integrations/tracing/otel v0.5.0)
+## OTLP/HTTP exporter with secret headers (#307 — integrations/tracing/otel v0.5.0 — published 2026-11-02)
 
-**Status: pending merge and tag.** **MINOR, additive.** `ExporterOTLPHTTP`
+**Status: released.** **MINOR, additive.** `ExporterOTLPHTTP`
 (`TRACING_EXPORTER=otlphttp`) exports spans over OTLP/HTTP, e.g. to Grafana Cloud's OTLP
 gateway:
 
@@ -17,6 +17,20 @@ gateway:
 
 Existing exporters are unchanged. **The module now requires sdk v0.18.0** (was v0.9.0), the
 first release with root `sdk.Secret`; a host on an older sdk moves up to it. AUDIT-067.
+
+| Step | Tag | Tag object → commit | PR | Cold verification |
+|---|---|---|---|---|
+| 1 | `integrations/tracing/otel/v0.5.0` | `dcd678bd` → `c55f2440` | #334, #335 | OK at the sdk floor (v0.18.0): `ParseEnvTags` + `Open` over OTLP/HTTP; production refuses plain HTTP |
+
+Annotated, not signed. No store, so no `live-stores` leg. No example repinned (additive).
+#334 merged with a stale `sdk v0.9.0` requirement; a `GOWORK=off` build caught it before the
+tag and #335 raised the floor. A `GOWORK=off` sweep of every workspace module found no other
+case.
+
+**Run and look.** A disposable `grafana/otel-lgtm` behind a proxy requiring
+`Authorization: Basic …` on `/otlp/*`: with `TRACING_OTLP_HEADERS` the trace is in Tempo by id
+(span and service name); without it the proxy answers 401, `ForceFlush` reports it and Tempo has
+no trace.
 
 ## Global revoke-all runs as a job; the route is removed (#236 — pockets/authentication v0.42.0 — published 2026-11-01)
 
