@@ -7,13 +7,13 @@ require (
 	github.com/gopernicus/gopernicus/integrations/cryptids/go-oidc v0.2.0
 	github.com/gopernicus/gopernicus/integrations/cryptids/go-webauthn v0.1.0
 	github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt v0.4.0
-	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.18.0
+	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.19.0
 	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.11.0
 	github.com/gopernicus/gopernicus/integrations/encoding/rsc-qr v0.1.0
 	github.com/gopernicus/gopernicus/pockets/authentication v0.42.0
 	github.com/gopernicus/gopernicus/pockets/authentication/views/goth v0.9.0
-	github.com/gopernicus/gopernicus/pockets/authorization v0.34.0
-	github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx v0.24.0
+	github.com/gopernicus/gopernicus/pockets/authorization v0.36.0
+	github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx v0.25.0
 	github.com/gopernicus/gopernicus/pockets/cms v0.7.0
 	github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.3.0
 	github.com/gopernicus/gopernicus/pockets/events v0.3.0

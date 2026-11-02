@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## Supported retention for `iam_audit` (#305 — pockets/authorization v0.36.0, stores pgx v0.25.0, turso v0.24.0)
+## Supported retention for `iam_audit` (#305 — pockets/authorization v0.36.0, stores pgx v0.25.0, turso v0.24.0 — published 2026-11-02)
 
-**Status: pending merge and tag.** **MINOR, additive, opt-in.** `Repositories.AuditExpiry` (an
+**Status: released.** **MINOR, additive, opt-in.** `Repositories.AuditExpiry` (an
 `audit.Expirer`), `WithAuditRetention(d)` and `Mutations.ExpireAudit(ctx, limit)` beside
 `ExpireOperations`. There is no default retention: wired without `WithAuditRetention`,
 `ExpireAudit` returns `ErrAuditRetentionNotConfigured` and `Register` logs
@@ -24,6 +24,25 @@ Tags in order: `pockets/authorization/v0.36.0`, then both stores' `require` bump
 resolve the pocket through `go.work` until then), then `pockets/authorization/stores/pgx/v0.25.0`
 and `pockets/authorization/stores/turso/v0.24.0`. PR-2 repins `examples/auth-cms` and
 `examples/production-baseline`.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/authorization/v0.36.0` | `ded16aa5` → `e78115a3` | #345 | 41503299843 @ `e78115a3` | OK; MVS selects sdk v0.26.0; a 100-day retention is refused at `New`, `ExpireAudit` runs |
+| 2 | `pockets/authorization/stores/pgx/v0.25.0` | `81fdaf64` → `e0eb829c` | #346 | — (code unchanged since step 1; live legs re-run with `GOWORK=off`) | OK; ships 0008 |
+| 2 | `pockets/authorization/stores/turso/v0.24.0` | `08e40bf7` → `e0eb829c` | #346 | — (as above) | OK; ships 0008 |
+| — | none | — | PR-2: auth-cms, production-baseline repin (authorization v0.34.0 → v0.36.0, stores/pgx v0.24.0 → v0.25.0, pgxdb → v0.19.0) | — | each builds, vets and tests with `GOWORK=off` |
+
+Annotated, not signed. #346 moved both stores' floors: authorization v0.36.0 and sdk v0.26.0 (pgx
+from sdk v0.25.0, turso from v0.21.0). Before tagging, both store suites passed with `GOWORK=off`
+against the published pocket: pgx live on PostgreSQL 18, turso `-tags=integration` on a local
+libsql (the destructive legs need `AUTHORIZATION_TURSO_DISPOSABLE_URL` matching
+`TURSO_DATABASE_URL`).
+
+**Run and look (PostgreSQL 18, migrator `owner`, separate `runtime` role).** Runtime's direct
+`DELETE FROM iam_audit` → 42501; `Expire` before `GRANT EXECUTE` → `sdk.ErrForbidden` naming the
+GRANT; a 100-day cutoff → `audit.ErrBelowRetentionFloor`; a 366-day cutoff purged the 400- and
+390-day rows and kept the 30-day row; a second call purged 0; `iam_audit_purges` held two rows
+(`purged=2`, `purged=0`, `floor_days=365`, `session_role=runtime`); runtime cannot delete them.
 
 ## Route-pattern span names under a global Use (#308 — integrations/tracing/otel v0.6.0 — published 2026-11-02)
 

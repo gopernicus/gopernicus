@@ -6406,9 +6406,10 @@ against the live Auth emulator.
 
 ## AUDIT-071: Supported retention for `iam_audit` (#305)
 
-- **Status:** pending tag as `pockets/authorization` v0.36.0, `pockets/authorization/stores/pgx`
-  v0.25.0 and `pockets/authorization/stores/turso` v0.24.0. Record: `RELEASING.md`, "Supported
-  retention for `iam_audit` (#305)".
+- **Status:** released as `pockets/authorization` v0.36.0 (`ded16aa5` → `e78115a3`, #345),
+  `pockets/authorization/stores/pgx` v0.25.0 (`81fdaf64`) and `pockets/authorization/stores/turso`
+  v0.24.0 (`08e40bf7`), both → `e0eb829c` (#346). Record: `RELEASING.md`, "Supported
+  retention for `iam_audit` (#305 — published 2026-11-02)".
 - **Modules:** `pockets/authorization`, `pockets/authorization/stores/pgx`,
   `pockets/authorization/stores/turso`; the baseline ledger copy and the `G35` allow-list.
 - **Old behavior:** `iam_audit` was append-only (0006) and the pocket shipped no purge, so a host
