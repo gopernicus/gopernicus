@@ -370,7 +370,7 @@ the raw driver error sees the sentinel now.
 | `ErrAppendOnlyTableWritable` / `ErrAppendOnlyTableUnwritable` / `ErrDefinerFunctionUnsafe` | production append-only refusals from `ProbeAppendOnly`, matched with `errors.Is` |
 | `Open(ctx, cfg) (*DB, error)` | refuses a `DSN`/`Password` containing `sdk.Redacted`, literally or percent-encoded (`sdk.ErrRedactedSecret`), then opens a `pgxpool` and pings, then logs the version advisory below the floor; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
 | `DB` | `Exec` / `Query` / `QueryRow` / `InTx` / `Begin` / `Close` / `Ping` / `Underlying() *pgxpool.Pool` / `RuntimeMode()` / `ProbeAppendOnly(ctx, tables…)` |
-| `Setting` / `(*DB).TransactWithSettings(ctx, settings, fn)` / `(*Tx).Setting(name)` | `Transact` whose first statement applies transaction-local settings (`set_config(name, value, true)`, all bound); validation before `Begin` refuses with `ErrInvalidInput`; `Tx.Setting` reports, from memory, what was applied to that transaction (see "Transaction-local settings for row-level security") |
+| `Setting` / `(*DB).TransactWithSettings(ctx, settings, fn)` / `(*DB).TransactSnapshotWithSettings(ctx, settings, fn)` / `(*Tx).Setting(name)` | `Transact` (or `TransactSnapshot`, REPEATABLE READ) whose first statement applies transaction-local settings (`set_config(name, value, true)`, all bound); validation before `Begin` refuses with `ErrInvalidInput`; `Tx.Setting` reports, from memory, what was applied to that transaction (see "Transaction-local settings for row-level security") |
 | `Querier` | interface intersection of `*DB` and `*Tx` (`Exec`/`Query`/`QueryRow`) — lets a store accept pool-or-tx |
 | `MapError(err) error` | SQLSTATE-based: `23505`→`ErrAlreadyExists`, `23503`/`23001` (PostgreSQL 18 reports an `ON DELETE RESTRICT` refusal as `restrict_violation`)→`ErrInvalidReference`, `23514`/`23502`→`ErrInvalidInput`, `22P02` (malformed uuid/integer literal)→`ErrInvalidInput` keeping the server message as the sentence before the sentinel, `42501`→`ErrForbidden` keeping the `*pgconn.PgError` in the chain, `pgx.ErrNoRows`→`ErrNotFound`; unknown errors pass through |
 | `RedactDSN(dsn) string` | masks URL userinfo, `password` and `sslpassword`; keyword DSNs and malformed inputs return the literal `"REDACTED"` |
@@ -1038,9 +1038,12 @@ owner's connection and by `ProbeAppendOnly` as the role), and `TestLive_DefinerF
 name needs quotes: clean, each unsafe and inoperative state, a decoy earlier on the path, a
 bare-schema host resolved before the pin, a missing function, EXECUTE granted and revoked), and the
 `TestLive_TransactWithSettings_*` legs (no leak on a one-connection pool after commit, rollback
-and a recovered panic; bound values under the default exec mode and simple protocol; and, on a
+and a recovered panic, for both settings functions; bound values under the default exec mode and simple protocol; and, on a
 superuser DSN only, a FORCE RLS table read and written as a run-unique `NOBYPASSRLS` role
-entered with `SET LOCAL ROLE`, dropped with its schema in cleanup).
+entered with `SET LOCAL ROLE`, dropped with its schema in cleanup), and
+`TestLive_TransactSnapshotWithSettings_Snapshot` (REPEATABLE READ with the setting applied; a row
+another connection commits after the first statement stays invisible; the transaction's own
+write is visible).
 Unset, they skip loudly
 (`POSTGRES_TEST_DSN not set — postgres conformance NOT verified`, plus a
 banner on stderr and the controlling terminal for the limiter legs, because
@@ -1155,7 +1158,16 @@ protocol). The settings end with the transaction, on commit, rollback or panic, 
 another pool borrower. It is implemented by wrapping `Transact`, so nesting (`ErrNestedTransact`
 on the same instance), cleanup and the per-instance ambient context are `Transact`'s. A failure of
 the first statement is wrapped as `pgxdb: applying transaction settings: …`, keeping the mapped
-error. There is no snapshot variant; `TransactSnapshot` applies no settings.
+error.
+
+`TransactSnapshotWithSettings(ctx, settings, fn)` is the same over `TransactSnapshot`: read-write
+REPEATABLE READ, with the settings applied by the first statement, which also takes the snapshot,
+so the snapshot starts when the transaction does. Validation, nesting, cleanup and `Tx.Setting`
+are identical. Use it when a tenant-scoped workflow must read and then write under one snapshot:
+the authorization pgx store's canonical reads refuse a READ COMMITTED ambient transaction
+(`tuples.ErrSnapshotIsolation`), so "read the grants, then remove the last seat and its manager
+grant" runs here, not under `TransactWithSettings`. Nothing is retried: the caller owns retries
+on serialization failures (40001), as with `TransactSnapshot`.
 
 Validation runs before `Begin`, so a refusal acquires no connection. Each refusal wraps
 `sdk.ErrInvalidInput`: no settings; a name that is not a lowercase, dotted custom parameter
@@ -1165,7 +1177,8 @@ parameters (`plpgsql.*`) are dotted and are not blocked, so use a prefix you own
 guardrail, not a security boundary.
 
 `d.TxFrom(ctx)` inside `fn` returns a `*Tx` whose `Setting(name)` reports what was applied, from
-memory. It is `("", false)` on a `Transact` or `TransactSnapshot` transaction. A store over a
+memory. It is `("", false)` on a `Transact` or `TransactSnapshot` transaction; both settings functions
+populate it. A store over a
 FORCE row-level-security table checks both, `d.TxFrom` and `tx.Setting`, and refuses otherwise,
 instead of `QuerierFrom`'s pool fallback that RLS answers with a silent empty result. The docs
 site's *Row-level security with pgxdb* guide covers policies, schema, roles and the host shape.

@@ -38,12 +38,32 @@ type Setting struct{ Name, Value string }
 // Settings are validated before the transaction begins, so a refusal acquires
 // no connection; every refusal wraps sdk.ErrInvalidInput.
 func (d *DB) TransactWithSettings(ctx context.Context, settings []Setting, fn func(ctx context.Context) error) error {
-	applied, err := validateSettings(settings)
+	return d.withSettings(ctx, "TransactWithSettings", d.Transact, settings, fn)
+}
+
+// TransactSnapshotWithSettings is TransactWithSettings over TransactSnapshot: a
+// read-write, repeatable-read transaction whose first statement applies
+// settings. That statement takes the snapshot, so it starts when the
+// transaction does. Use it for a tenant-scoped workflow that must read and
+// then write under one snapshot, such as the authorization pgx store's reads,
+// which refuse a READ COMMITTED ambient transaction. Validation, nesting,
+// cleanup and Tx.Setting are TransactWithSettings's. Callbacks are never
+// retried: the caller owns retries on serialization failures (40001), as with
+// TransactSnapshot.
+func (d *DB) TransactSnapshotWithSettings(ctx context.Context, settings []Setting, fn func(ctx context.Context) error) error {
+	return d.withSettings(ctx, "TransactSnapshotWithSettings", d.TransactSnapshot, settings, fn)
+}
+
+// withSettings validates settings, then runs fn inside begin with set_config as
+// the transaction's first statement and the applied settings recorded on the
+// *Tx. caller names the public function in a refusal.
+func (d *DB) withSettings(ctx context.Context, caller string, begin func(context.Context, func(context.Context) error) error, settings []Setting, fn func(ctx context.Context) error) error {
+	applied, err := validateSettings(caller, settings)
 	if err != nil {
 		return err
 	}
 	query, args := setConfigStatement(settings)
-	return d.Transact(ctx, func(ctx context.Context) error {
+	return begin(ctx, func(ctx context.Context) error {
 		tx, _ := d.TxFrom(ctx)
 		if _, err := tx.Exec(ctx, query, args...); err != nil {
 			return fmt.Errorf("pgxdb: applying transaction settings: %w", err)
@@ -53,9 +73,10 @@ func (d *DB) TransactWithSettings(ctx context.Context, settings []Setting, fn fu
 	})
 }
 
-// Setting reports the value TransactWithSettings applied to this transaction
-// under name, from memory. It is ("", false) for a transaction begun by
-// Transact or TransactSnapshot, or when name was not applied.
+// Setting reports the value TransactWithSettings or
+// TransactSnapshotWithSettings applied to this transaction under name, from
+// memory. It is ("", false) for a transaction begun by Transact or
+// TransactSnapshot, or when name was not applied.
 func (t *Tx) Setting(name string) (string, bool) {
 	value, ok := t.settings[name]
 	return value, ok
@@ -63,9 +84,9 @@ func (t *Tx) Setting(name string) (string, bool) {
 
 // validateSettings applies Setting's rules and returns them keyed by name.
 // Errors name the offending setting but never echo its value.
-func validateSettings(settings []Setting) (map[string]string, error) {
+func validateSettings(caller string, settings []Setting) (map[string]string, error) {
 	if len(settings) == 0 {
-		return nil, fmt.Errorf("pgxdb: TransactWithSettings needs at least one setting: %w", sdk.ErrInvalidInput)
+		return nil, fmt.Errorf("pgxdb: %s needs at least one setting: %w", caller, sdk.ErrInvalidInput)
 	}
 	applied := make(map[string]string, len(settings))
 	for _, s := range settings {

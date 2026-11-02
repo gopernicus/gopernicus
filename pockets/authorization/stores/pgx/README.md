@@ -108,6 +108,12 @@ ambient transaction's actual isolation and reject READ COMMITTED/READ UNCOMMITTE
 with `tuples.ErrSnapshotIsolation` before invoking the callback. REPEATABLE READ
 and SERIALIZABLE are accepted.
 
+A row-level-security host that binds its tenant with pgxdb settings uses
+`db.TransactSnapshotWithSettings(ctx, settings, fn)` (pgxdb v0.19.0) for the same compound
+read-then-write workflows: REPEATABLE READ with the settings applied first. Under
+`TransactWithSettings`, which is READ COMMITTED, the canonical reads return
+`tuples.ErrSnapshotIsolation`.
+
 `ReadTupleSnapshot` pins its view before entering the synchronous callback,
 including when the callback's first action lets another writer commit. Bulk exact
 membership, set reads and tuple pagination share that view across transport

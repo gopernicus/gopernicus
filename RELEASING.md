@@ -1,5 +1,21 @@
 # Releasing gopernicus modules
 
+## A REPEATABLE READ transaction that applies settings (#306 — integrations/datastores/pgxdb v0.19.0)
+
+**Status: pending merge and tag.** **MINOR, additive.**
+`(*DB).TransactSnapshotWithSettings(ctx, settings, fn)` is `TransactWithSettings` over
+`TransactSnapshot`: read-write REPEATABLE READ with `set_config` as the first statement (which also
+takes the snapshot). Validation before begin, nesting (`ErrNestedTransact`), cleanup and
+`Tx.Setting` are `TransactWithSettings`'s; both now share one implementation. Callers own retries
+on serialization failures.
+
+It unblocks row-level-security hosts that read authorization grants and then write in one
+tenant-scoped transaction: the authorization pgx store's canonical reads refuse READ COMMITTED
+(`tuples.ErrSnapshotIsolation`), which is what `TransactWithSettings` is. The empty-settings
+refusal now names the calling function.
+
+No sdk change. No authorization code change (its README gains the recipe). AUDIT-069.
+
 ## Fenced claims carry their kind (#311 — pockets/jobs v0.11.0)
 
 **Status: pending merge and tag.** **MINOR, additive.** `queue.FencedClaim` gains `Kind`, the

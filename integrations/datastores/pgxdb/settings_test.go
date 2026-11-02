@@ -3,6 +3,7 @@ package pgxdb
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/sdk"
@@ -10,7 +11,7 @@ import (
 
 // TestTransactWithSettings_Refusals needs no database: the *DB has no pool, so
 // any refusal that reached Begin would panic. Every refusal is ErrInvalidInput
-// and fn never runs.
+// and fn never runs, for both settings functions.
 func TestTransactWithSettings_Refusals(t *testing.T) {
 	db := &DB{}
 	cases := map[string][]Setting{
@@ -31,20 +32,29 @@ func TestTransactWithSettings_Refusals(t *testing.T) {
 		"duplicate names":         {{Name: "app.x", Value: "1"}, {Name: "app.x", Value: "2"}},
 		"one bad among good ones": {{Name: "app.x", Value: "1"}, {Name: "role", Value: "2"}},
 	}
-	for name, settings := range cases {
-		t.Run(name, func(t *testing.T) {
-			ran := false
-			err := db.TransactWithSettings(t.Context(), settings, func(context.Context) error {
-				ran = true
-				return nil
+	variants := map[string]func(context.Context, []Setting, func(context.Context) error) error{
+		"TransactWithSettings":         db.TransactWithSettings,
+		"TransactSnapshotWithSettings": db.TransactSnapshotWithSettings,
+	}
+	for variant, transact := range variants {
+		for name, settings := range cases {
+			t.Run(variant+"/"+name, func(t *testing.T) {
+				ran := false
+				err := transact(t.Context(), settings, func(context.Context) error {
+					ran = true
+					return nil
+				})
+				if !errors.Is(err, sdk.ErrInvalidInput) {
+					t.Fatalf("%s(%q) = %v, want ErrInvalidInput", variant, settings, err)
+				}
+				if ran {
+					t.Fatal("fn ran after a refused setting")
+				}
+				if len(settings) == 0 && !strings.Contains(err.Error(), variant) {
+					t.Fatalf("empty-list refusal %q does not name %s", err, variant)
+				}
 			})
-			if !errors.Is(err, sdk.ErrInvalidInput) {
-				t.Fatalf("TransactWithSettings(%q) = %v, want ErrInvalidInput", settings, err)
-			}
-			if ran {
-				t.Fatal("fn ran after a refused setting")
-			}
-		})
+		}
 	}
 }
 
@@ -52,7 +62,7 @@ func TestTransactWithSettings_Refusals(t *testing.T) {
 // accepted because extension prefixes are not blocked, as Setting documents.
 func TestValidateSettings_AcceptedNames(t *testing.T) {
 	for _, name := range []string{"app.tenant_id", "_a._b", "plpgsql.x"} {
-		applied, err := validateSettings([]Setting{{Name: name, Value: "v"}})
+		applied, err := validateSettings("TransactWithSettings", []Setting{{Name: name, Value: "v"}})
 		if err != nil {
 			t.Fatalf("validateSettings(%q) = %v, want accepted", name, err)
 		}

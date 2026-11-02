@@ -65,70 +65,79 @@ func TestLive_TransactWithSettings_DoesNotLeak(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), instanceTimeout)
 	defer cancel()
 	refused := errors.New("callback refused")
+	variants := map[string]func(context.Context, []Setting, func(context.Context) error) error{
+		"TransactWithSettings":         db.TransactWithSettings,
+		"TransactSnapshotWithSettings": db.TransactSnapshotWithSettings,
+	}
 
-	for _, outcome := range []string{"commit", "error rollback", "recovered panic"} {
-		t.Run(outcome, func(t *testing.T) {
-			value := fmt.Sprintf("v-%d", time.Now().UnixNano())
-			var insidePID int
-			run := func() (err error) {
-				defer func() {
-					if r := recover(); r != nil {
-						if r != "boom" {
-							panic(r)
+	for variant, transact := range variants {
+		for _, outcome := range []string{"commit", "error rollback", "recovered panic"} {
+			t.Run(variant+"/"+outcome, func(t *testing.T) {
+				value := fmt.Sprintf("v-%d", time.Now().UnixNano())
+				var insidePID int
+				run := func() (err error) {
+					defer func() {
+						if r := recover(); r != nil {
+							if r != "boom" {
+								panic(r)
+							}
+							err = refused
 						}
-						err = refused
-					}
-				}()
-				return db.TransactWithSettings(ctx, []Setting{{Name: settingsProbe, Value: value}}, func(ctx context.Context) error {
-					tx, ok := db.TxFrom(ctx)
-					if !ok {
-						t.Fatal("db.TxFrom found no transaction inside TransactWithSettings")
-					}
-					insidePID = backendPID(t, ctx, tx)
-					var got string
-					if err := tx.QueryRow(ctx, "SELECT current_setting($1)", settingsProbe).Scan(&got); err != nil {
-						t.Fatalf("current_setting inside: %v", err)
-					}
-					if got != value {
-						t.Fatalf("current_setting inside = %q, want %q", got, value)
-					}
-					if v, ok := tx.Setting(settingsProbe); !ok || v != value {
-						t.Fatalf("tx.Setting = (%q, %t), want (%q, true)", v, ok, value)
-					}
-					if err := db.TransactWithSettings(ctx, []Setting{{Name: settingsProbe, Value: "nested"}}, func(context.Context) error { return nil }); !errors.Is(err, ErrNestedTransact) {
-						t.Fatalf("nested TransactWithSettings = %v, want ErrNestedTransact", err)
-					}
-					if err := db.Transact(ctx, func(context.Context) error { return nil }); !errors.Is(err, ErrNestedTransact) {
-						t.Fatalf("nested Transact = %v, want ErrNestedTransact", err)
-					}
-					switch outcome {
-					case "error rollback":
-						return refused
-					case "recovered panic":
-						panic("boom")
-					}
-					return nil
-				})
-			}
-			err := run()
-			if outcome == "commit" && err != nil {
-				t.Fatalf("TransactWithSettings: %v", err)
-			}
-			if outcome != "commit" && err != refused {
-				t.Fatalf("TransactWithSettings = %v, want the callback's refusal", err)
-			}
+					}()
+					return transact(ctx, []Setting{{Name: settingsProbe, Value: value}}, func(ctx context.Context) error {
+						tx, ok := db.TxFrom(ctx)
+						if !ok {
+							t.Fatalf("db.TxFrom found no transaction inside %s", variant)
+						}
+						insidePID = backendPID(t, ctx, tx)
+						var got string
+						if err := tx.QueryRow(ctx, "SELECT current_setting($1)", settingsProbe).Scan(&got); err != nil {
+							t.Fatalf("current_setting inside: %v", err)
+						}
+						if got != value {
+							t.Fatalf("current_setting inside = %q, want %q", got, value)
+						}
+						if v, ok := tx.Setting(settingsProbe); !ok || v != value {
+							t.Fatalf("tx.Setting = (%q, %t), want (%q, true)", v, ok, value)
+						}
+						if err := db.TransactWithSettings(ctx, []Setting{{Name: settingsProbe, Value: "nested"}}, func(context.Context) error { return nil }); !errors.Is(err, ErrNestedTransact) {
+							t.Fatalf("nested TransactWithSettings = %v, want ErrNestedTransact", err)
+						}
+						if err := db.Transact(ctx, func(context.Context) error { return nil }); !errors.Is(err, ErrNestedTransact) {
+							t.Fatalf("nested Transact = %v, want ErrNestedTransact", err)
+						}
+						if err := db.TransactSnapshotWithSettings(ctx, []Setting{{Name: settingsProbe, Value: "nested"}}, func(context.Context) error { return nil }); !errors.Is(err, ErrNestedTransact) {
+							t.Fatalf("nested TransactSnapshotWithSettings = %v, want ErrNestedTransact", err)
+						}
+						switch outcome {
+						case "error rollback":
+							return refused
+						case "recovered panic":
+							panic("boom")
+						}
+						return nil
+					})
+				}
+				err := run()
+				if outcome == "commit" && err != nil {
+					t.Fatalf("%s: %v", variant, err)
+				}
+				if outcome != "commit" && err != refused {
+					t.Fatalf("%s = %v, want the callback's refusal", variant, err)
+				}
 
-			if after := backendPID(t, ctx, db); after != insidePID {
-				t.Fatalf("pg_backend_pid after = %d, inside = %d: not the same connection", after, insidePID)
-			}
-			var after *string
-			if err := db.QueryRow(ctx, "SELECT current_setting($1, true)", settingsProbe).Scan(&after); err != nil {
-				t.Fatalf("current_setting after: %v", err)
-			}
-			if after != nil && *after != "" {
-				t.Fatalf("current_setting after %s = %q, want '' or NULL (the setting leaked)", outcome, *after)
-			}
-		})
+				if after := backendPID(t, ctx, db); after != insidePID {
+					t.Fatalf("pg_backend_pid after = %d, inside = %d: not the same connection", after, insidePID)
+				}
+				var after *string
+				if err := db.QueryRow(ctx, "SELECT current_setting($1, true)", settingsProbe).Scan(&after); err != nil {
+					t.Fatalf("current_setting after: %v", err)
+				}
+				if after != nil && *after != "" {
+					t.Fatalf("current_setting after %s = %q, want '' or NULL (the setting leaked)", outcome, *after)
+				}
+			})
+		}
 	}
 
 	t.Run("Transact records no settings", func(t *testing.T) {
@@ -340,4 +349,66 @@ func TestLive_TransactWithSettings_RowLevelSecurity(t *testing.T) {
 		onlyA(t, got)
 		sessionRoleRestored(t)
 	})
+}
+
+// TestLive_TransactSnapshotWithSettings_Snapshot: the transaction is
+// REPEATABLE READ with the setting applied, its snapshot starts at the
+// set_config statement (a row another connection commits afterwards stays
+// invisible), and its own writes are visible (#306).
+func TestLive_TransactSnapshotWithSettings_Snapshot(t *testing.T) {
+	db := openSettingsDB(t, 0, nil)
+	ctx, cancel := context.WithTimeout(t.Context(), instanceTimeout)
+	defer cancel()
+	table := fmt.Sprintf("snapshot_settings_probe_%d", time.Now().UnixNano())
+	if _, err := db.Exec(ctx, "CREATE TABLE "+table+" (id text PRIMARY KEY)"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DROP TABLE IF EXISTS "+table) })
+
+	err := db.TransactSnapshotWithSettings(ctx, []Setting{{Name: "app.tenant_id", Value: "acme"}}, func(ctx context.Context) error {
+		tx, _ := db.TxFrom(ctx)
+		var isolation, tenant string
+		if err := tx.QueryRow(ctx, "SELECT current_setting('transaction_isolation'), current_setting('app.tenant_id')").Scan(&isolation, &tenant); err != nil {
+			return err
+		}
+		if isolation != "repeatable read" || tenant != "acme" {
+			t.Errorf("isolation = %q tenant = %q, want repeatable read / acme", isolation, tenant)
+		}
+		if v, ok := tx.Setting("app.tenant_id"); !ok || v != "acme" {
+			t.Errorf("tx.Setting = (%q, %t), want (acme, true)", v, ok)
+		}
+		if suitable, err := tx.SnapshotIsolation(ctx); err != nil || !suitable {
+			t.Errorf("SnapshotIsolation = %t, %v; want true", suitable, err)
+		}
+		// Another connection commits a row after the snapshot was taken.
+		if _, err := db.Exec(ctx, "INSERT INTO "+table+" (id) VALUES ('outside')"); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "INSERT INTO "+table+" (id) VALUES ('inside')"); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, "SELECT id FROM "+table+" ORDER BY id")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		var seen []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			seen = append(seen, id)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if len(seen) != 1 || seen[0] != "inside" {
+			t.Errorf("rows inside the snapshot = %v, want [inside] (own write, not the later outside commit)", seen)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TransactSnapshotWithSettings: %v", err)
+	}
 }

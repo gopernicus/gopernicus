@@ -13,7 +13,11 @@ standard PostgreSQL guidance applied to pgxdb.
 
 ## Transaction-local settings
 
-`(*DB).TransactWithSettings(ctx, settings, fn)` is `Transact` with one extra first statement:
+`(*DB).TransactWithSettings(ctx, settings, fn)` is `Transact` with one extra first statement.
+`(*DB).TransactSnapshotWithSettings` (pgxdb v0.19.0) is the same over `TransactSnapshot`
+(REPEATABLE READ): use it when the workflow reads authorization grants and then writes, since the
+authorization pgx store refuses its canonical reads under READ COMMITTED. Both follow the rules
+below.
 
 ```go
 err := db.TransactWithSettings(ctx, []pgxdb.Setting{{Name: "app.tenant_id", Value: tenantID}},
