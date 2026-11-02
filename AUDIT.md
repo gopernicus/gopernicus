@@ -6461,3 +6461,17 @@ against the live Auth emulator.
   pipeline that produced them.
 - **Residuals (deliberate):** a host that places `Handler` before its redaction exports what it
   logs; documented, not enforceable. The handler level is per handler, not per logger name.
+
+## AUDIT-074: An sdk metrics port (#350, part 2)
+
+- **Status:** pending tag as `sdk` v0.28.0 (otel v0.9.0 and pgxdb v0.21.0 follow). Record:
+  `RELEASING.md`, "An sdk metrics port (#350, part 2)".
+- **Modules:** `sdk` (new `capabilities/metrics`); then `integrations/tracing/otel`,
+  `integrations/datastores/pgxdb`.
+- **Old behavior:** no metrics vocabulary; hosts built meter providers and HTTP metrics
+  themselves.
+- **New behavior:** a stdlib port with a `Noop` default. Metrics are a data-egress path and a
+  cardinality hazard, so the port's contract states that attribute values come from bounded sets
+  and never carry identifiers, paths, emails, tokens or error text. Each built-in caller is
+  bounded by construction (fixed label allowlists).
+- **Residuals (deliberate):** the port cannot enforce cardinality for host-written callers.

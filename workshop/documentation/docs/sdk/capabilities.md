@@ -16,6 +16,7 @@ another.
 |---|---|---|---|
 | [`authentication`](authentication.md) | external identity provider port: `Provider` → `Identity`, optional revocation facts | `NewOIDC` over a `cryptids.JWTVerifier` | go-oidc verifier; Firebase and Auth0 presets |
 | [`cacher`](#cacher) | byte cache, namespaced JSON cache, public-page middleware | bounded memory LRU, `Noop` | Redis (`integrations/kvstores/goredis`) |
+| [`metrics`](#metrics) | counter, histogram and observable-gauge instruments | `Noop` | OpenTelemetry |
 | [`events`](#events) | typed notifications, subscriptions, checked local dispatch, record envelopes | bounded memory, `Noop` | Redis; the events pocket builds on it |
 | [`filestorage`](#filestorage) | object keys, streaming upload/replace, range reads; optional signed URLs and resumable uploads | confined disk | GCS, S3-compatible |
 | [`notify`](#notify) and `notify/email` | per-call multi-channel delivery, production posture checks, typed email with templates | console and SMTP email | SendGrid; host Slack/SMS clients |
@@ -288,6 +289,25 @@ prefixes and Postgres needs the `window_ms` migration; AUDIT-011 in the root
 migration guide covers that rollout. The runnable
 `examples/minimal/internal/logic/domains/catalog/ratelimit_example_test.go`
 shows policy resolution, HTTP-style `Allow` and worker `Acquire`.
+
+## metrics
+
+**What:** a `Meter` that creates a monotonic int64 `Counter`, a float64
+`Histogram` and an observable `Gauge` (a callback run on each collection, with
+an unregister). **Default:** `Noop{}`. The OpenTelemetry integration implements
+it and exports over OTLP.
+
+```go
+var meter metrics.Meter = metrics.Noop{}
+done := meter.Counter(metrics.Spec{Name: "jobs.completed", Unit: "{job}"})
+done.Add(ctx, 1, metrics.StringAttribute("job.kind", kind))
+```
+
+Cardinality is the caller's contract: every distinct attribute set is a series,
+so values come from small bounded sets (a method, a route template, a status
+class, a job kind), never ids, paths, emails, tokens or error text. The port
+cannot enforce it. `metrics` has its own `Attribute` type because capabilities
+never import each other.
 
 ## tracing
 

@@ -1,5 +1,17 @@
 # Releasing gopernicus modules
 
+## An sdk metrics port (#350, part 2 — sdk v0.28.0; otel v0.9.0 and pgxdb v0.21.0 follow)
+
+**Status: pending merge and tag.** **MINOR, additive.** `sdk/capabilities/metrics`: a `Meter`
+creating a monotonic int64 `Counter`, a float64 `Histogram` and an observable `Gauge` (callback
+plus unregister), `Spec{Name, Description, Unit}`, its own string `Attribute`, and a `Noop`
+default. Stdlib-only, the sibling of `capabilities/tracing`. The package doc makes attribute
+cardinality the caller's contract (bounded values only, never ids, paths or error text).
+
+This step adds a package and nothing else. otel (`OpenMetrics`, HTTP request metrics on
+`otel.Middleware`) and pgxdb (`RegisterPoolMetrics`) follow once sdk v0.28.0 is tagged.
+AUDIT-074.
+
 ## Logs over OTLP beside traces (#350, part 1 — integrations/tracing/otel v0.8.0 — published 2026-11-02)
 
 **Status: released.** **MINOR, additive, opt-in.**
