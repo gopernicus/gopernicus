@@ -6448,8 +6448,8 @@ against the live Auth emulator.
 
 ## AUDIT-073: Logs over OTLP beside traces (#350, part 1)
 
-- **Status:** pending tag as `integrations/tracing/otel` v0.8.0. Record: `RELEASING.md`, "Logs over
-  OTLP beside traces (#350, part 1)".
+- **Status:** released as `integrations/tracing/otel` v0.8.0 (`883ec132` → `002a91ac`, #353).
+  Record: `RELEASING.md`, "Logs over OTLP beside traces (#350, part 1 — published 2026-11-02)".
 - **Modules:** `integrations/tracing/otel` (OpenTelemetry family v1.45.0 → v1.47.0; adds log,
   sdk/log, the OTLP and stdout log exporters, and `contrib/bridges/otelslog`). No sdk change.
 - **Old behavior:** traces only; hosts built their own logger provider and slog bridge.

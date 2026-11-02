@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## Logs over OTLP beside traces (#350, part 1 — integrations/tracing/otel v0.8.0)
+## Logs over OTLP beside traces (#350, part 1 — integrations/tracing/otel v0.8.0 — published 2026-11-02)
 
-**Status: pending merge and tag.** **MINOR, additive, opt-in.**
+**Status: released.** **MINOR, additive, opt-in.**
 
 - `OpenLogs(ctx, Config) (*Logs, error)` with the same `Config`, validation, posture and env
   isolation as `Open`; OTLP/HTTP sends to `<Endpoint>/v1/logs`; provider mode takes the new
@@ -16,6 +16,17 @@
   suites pass as-is.
 
 No sdk change. Metrics (#350 part 2) are not in this release. AUDIT-073.
+
+| Step | Tag | Tag object → commit | PR | Cold verification |
+|---|---|---|---|---|
+| 1 | `integrations/tracing/otel/v0.8.0` | `883ec132` → `002a91ac` | #353 | OK at the sdk floor (v0.18.0): `OpenLogs` stdout export through a redacting chain (record exported, value redacted); `InstallErrorHandler` install/restore |
+
+Annotated, not signed. No store, no example repin. govulncheck v1.9.0 on the module: nothing
+reachable. **Run and look.** A disposable `grafana/otel-lgtm` behind a proxy requiring
+`Authorization: Basic …` on `/otlp/*`, traces and logs over OTLP/HTTP: Loki held all 5 lines, each
+with the request's trace id, `password=[redacted]`, the secret absent; Tempo resolved the trace.
+Against a dead endpoint, 9 s of failing background exports gave one rate-limited console WARN and
+a clean exit. `ForceFlush`/`Shutdown` return their export errors to the caller, not the handler.
 
 ## Pool statistics and SQL statement spans (#348, #349 — integrations/datastores/pgxdb v0.20.0, integrations/tracing/otel v0.7.0 — published 2026-11-02)
 
