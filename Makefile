@@ -662,10 +662,11 @@ guard-baseline-ledger:
 # (s.table(securityEventsTable), cfg.schema.Table("iam_audit"),
 # r.table("secrets_audit")). The word boundaries keep security_events_retention
 # and security_events_purge_before out; iam_operations is not a rail
-# (AllowDelete). The pgx stores only CALL the 0024 definer function. The
-# allow-list is PER LINE, by file and exact text — never a whole file: the turso
-# rail purge's DELETE (its DROP TRIGGER line drops the captured names and names
-# no rail, so it never matches) and the two turso canonical trigger texts
+# (AllowDelete). The pgx stores only CALL the 0024 and 0008 definer functions. The
+# allow-list is PER LINE, by file and exact text — never a whole file: the two
+# turso rail purges' DELETEs, security_events (0024) and iam_audit (0008) (their
+# DROP TRIGGER lines drop the captured names and name no rail, so they never
+# match), and the two turso canonical trigger texts
 # (CREATE TRIGGER … BEFORE UPDATE ON <rail>), DDL the boot probe compares, not
 # DML. Comment lines are skipped, and the pattern must still match the
 # allow-listed purge line, so a grep that stops matching cannot pass silently.
@@ -680,6 +681,7 @@ guard-baseline-ledger:
 G35_PATTERN = (UPDATE|DELETE[[:space:]]+FROM|INSERT[[:space:]]+OR[[:space:]]+REPLACE[[:space:]]+INTO|TRUNCATE|DROP[[:space:]]+TRIGGER)[^;]*(\bsecurity_events\b|securityEventsTable|\biam_audit\b|\bsecrets_audit\b)
 G35_ALLOWED = \
 	-e 'pockets/authentication/stores/turso/maintenance.go:res, err := tx.Exec(ctx, `DELETE FROM security_events WHERE id IN (SELECT id FROM security_events WHERE created_at <= ? ORDER BY created_at, id LIMIT ?)`, cutoff, limit)' \
+	-e 'pockets/authorization/stores/turso/audit_expiry.go:res, err := tx.Exec(ctx, `DELETE FROM main.iam_audit WHERE id IN (SELECT id FROM main.iam_audit WHERE occurred_at <= ? ORDER BY occurred_at, id LIMIT ?)`, tursodb.FormatTime(before), limit)' \
 	-e 'pockets/authentication/stores/turso/turso.go:securityEventsImmutableUpdateSQL = `CREATE TRIGGER security_events_immutable_update BEFORE UPDATE ON security_events' \
 	-e 'pockets/authorization/stores/turso/turso.go:iamAuditImmutableUpdate = `CREATE TRIGGER iam_audit_immutable_update BEFORE UPDATE ON iam_audit'
 G35_DROP_PATTERN = DROP[[:space:]]+TRIGGER([[:space:]]+IF[[:space:]]+EXISTS)?[[:space:]]+([`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]*_)?(security_events|iam_audit|secrets_audit)(_[A-Za-z0-9_]*)?([^A-Za-z0-9_]|$$)

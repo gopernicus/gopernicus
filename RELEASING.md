@@ -1,5 +1,30 @@
 # Releasing gopernicus modules
 
+## Supported retention for `iam_audit` (#305 — pockets/authorization v0.36.0, stores pgx v0.25.0, turso v0.24.0)
+
+**Status: pending merge and tag.** **MINOR, additive, opt-in.** `Repositories.AuditExpiry` (an
+`audit.Expirer`), `WithAuditRetention(d)` and `Mutations.ExpireAudit(ctx, limit)` beside
+`ExpireOperations`. There is no default retention: wired without `WithAuditRetention`,
+`ExpireAudit` returns `ErrAuditRetentionNotConfigured` and `Register` logs
+`audit_retention=unbounded`; below `MinAuditRetention` (366 days) is `ErrAuditRetentionTooShort`;
+set without the slot, `ErrAuditRetentionWithoutExpirer`. Records go oldest first by
+`(occurred_at, id)`; each store refuses a cutoff younger than its 365-day floor
+(`audit.ErrBelowRetentionFloor`). `Components.Audit` is unchanged.
+
+Migration `0008_iam_audit_retention.sql`, additive and admitted (no boot probe requires it). pgx:
+`iam_audit_purge_before`, a migrator-owned `SECURITY DEFINER` function with a pinned
+`search_path`, `EXECUTE` revoked from `PUBLIC` (hosts `GRANT EXECUTE` it to the runtime role), its
+floor function, and the append-only `iam_audit_purges` evidence table, one row per call in the same
+transaction; `AuditTables` now lists the definer for the posture probe. turso: the floor table
+`iam_audit_retention`, the same evidence table, and a capture-drop-restore purge transaction;
+`G35_ALLOWED` gains its DELETE line. The production-baseline ledger carries the copy as `0037`.
+No sdk, pgxdb, turso-integration or goredis change. AUDIT-071.
+
+Tags in order: `pockets/authorization/v0.36.0`, then both stores' `require` bumped to it (they
+resolve the pocket through `go.work` until then), then `pockets/authorization/stores/pgx/v0.25.0`
+and `pockets/authorization/stores/turso/v0.24.0`. PR-2 repins `examples/auth-cms` and
+`examples/production-baseline`.
+
 ## Route-pattern span names under a global Use (#308 — integrations/tracing/otel v0.6.0 — published 2026-11-02)
 
 **Status: released.** **MINOR, additive, opt-in.** `otel.RouteNames()`, installed as

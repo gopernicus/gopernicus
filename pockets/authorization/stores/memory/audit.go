@@ -15,6 +15,10 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
+// auditRetentionFloor matches the SQL stores' floor (pgx
+// iam_audit_retention_floor(), turso iam_audit_retention row 1).
+const auditRetentionFloor = 365 * 24 * time.Hour
+
 // write stages owned fact state under the shared mutex. Audit preparation or
 // cancellation can fail without exposing either facts or partial history.
 func (s *state) write(ctx context.Context, apply func(*state) error) error {
@@ -176,6 +180,53 @@ func (a *Audit) List(ctx context.Context, filter audit.Filter, req list.Request)
 		return list.Page[audit.Record]{}, err
 	}
 	return page, nil
+}
+
+// AuditExpiry purges retained history under the shared mutex, refusing a cutoff
+// younger than the 365-day floor the SQL stores enforce.
+type AuditExpiry struct{ st *state }
+
+var _ audit.Expirer = (*AuditExpiry)(nil)
+
+// Expire deletes at most min(limit, audit.MaxExpireLimit) records that occurred
+// at or before before, oldest first (occurred_at, then ID).
+func (e *AuditExpiry) Expire(ctx context.Context, before time.Time, limit int) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("authorization memory: audit expiry limit must be positive, got %d: %w", limit, sdk.ErrInvalidInput)
+	}
+	if before.After(time.Now().Add(-auditRetentionFloor)) {
+		return 0, fmt.Errorf("authorization memory: cutoff %s is below the retention floor of 365 days: %w", before.UTC().Format(time.RFC3339Nano), audit.ErrBelowRetentionFloor)
+	}
+	limit = min(limit, audit.MaxExpireLimit)
+	e.st.mu.Lock()
+	defer e.st.mu.Unlock()
+	var due []audit.Record
+	for _, r := range e.st.auditRecords {
+		if !r.OccurredAt.After(before) {
+			due = append(due, r)
+		}
+	}
+	sort.Slice(due, func(i, j int) bool {
+		if c := due[i].OccurredAt.Compare(due[j].OccurredAt); c != 0 {
+			return c < 0
+		}
+		return due[i].ID < due[j].ID
+	})
+	purged := make(map[string]bool, min(limit, len(due)))
+	for _, r := range due[:min(limit, len(due))] {
+		purged[r.ID] = true
+	}
+	kept := e.st.auditRecords[:0:0]
+	for _, r := range e.st.auditRecords {
+		if !purged[r.ID] {
+			kept = append(kept, r)
+		}
+	}
+	e.st.auditRecords = kept
+	return len(purged), nil
 }
 
 func cloneAuditRecord(r audit.Record) audit.Record { return r }

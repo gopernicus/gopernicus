@@ -183,6 +183,36 @@ invalid one) `Repositories` logs one WARN on `slog.Default`,
 pre-build it `CONCURRENTLY` on a large ledger as the [upgrade guide](../UPGRADE.md)
 describes.
 
+**Retention (0008), v0.25.0: admitted, not required.**
+`0008_iam_audit_retention.sql` ships the supported `iam_audit` purge. The
+runtime role keeps no DELETE on `iam_audit`; `Repositories` sets `AuditExpiry`,
+whose `Expire` calls `iam_audit_purge_before(timestamptz, int4)`, a `SECURITY
+DEFINER` function owned by the migrator (a member of the table's owner, which
+the 0006 trigger exempts), schema-qualified under `WithSchema`. In one statement
+it refuses a cutoff younger than `iam_audit_retention_floor()` (365 days),
+clamps the batch to 1..10000, deletes oldest first by `(occurred_at, id)` with
+`FOR UPDATE SKIP LOCKED`, and appends one row to the append-only
+`iam_audit_purges` (`cutoff, purged, floor_days, max_rows, session_role,
+recorded_at`), a zero count included. Its `search_path` is pinned to
+`pg_catalog, <iam_audit's schema>, pg_temp` and `EXECUTE` is revoked from
+`PUBLIC`; grant it to the runtime role:
+
+```sql
+GRANT EXECUTE ON FUNCTION iam_audit_purge_before(pg_catalog.timestamptz, pg_catalog.int4) TO runtime;
+```
+
+| failure | `ExpireAudit` returns |
+| --- | --- |
+| cutoff younger than the floor (22023) | `audit.ErrBelowRetentionFloor` |
+| no `EXECUTE` (42501 on the function) | `sdk.ErrForbidden`, naming the `GRANT` |
+| the trigger refused the definer's delete (other 42501) | `sdk.ErrForbidden`, naming `ALTER FUNCTION … SECURITY DEFINER` / `OWNER TO` |
+| 0008 not applied (42883) | `sdk.ErrNotFound`, naming the file |
+
+`AuditTables(WithAudit())` lists the function beside `iam_audit`, so the posture
+probe judges it once it exists: `PUBLIC` execute, an unpinned `search_path` or
+another schema refuses production; a non-definer, a foreign or superuser owner,
+or `CREATE` on the schema for the runtime role WARNs.
+
 TupleCache adds one optional file,
 `tuple_cache_migrations/0002_iam_tuple_cache.sql`, exposed by
 `TupleCacheMigrationsFS` / `TupleCacheMigrationsDir` and

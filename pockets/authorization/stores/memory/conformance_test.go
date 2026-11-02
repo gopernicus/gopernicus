@@ -54,7 +54,13 @@ func TestAudit(t *testing.T) {
 			opts = append(opts, memory.WithAudit())
 		}
 		store := memory.New(opts...)
-		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), Operations: store.Operations(), Audit: store.Audit()}, Relationships: store.Relationships()}
+		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), Operations: store.Operations(), Audit: store.Audit(), AuditExpiry: store.AuditExpiry()}, Relationships: store.Relationships(),
+			SetAuditOccurredAt: func(t *testing.T, id string, occurredAt time.Time) {
+				if !memory.SetAuditOccurredAt(store.Audit(), id, occurredAt) {
+					t.Fatalf("no audit record %q", id)
+				}
+			},
+		}
 	})
 }
 

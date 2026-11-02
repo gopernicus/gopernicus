@@ -164,6 +164,22 @@ builds `idx_iam_operations_committed` (`committed_at, operation_id`) with
 single writer orders it against `Apply` and `Fence`. The schema probe admits the
 database with or without the index.
 
+**Retention (0008), v0.24.0: admitted, not required.**
+`0008_iam_audit_retention.sql` creates the floor table `iam_audit_retention`
+(row 1, `floor_days = 365`) and the append-only `iam_audit_purges`.
+`Repositories` sets `AuditExpiry`. The 0006 triggers abort every DELETE on
+`iam_audit`, so each `Expire` is one `BEGIN IMMEDIATE` transaction: read the
+floor (a missing row or table refuses, naming 0008, as `sdk.ErrNotFound`; a
+cutoff younger than it is `audit.ErrBelowRetentionFloor`), capture the
+`iam_audit` triggers from `sqlite_schema`, drop exactly those, delete at most
+10000 rows oldest first by `(occurred_at, id)`, restore the captured text
+verbatim, and append one `iam_audit_purges` row, a zero count included. A
+failure at any step rolls back and leaves the triggers in place. After COMMIT
+the trigger set is read again; a difference logs ERROR `rail_triggers_changed`.
+Restoring what was captured, never the embedded 0006, keeps a host's declined or
+altered trigger as it was. The floor is a footgun guard, not a control: SQLite
+has no roles, and a connection that can purge can also drop the triggers.
+
 TupleCache adds one optional file,
 `tuple_cache_migrations/0002_iam_tuple_cache.sql`, exposed by
 `TupleCacheMigrationsFS` / `TupleCacheMigrationsDir` and

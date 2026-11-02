@@ -599,7 +599,8 @@ schedule, one runner instance per database. The lifetimes, defaults and the floo
 | published events (`event_outbox`) | `outbox.PurgePublished(ctx, before)` — unbounded: its own step, after a one-off manual drain | host scheduler |
 | cms `inquiries` | `PurgeBefore(ctx, before, limit)` on the `messaging.InquiryEraser` the host wired as `Repositories.InquiryMaintenance` | host scheduler |
 | `ratelimit_windows` (pgx limiter) | `DELETE FROM ratelimit_windows WHERE expires_at < now();` | host cron |
-| `iam_audit`, `secrets_audit` | the host's definer function (*Production database posture*, "Definer functions") | host cron |
+| `iam_audit` | `Components.Mutations.ExpireAudit(ctx, limit)` until it returns less than `limit`, once `WithAuditRetention` is set | hourly |
+| `secrets_audit` | the host's definer function (*Production database posture*, "Definer functions") | host cron |
 
 Set `MaintenanceRunnerAcknowledged: true` once the authentication runner runs; production WARNs
 while it is false. `Pass` never cancels a running statement: it checks `PassBudget` (5m) between

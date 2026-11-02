@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 )
@@ -42,4 +43,21 @@ func WithOperationExpiry(expirer OperationExpirer) Option {
 // operation ID: a command retried after its record expired applies again.
 func WithOperationRetention(retention time.Duration) Option {
 	return func(c *config) { c.Retention = retention; c.RetentionSet = true }
+}
+
+// WithAuditExpiry enables ExpireAudit. The expirer must purge the history of the
+// same authority as the service's MutationRepository. Nil leaves ExpireAudit
+// returning ErrAuditExpiryNotConfigured.
+func WithAuditExpiry(expirer audit.Expirer) Option {
+	return func(c *config) { c.AuditExpirer = expirer }
+}
+
+// WithAuditRetention sets how long ExpireAudit keeps a record: it purges records
+// that occurred at or before now minus retention. There is no default: without
+// it ExpireAudit returns ErrAuditRetentionNotConfigured and history is kept.
+// NewService refuses a retention below MinAuditRetention
+// (ErrAuditRetentionTooShort) and one set without WithAuditExpiry
+// (ErrAuditRetentionWithoutExpirer).
+func WithAuditRetention(retention time.Duration) Option {
+	return func(c *config) { c.AuditRetention = retention; c.AuditRetentionSet = true }
 }

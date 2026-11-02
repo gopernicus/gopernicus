@@ -28,6 +28,11 @@ type Repositories struct {
 	// clock, so the OperationLedger expiry cases use it to place a record exactly
 	// at an Expire boundary. It is required when OperationExpiry is wired.
 	SetOperationCommittedAt func(t *testing.T, operationID string, committedAt time.Time)
+	// SetAuditOccurredAt rewrites the occurred_at of the audit record id past
+	// the store's append-only guard. Stores refuse a purge cutoff younger than
+	// their retention floor, so the audit expiry cases use it to age records
+	// below it. It is required when AuditExpiry is wired.
+	SetAuditOccurredAt func(t *testing.T, id string, occurredAt time.Time)
 }
 
 // Run executes the full conformance suite. factory returns fresh, empty

@@ -72,6 +72,9 @@ func (s *Store) Tuples() *Tuples { return s.tup }
 // Audit returns retained history, including when recording is disabled.
 func (s *Store) Audit() *Audit { return &Audit{st: s.rel.st} }
 
+// AuditExpiry returns the audit.Expirer over the same retained history.
+func (s *Store) AuditExpiry() *AuditExpiry { return &AuditExpiry{st: s.rel.st} }
+
 // Mutations returns the shared-state atomic mutation.MutationRepository.
 func (s *Store) Mutations() *Mutations { return s.mut }
 

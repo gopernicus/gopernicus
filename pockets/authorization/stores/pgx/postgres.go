@@ -163,6 +163,7 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (authorizat
 		Operations:      mutationStore,
 		OperationExpiry: mutationStore,
 		Audit:           &auditStore{db: db, schema: cfg.schema},
+		AuditExpiry:     &auditExpiry{db: db, schema: cfg.schema},
 	}
 	if source != nil {
 		repos.TupleSource = source
@@ -188,7 +189,11 @@ WHERE i.indrelid=pg_catalog.to_regclass($1) AND c.relname=$2 AND i.indisvalid)`,
 // pgxdb.DB.ProbeAppendOnly for these options: iam_audit when WithAudit() is set,
 // and iam_operations, whose trigger admits deleting rows that are not fenced.
 // A migrator passes the same set to pgxdb.InspectTablePrivileges to preflight
-// the runtime role, so the preflight and boot decide identically.
+// the runtime role, so the preflight and boot decide identically. iam_audit
+// lists the SECURITY DEFINER function migration 0008 ships beside it,
+// iam_audit_purge_before, so the probe judges it once it exists: unsafe (PUBLIC
+// EXECUTE, an unpinned search_path, another schema) refuses production;
+// inoperative WARNs. A database without 0008 is judged as before.
 func AuditTables(opts ...Option) []pgxdb.AppendOnlyTable {
 	var cfg config
 	for _, o := range opts {
@@ -205,6 +210,7 @@ func auditTables(cfg config) []pgxdb.AppendOnlyTable {
 		tables = append(tables, pgxdb.AppendOnlyTable{
 			Name:      cfg.schema.Table("iam_audit"),
 			Canonical: []pgxdb.TriggerBody{{Function: iamAuditRefuseWrite, Body: iamAuditRefuseWriteBody}},
+			Functions: []pgxdb.DefinerFunction{{Signature: cfg.schema.Table(auditPurgeFunction) + auditPurgeFunctionArgs}},
 		})
 	}
 	return append(tables, pgxdb.AppendOnlyTable{

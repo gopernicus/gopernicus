@@ -62,7 +62,7 @@ func assertFreshIndexes(t *testing.T, db *pgxdb.DB) {
 func TestFreshCanonicalSchema(t *testing.T) {
 	db := canonicalFixture(t, false)
 	assertFreshIndexes(t, db)
-	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_operations", "iam_tuples"}) {
+	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_audit_purges", "iam_operations", "iam_tuples"}) {
 		t.Fatalf("primary tables: %v", got)
 	}
 	for _, table := range []string{"iam_tuples", "iam_audit"} {
@@ -235,7 +235,7 @@ func TestFreshCacheInstallationOrderAndRollback(t *testing.T) {
 		if err := pgxdb.RunMigrations(ctx, db, broken, TupleCacheMigrationsDir); err == nil {
 			t.Fatal("broken optional migration succeeded")
 		}
-		if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_operations", "iam_tuples"}) {
+		if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_audit_purges", "iam_operations", "iam_tuples"}) {
 			t.Fatalf("cache DDL escaped rollback: %v", got)
 		}
 		found, err := repos.Tuples.Contains(ctx, fact)

@@ -131,6 +131,7 @@ never migrates. Its files are the host's:
 | `0034_service_account_status.sql` | `pockets/authentication/stores/pgx/migrations` `0027`, renumbered; required only when `AdministrationConfig.ServiceAccountStatus` is set (applied here ahead of time, so the service-account status can be turned on later) |
 | `0035_session_activity.sql` | `pockets/authentication/stores/pgx/migrations` `0029`, renumbered; required only when `SessionsConfig.IdleTimeout` is wired (this host wires none: it signs users in at the provider and mints no native sessions, so `AUTH_IDLE_TIMEOUT` is not read; the copy keeps the ledger whole for a host that does; on lock timeout, re-run `make migrate`) |
 | `0036_oauth_code_authentication.sql` | `pockets/authentication/stores/pgx/migrations` `0030`, renumbered; required only when `OAuth2Config.DelegatedAssurance` is set (this host wires no OAuth2 server; the copy keeps the ledger whole, and guard P9 wants it once the pgx pin is v0.19.0; on lock timeout, re-run `make migrate`) |
+| `0037_iam_audit_retention.sql` | `pockets/authorization/stores/pgx/migrations` `0008`, renumbered; additive: the `iam_audit` purge definer, its 365-day floor and the `iam_audit_purges` evidence table (this host does not purge `iam_audit` yet; the copy keeps the ledger whole) |
 
 When a store ships a new migration, copy it in as the next number. Never
 renumber a file once it is applied: the filename is its ledger identity.

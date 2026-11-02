@@ -4,6 +4,57 @@ Authorization ships a fresh canonical SQL schema for PostgreSQL and SQLite/Turso
 Hosts export and apply it before constructing repositories. Framework constructors
 validate the applied schema; they do not create tables or run migrations.
 
+## Adopting 0008 — additive, admitted; GRANT EXECUTE to the runtime role
+
+Authorization core `v0.36.0` with PostgreSQL store `v0.25.0` or Turso store
+`v0.24.0`. `migrations/0008_iam_audit_retention.sql` ships the supported
+`iam_audit` purge: copy it as the next entry of the host's authorization stream,
+after `0007_iam_operations_expiry.sql`; never edit an applied file. Neither
+store's boot probe requires it, so it needs no lockstep and an older store boots
+over it; `Mutations.ExpireAudit` is the only caller.
+
+**PostgreSQL.** The file asserts first that it runs in the schema holding
+`iam_audit` and that the migrator is a member of the table's owner, then creates
+`iam_audit_retention_floor()` (365 days), the append-only `iam_audit_purges`
+evidence table (guarded by the 0006 trigger function, granted to nobody) and
+`iam_audit_purge_before(timestamptz, int4)`, a `SECURITY DEFINER` function owned
+by the migrator with its `search_path` pinned to `pg_catalog, <iam_audit's
+schema>, pg_temp` and `EXECUTE` revoked from `PUBLIC`. The runtime role keeps no
+DELETE on `iam_audit`; grant it the function:
+
+```sql
+GRANT EXECUTE ON FUNCTION iam_audit_purge_before(pg_catalog.timestamptz, pg_catalog.int4) TO runtime;
+```
+
+Run the migration as the role that owns `iam_audit`; a migrator outside it is
+refused by the assertion, as a superuser-owned definer is reported inoperative by
+the posture probe. Restoring into a renamed schema needs the file's pin block run
+again. `ExpireAudit` maps the failures: no `EXECUTE` names the `GRANT`; a
+non-definer or foreign-owned function names the `ALTER FUNCTION` fix; a database
+without 0008 is `sdk.ErrNotFound` naming the file. The posture probe now judges
+the function beside `iam_audit` once it exists: `PUBLIC` execute, an unpinned
+`search_path` or another schema refuses production.
+
+**SQLite/Turso.** The file creates the floor table `iam_audit_retention` (row 1,
+`floor_days = 365`) and `iam_audit_purges` with its own immutability triggers. A
+missing floor row or table refuses the purge naming 0008, never a default. The
+purge drops the `iam_audit` triggers it captures from `sqlite_schema`, deletes,
+and restores the captured text verbatim in one transaction: a host that declined
+or renamed a 0006 trigger keeps exactly what it had.
+
+**Enable.** Wire `Repositories.AuditExpiry` (the bundled stores set it in
+`Repositories`), set `WithAuditRetention` (at least 366 days; there is no
+default) and call `Components.Mutations.ExpireAudit(ctx, limit)` on the host's
+schedule. On a long history the first runs are a sustained DELETE load: keep the
+limit modest and run until a call returns less than it.
+
+**Reverse (reference SQL, not shipped).** Stop calling `ExpireAudit`, then author
+a new forward ledger entry: `REVOKE EXECUTE ON FUNCTION
+iam_audit_purge_before(pg_catalog.timestamptz, pg_catalog.int4) FROM runtime;`
+and `DROP FUNCTION IF EXISTS iam_audit_purge_before(pg_catalog.timestamptz,
+pg_catalog.int4);`. Keep `iam_audit_purges`: it is the evidence of past purges.
+Purged records do not come back.
+
 ## Adopting 0007 — additive, admitted; pre-build `CONCURRENTLY` on a large ledger; apply alone
 
 Authorization core `v0.30.0` with PostgreSQL store `v0.21.0` or Turso store
