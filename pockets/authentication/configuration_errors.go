@@ -209,12 +209,6 @@ var ErrCookieDomainRefused = errors.New("auth: production RuntimeMode refuses Br
 // Domain or the namespace rule.
 var ErrCookieDomainWithNamespaceRule = errors.New("auth: BrowserConfig.SessionCookie.Domain cannot be combined with an OriginPolicy namespace rule (keep session cookies host-only under a namespace; remove one)")
 
-// ErrGlobalSessionRevocationRouteRequires is returned by New when
-// AdministrationConfig.GlobalSessionRevocationRoute is set without
-// Repositories.GlobalSessions or without AdministrationConfig.UserAdminCheck:
-// the opt-in names a route that could never mount.
-var ErrGlobalSessionRevocationRouteRequires = errors.New("auth: AdministrationConfig.GlobalSessionRevocationRoute requires Repositories.GlobalSessions and AdministrationConfig.UserAdminCheck")
-
 // The S4d session and machine governance sentinels, re-exported from the logic
 // package so one errors.Is target serves New and the service.
 var (

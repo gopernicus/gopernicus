@@ -2899,30 +2899,48 @@ be written is logged at ERROR.
 | external IdP tokens | the provider's session; the local kill switch is deactivation |
 | invitation tokens; deactivated or erased users' rows | untouched; swept (no bump) |
 
-**The opt-in route.** `AdministrationConfig.GlobalSessionRevocationRoute`
-mounts `POST /auth/admin/sessions/revoke-all` (set without `GlobalSessions` or
-`UserAdminCheck` → `ErrGlobalSessionRevocationRouteRequires`). It runs its own
-authenticator — a first-party access token or an external token, `Live()` —
-whatever `BundledRouteAuth.UserAdministration` admits, so an API key (which
-survives the revoke) and a delegated token are a 401; then the browser-safe gate, `UserAdminCheck` with
-`UserAdminRevokeAllSessions` (`revoke-all-sessions`, no target) and the admins
-MFA gate, then one call a minute per actor (429). An external admin's own IdP
-session survives the revoke — its next token signs in again — so the per-actor
-budget is the throttle on a repeat. The body is strict `{}`; the
-200 is `{"users":n,"sessions":n,"grants":n,"batches":n,"revoked_at":"<UTC RFC
-3339 nanos>"}` and clears the session cookies — the caller's own session is gone
-with the rest. It is JSON only, and distinct from the self-service
-`POST /auth/sessions/revoke-all`. Under `MFAConfig.Required: none` it is
-reachable at AAL1; the host check decides. The run is detached from the
-request (bounded at 10 minutes), so a client disconnect or a proxy idle timeout
-does not stop it — but the client then never sees the 200: give the route a
-proxy read timeout longer than a fleet run, or read the outcome from the
-`all_sessions_revoked_global` rows. A run that fails after a committed batch
-answers its error with the partial counts and clears the session cookies.
+**Running it.** There is no bundled route: a fleet run takes minutes, longer
+than a server write timeout, so a request would lose its answer. Run it as a
+job, or from a one-shot command. Either way the outcome is the
+`all_sessions_revoked_global` rows, which the security-event listing reads.
 
-**When the admin path is the thing that is compromised** — an IdP or an admin
-sign-in — the route may be unreachable. The method is the API; a host keeps a
-CLI beside its server:
+*As a job.* `Service.RevokeAllSessionsJobHandler()` returns
+`func(ctx, payload []byte) error`. It decodes the payload strictly — a
+malformed payload, an unknown field or an empty actor →
+`ErrRevokeAllSessionsJobInvalid` (wraps `sdk.ErrInvalidInput`) with no run —
+and runs `RevokeAllSessions` under a 10-minute limit. The pocket imports no
+jobs implementation; with `pockets/jobs`:
+
+```go
+revokeAll := components.Authentication.RevokeAllSessionsJobHandler()
+handlers := map[string]queue.HandlerFunc{
+	authlogic.RevokeAllSessionsJobKind: func(ctx context.Context, j queue.Job) error {
+		return revokeAll(ctx, j.Payload)
+	},
+}
+
+// Wherever the host decides an operator may trigger it:
+payload, err := authlogic.NewRevokeAllSessionsJob(sdk.Principal{Type: "user", ID: adminID})
+if err != nil {
+	return err
+}
+_, err = jobsSvc.EnqueueJob(ctx, queue.Enqueue{Kind: authlogic.RevokeAllSessionsJobKind, Payload: payload, MaxAttempts: 1})
+```
+
+The payload is `{"actor_type":"...","actor_id":"..."}`; the actor is who the
+evidence rows name. Enqueue with **one attempt**: a retry signs the fleet out
+again and writes another evidence pair, so a re-run is a deliberate
+re-enqueue.
+
+**The trigger owns authorization.** The handler is trusted, like the method:
+whoever can enqueue the job ends every session. A host that exposes an admin
+button writes its own endpoint, answers `202` once the job is enqueued, and
+puts its admin check and MFA requirement in front. The caller's own session
+ends with the rest, so their next request is a 401.
+
+*From a one-shot command.* When the admin path is the thing that is
+compromised — an IdP or an admin sign-in — or a host runs no jobs, call the
+method from a CLI beside the server:
 
 ```go
 // cmd/revoke-all: same wiring as the server, no HTTP.
@@ -3042,7 +3060,7 @@ gate refuse it outright: a JSON 403 `mfa_credential_not_eligible` with NO
 administers users through `UserAdminCheck`, or calls a route that both accepts
 keys and requires MFA, is refused from this release. `MFAConfig.APIKeysExempt`
 restores the pass at every gate (production logs
-`posture_waiver=APIKeysExempt`); the revoke-all route refuses keys regardless.
+`posture_waiver=APIKeysExempt`).
 The MFA boot line gains `api_keys=denied|exempt`.
 
 ## Session lifetime (SOC 2 S4d part 2)
@@ -3251,7 +3269,7 @@ Nil semantics:
 | `ServiceAccounts`, `APIKeys` | both nil → machine subsystem OFF | **both-or-neither** → `ErrMachineReposRequired` |
 | `SecurityEvents` | **no audit trail** — the recording site is a no-op (AV9); degrades silently by design | none — never a construction error |
 | `Invitations` | allowed only while `Granter` is nil | Granter set + nil → `ErrInvitationRepoRequired` |
-| `GlobalSessions` | `RevokeAllSessions` refuses with `ErrGlobalRevocationUnsupported` | `GlobalSessionRevocationRoute` set + nil → `ErrGlobalSessionRevocationRouteRequires` |
+| `GlobalSessions` | `RevokeAllSessions` and its job handler refuse with `ErrGlobalRevocationUnsupported` | none — never a construction error |
 | `ServiceAccountStatus` | never read unless `AdministrationConfig.ServiceAccountStatus`; accounts are all active | flag set + nil → `ErrServiceAccountStatusRequires`; the probe answering `sdk.ErrNotFound` → `ErrServiceAccountStatusSchemaMissing` (naming 0027) |
 | `UserAdmin`, `ActiveSessions` | the account-lifecycle capability is OFF: the trusted admin methods fail closed with `ErrUserAdminUnavailable`, the bundled admin routes are not registered, and session minting uses the unfenced `Sessions.Create` | `AdministrationConfig.UserAdminCheck` set + either nil → `ErrUserAdminReposRequired`. The reverse is **not** an error: a bundled store adapter always supplies both, and the routes stay unmounted until the host makes an authorization decision |
 

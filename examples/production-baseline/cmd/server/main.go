@@ -94,12 +94,6 @@ type archiveConfig struct {
 	Dir string `env:"AUDIT_ARCHIVE_DIR"`
 }
 
-// sessionRevocationConfig mounts the fleet-wide revoke, POST
-// /auth/admin/sessions/revoke-all; false unmounts it.
-type sessionRevocationConfig struct {
-	Route bool `env:"AUTH_GLOBAL_SESSION_REVOCATION_ROUTE" default:"false"`
-}
-
 // authenticationAgeConfig bounds how long ago a provider token's holder
 // signed in at the provider (ExternalProvider.MaxAuthenticationAge, checked on
 // every request): the provider's own session survives a local revoke, so this
@@ -127,7 +121,6 @@ type composition struct {
 	authenticationRepos  authentication.Repositories
 	authorizationRepos   authorization.Repositories
 	provider             sdkauth.Provider
-	globalRevokeRoute    bool
 	maxAuthenticationAge time.Duration
 	// requireAuthenticationTime is IDP_REQUIRE_AUTHENTICATION_TIME.
 	requireAuthenticationTime bool
@@ -217,10 +210,6 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 		return err
 	}
 
-	var revocation sessionRevocationConfig
-	if err := environment.ParseEnvTags("", &revocation); err != nil {
-		return err
-	}
 	var age authenticationAgeConfig
 	if err := environment.ParseEnvTags("", &age); err != nil {
 		return err
@@ -242,7 +231,6 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 		authenticationRepos:       authenticationRepos,
 		authorizationRepos:        authorizationRepos,
 		provider:                  provider,
-		globalRevokeRoute:         revocation.Route,
 		maxAuthenticationAge:      age.MaxAuthenticationAge,
 		requireAuthenticationTime: age.RequireAuthenticationTime,
 	})
@@ -417,7 +405,7 @@ func mount(router *web.WebHandler, c composition) (mounted, error) {
 			MaxAuthenticationAge:         c.maxAuthenticationAge,
 			RequireAuthenticationTime:    c.requireAuthenticationTime,
 		}}}),
-		authentication.WithAdministration(authentication.AdministrationConfig{UserAdminCheck: admins.check, UserErasureRoute: true, BeforeErase: admins.beforeErase, SecurityEventsRoute: true, GlobalSessionRevocationRoute: c.globalRevokeRoute}),
+		authentication.WithAdministration(authentication.AdministrationConfig{UserAdminCheck: admins.check, UserErasureRoute: true, BeforeErase: admins.beforeErase, SecurityEventsRoute: true}),
 		authentication.WithMFA(authentication.MFAConfig{Required: authentication.MFARequiredAdmins}),
 		authentication.WithMaintenance(authentication.MaintenanceConfig{
 			Config:                        maintenance.Config{ArchiveSink: c.archive.sink, ArchiveLocation: c.archive.location},
@@ -526,8 +514,7 @@ func (u *userAdmins) check(ctx context.Context, req authenticationhttp.UserAdmin
 	switch req.Action {
 	case authenticationhttp.UserAdminList, authenticationhttp.UserAdminRead, authenticationhttp.UserAdminDeactivate,
 		authenticationhttp.UserAdminReactivate, authenticationhttp.UserAdminResendVerification, authenticationhttp.UserAdminErase,
-		authenticationhttp.UserAdminResetPasskeys, authenticationhttp.UserAdminResetTOTP, authenticationhttp.UserAdminReadAudit,
-		authenticationhttp.UserAdminRevokeAllSessions:
+		authenticationhttp.UserAdminResetPasskeys, authenticationhttp.UserAdminResetTOTP, authenticationhttp.UserAdminReadAudit:
 	default:
 		return fmt.Errorf("user administration action %q is not admitted: %w", req.Action, sdk.ErrForbidden)
 	}

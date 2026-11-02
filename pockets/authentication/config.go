@@ -199,10 +199,9 @@ type constructorConfig struct {
 	Logger            *slog.Logger
 
 	Registration                   RegistrationMode `env:"AUTH_REGISTRATION"`
-	GlobalSessionRevocationRoute   bool
-	ServiceAccountStatus           bool          `env:"AUTH_SERVICE_ACCOUNT_STATUS"`
-	APIKeyMaxTTL                   time.Duration `env:"AUTH_API_KEY_MAX_TTL"`
-	APIKeyLastUsedInterval         time.Duration `env:"AUTH_API_KEY_LAST_USED_INTERVAL"`
+	ServiceAccountStatus           bool             `env:"AUTH_SERVICE_ACCOUNT_STATUS"`
+	APIKeyMaxTTL                   time.Duration    `env:"AUTH_API_KEY_MAX_TTL"`
+	APIKeyLastUsedInterval         time.Duration    `env:"AUTH_API_KEY_LAST_USED_INTERVAL"`
 	APIKeyUnlimitedTTLAcknowledged bool
 	MFAAPIKeysExempt               bool
 	// registrationSource and apiKeyMaxTTLSource record whether Registration and
@@ -1141,17 +1140,6 @@ type AdministrationConfig struct {
 	// host whose check ignores the action must not expose the rail by upgrading.
 	// Set without both → ErrSecurityEventsRouteRequires.
 	SecurityEventsRoute bool
-	// GlobalSessionRevocationRoute opts in to POST
-	// /auth/admin/sessions/revoke-all (SOC 2 S4d): Service.RevokeAllSessions
-	// over HTTP, which ends EVERY session in the fleet, the caller's own
-	// included. It admits a first-party access token or an external token at
-	// the Live tier whatever the other groups admit — an API key survives the
-	// revoke, so it never fires it, and a delegated token is refused — then
-	// the browser-safe gate, UserAdminCheck with the action
-	// UserAdminRevokeAllSessions (the admins MFA gate applies) and a budget of
-	// one call a minute per actor. Set without Repositories.GlobalSessions or
-	// UserAdminCheck → ErrGlobalSessionRevocationRouteRequires.
-	GlobalSessionRevocationRoute bool
 	// ServiceAccountStatus turns on the service-account disable/enable status
 	// over Repositories.ServiceAccountStatus (migration 0027): a disable
 	// revokes every key of the account and refuses new mints until enabled,
@@ -1194,7 +1182,6 @@ func WithAdministration(value AdministrationConfig) Option {
 		c.UserErasureRoute = value.UserErasureRoute
 		c.BeforeErase = value.BeforeErase
 		c.SecurityEventsRoute = value.SecurityEventsRoute
-		c.GlobalSessionRevocationRoute = value.GlobalSessionRevocationRoute
 		c.ServiceAccountStatus = value.ServiceAccountStatus
 		c.APIKeyMaxTTL = value.APIKeyMaxTTL
 		c.APIKeyLastUsedInterval = value.APIKeyLastUsedInterval
@@ -1256,8 +1243,7 @@ type MFAConfig struct {
 	// and no challenge (a key cannot step up), recorded as mfa_required_denied
 	// reason api_key.
 	// Production logs one posture_waiver=APIKeysExempt WARN with it,
-	// development a plain WARN. POST /auth/admin/sessions/revoke-all refuses
-	// keys regardless. It is a wiring literal, not an env knob.
+	// development a plain WARN. It is a wiring literal, not an env knob.
 	APIKeysExempt bool
 }
 

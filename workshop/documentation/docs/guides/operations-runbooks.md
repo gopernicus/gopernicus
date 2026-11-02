@@ -39,20 +39,19 @@ Each names the bundled route or service call, what it records, and what is missi
 
 Authentication v0.31.0 (SOC 2 S4d). For a suspected fleet-wide session compromise.
 
-- **Route** (opt-in: `AdministrationConfig.GlobalSessionRevocationRoute`, beside
-  `Repositories.GlobalSessions` and a `UserAdminCheck`): `POST /auth/admin/sessions/revoke-all`
-  with the body `{}`. The caller presents a first-party access token or an external token
-  (never an API key or a delegated token: 401); the host check sees the action
-  `UserAdminRevokeAllSessions` (`revoke-all-sessions`); under `MFARequired: admins` the
-  caller must be at **AAL2** (an AAL1 admin gets 401 with the RFC 9470 challenge: step up
-  and retry).
-- **Budget:** one call a minute per actor; a second is **429**. Re-running later is safe.
-- **Answer:** 200 `{"users":n,"sessions":n,"grants":n,"batches":n,"revoked_at":"…"}`, and
-  the session cookies are cleared: the caller's own native session ends with the rest, so
-  sign in again. The run is detached from the request (10-minute limit); if the client
-  times out first, read the outcome from the rail.
-- **Service:** `Service.RevokeAllSessions(ctx, actor)` for a host CLI, when the admin path
-  itself (an IdP, an admin sign-in) is what is compromised. The pocket README has the recipe.
+There is no bundled route (removed in authentication v0.42.0, #236). Needs
+`Repositories.GlobalSessions`, which the bundled stores fill.
+
+- **Job:** enqueue the `authentication.revoke_all_sessions` job
+  (`authlogic.RevokeAllSessionsJobKind`) with the payload from
+  `authlogic.NewRevokeAllSessionsJob(actor)` and **one attempt**, on a host that registers
+  `Service.RevokeAllSessionsJobHandler()` on its jobs runtime. Whoever can enqueue it ends
+  every session: the host's trigger (a CLI, or its own admin endpoint answering 202) owns the
+  admin check and MFA. The run has a 10-minute limit; re-enqueue to run it again.
+- **Command:** `Service.RevokeAllSessions(ctx, actor)` from a one-shot CLI, when the host runs
+  no jobs or the admin path itself (an IdP, an admin sign-in) is what is compromised. The
+  pocket README has both recipes.
+- **Afterwards:** the operator's own session ended with the rest, so sign in again.
 - **Recorded:** `all_sessions_revoked_global` twice: `started` (`batch_size`), then
   `success` with `users`, `sessions`, `grants`, `batches`, `duration_ms`, or `failure` with
   the partial counts and `error_kind` (re-run it). Read them with

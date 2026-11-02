@@ -15,7 +15,6 @@ import (
 	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
-	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -55,14 +54,12 @@ type mfaWiring struct {
 	methods  []MFAMethod
 	// The S4d session and machine governance knobs: the machine repositories
 	// and a gate, the API-key hatch, the lifetime and its waiver, the
-	// registration mode, and the revoke-all route over its port.
+	// and the registration mode.
 	machine       bool
 	apiKeysExempt bool
 	apiKeyMaxTTL  time.Duration
 	ttlAck        bool
 	registration  RegistrationMode
-	globalRoute   bool
-	global        bool
 	// enrollmentStart and enrollmentGrace are MFAConfig's native-all window;
 	// oauth2 wires the OAuth2 server.
 	enrollmentStart time.Time
@@ -113,7 +110,7 @@ func (w mfaWiring) build(mode environment.Mode) (*Components, string, error) {
 		}
 		opts = append(opts, WithTOTP(TOTPConfig{Encrypter: testTOTPEncrypter(), Issuer: "Example"}))
 	}
-	admin := AdministrationConfig{APIKeyMaxTTL: w.apiKeyMaxTTL, APIKeyUnlimitedTTLAcknowledged: w.ttlAck, GlobalSessionRevocationRoute: w.globalRoute}
+	admin := AdministrationConfig{APIKeyMaxTTL: w.apiKeyMaxTTL, APIKeyUnlimitedTTLAcknowledged: w.ttlAck}
 	if w.adminCheck {
 		repos.UserAdmin = stubUserAdmin{}
 		admin.UserAdminCheck = func(context.Context, inbound.UserAdminCheckRequest) error { return nil }
@@ -121,9 +118,6 @@ func (w mfaWiring) build(mode environment.Mode) (*Components, string, error) {
 	if w.machine {
 		repos.ServiceAccounts, repos.APIKeys = stubServiceAccounts{}, stubAPIKeys{}
 		admin.MachineRoutesGate = func(next http.Handler) http.Handler { return next }
-	}
-	if w.global {
-		repos.GlobalSessions = stubGlobalSessions{}
 	}
 	opts = append(opts, WithAdministration(admin))
 	c, err := New(testRepositories(repos), stubSigner{}, mode, delivery.ModeOff, opts...)
@@ -303,16 +297,6 @@ func TestSingleFactorSentinelIsShared(t *testing.T) {
 	}
 }
 
-// stubGlobalSessions fills Repositories.GlobalSessions for construction.
-type stubGlobalSessions struct{}
-
-func (stubGlobalSessions) RevokeAllBatch(context.Context, string, int, time.Time) (session.GlobalRevocationBatch, error) {
-	return session.GlobalRevocationBatch{Done: true}, nil
-}
-func (stubGlobalSessions) SweepOrphans(context.Context, time.Time) (int, int, error) {
-	return 0, 0, nil
-}
-
 // TestGovernanceBootLines pins the S4d boot lines: the registration mode with
 // its source, the API-key lifetime with its source, and api_keys on the MFA
 // posture line.
@@ -350,8 +334,7 @@ func TestGovernanceBootLines(t *testing.T) {
 }
 
 // TestGovernanceConstructionRefusals pins the S4d construction errors: an
-// unknown registration mode in every mode, a negative lifetime, and the
-// revoke-all route without its port or check.
+// unknown registration mode in every mode and a negative lifetime.
 func TestGovernanceConstructionRefusals(t *testing.T) {
 	one := []authlogic.ExternalProvider{idp("idp", "https://idp.example.test", false)}
 	for _, mode := range []environment.Mode{environment.ModeDevelopment, environment.ModeProduction} {
@@ -364,15 +347,6 @@ func TestGovernanceConstructionRefusals(t *testing.T) {
 	}
 	if _, _, err := (mfaWiring{providers: one, ack: true, registration: RegistrationInvitationOnly}).build(environment.ModeDevelopment); !errors.Is(err, ErrRegistrationModeRequiresInvitations) {
 		t.Errorf("invitation_only without a Granter = %v", err)
-	}
-	if _, _, err := (mfaWiring{providers: one, ack: true, globalRoute: true, adminCheck: true}).build(environment.ModeDevelopment); !errors.Is(err, ErrGlobalSessionRevocationRouteRequires) {
-		t.Errorf("the route without GlobalSessions = %v", err)
-	}
-	if _, _, err := (mfaWiring{providers: one, ack: true, globalRoute: true, global: true}).build(environment.ModeDevelopment); !errors.Is(err, ErrGlobalSessionRevocationRouteRequires) {
-		t.Errorf("the route without UserAdminCheck = %v", err)
-	}
-	if _, _, err := (mfaWiring{providers: one, ack: true, globalRoute: true, global: true, adminCheck: true}).build(environment.ModeDevelopment); err != nil {
-		t.Errorf("the route fully wired: %v", err)
 	}
 }
 

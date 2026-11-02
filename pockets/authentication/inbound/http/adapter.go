@@ -49,8 +49,6 @@ type adapterConfig struct {
 	PasskeyViews        PasskeyViews
 	TOTPViews           TOTPViews
 	MFAMethods          []authlogic.MFAMethod
-	// GlobalSessionRevocationRoute opts in to POST /auth/admin/sessions/revoke-all.
-	GlobalSessionRevocationRoute bool
 	// MFAAPIKeysExempt lets API keys pass every MFA gate: a key cannot hold
 	// AAL2, so RequireMFA() and the machine gate admit it unverified, and the
 	// admin gate admits a self-acting key by default and an act-as-user key
@@ -149,14 +147,6 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		}
 		events = e
 	}
-	var globalRevoker globalSessionRevoker
-	if cfg.GlobalSessionRevocationRoute {
-		g, ok := cfg.Authentication.(globalSessionRevoker)
-		if !ok || !g.GlobalSessionRevocationEnabled() || cfg.UserAdminCheck == nil {
-			return nil, fmt.Errorf("authentication HTTP: the global session revocation route requires a wired global revocation and UserAdminCheck: %w", sdk.ErrInvalidInput)
-		}
-		globalRevoker = g
-	}
 	var accountStatus serviceAccountStatusManager
 	if a, ok := cfg.Authentication.(serviceAccountStatusManager); ok && a.ServiceAccountStatusEnabled() {
 		accountStatus = a
@@ -205,7 +195,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		Proxies: auth.proxies, RouteLimits: cfg.RouteLimits, AdministrationMFA: cfg.AdministrationMFA,
 		Passkeys: passkeys, PasskeyViews: passkeyViews,
 		TOTP: totps, TOTPViews: totpViews,
-		GlobalRevoker: globalRevoker, AccountStatus: accountStatus, KeyFilter: keyFilter, Registration: registration,
+		AccountStatus: accountStatus, KeyFilter: keyFilter, Registration: registration,
 		LivenessFloorRelaxed: cfg.LivenessFloorRelaxed,
 		EnrollmentFloor:      cfg.EnrollmentFloor.Enabled,
 	}

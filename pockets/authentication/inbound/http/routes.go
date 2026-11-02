@@ -55,8 +55,6 @@ type handlers struct {
 	// oauth2MFA requires AAL2 on the OAuth2 authorize page (native all), so no
 	// session inside its enrollment grace approves a grant.
 	oauth2MFA bool
-	// globalRevoker drives the opt-in revoke-all route; nil leaves it unmounted.
-	globalRevoker globalSessionRevoker
 	// accountStatus is the service-account status, nil unless wired: the
 	// machine DTOs then report every account active.
 	accountStatus serviceAccountStatusManager
@@ -149,10 +147,6 @@ type mountDeps struct {
 	TOTP totpService
 	// TOTPViews renders the TOTP pages; nil → the TOTP routes are JSON-only.
 	TOTPViews TOTPViews
-	// GlobalRevoker drives POST /auth/admin/sessions/revoke-all. Nil unless
-	// the host opted in (WithGlobalSessionRevocationRoute) and the service's
-	// global revocation is wired.
-	GlobalRevoker globalSessionRevoker
 	// AccountStatus is the service-account status when the service wires it;
 	// nil leaves the disable/enable routes unmounted.
 	AccountStatus serviceAccountStatusManager
@@ -313,7 +307,7 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 		passkeys: d.Passkeys, passkeyViews: d.PasskeyViews, totp: d.TOTP, totpViews: d.TOTPViews,
 		machineMFA:    (d.AdministrationMFA || d.EnrollmentFloor) && (d.Passkeys != nil || d.TOTP != nil),
 		oauth2MFA:     d.EnrollmentFloor,
-		globalRevoker: d.GlobalRevoker, accountStatus: d.AccountStatus, keyFilter: d.KeyFilter, registration: d.Registration}
+		accountStatus: d.AccountStatus, keyFilter: d.KeyFilter, registration: d.Registration}
 	if d.OAuth2 != nil {
 		mountOAuth2(r, h)
 		mountSessionManagement(r, h)
@@ -472,14 +466,6 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 		// UserAdminCheck ignores Action must not expose the rail by upgrading.
 		if d.SecurityEvents != nil {
 			r.Handle("GET", "/auth/admin/security-events", h.adminListSecurityEvents, auth.UserAdministration)
-		}
-		// The fleet-wide revoke is an explicit opt-in, behind its own
-		// authenticator: a first-party access token or an external token, Live —
-		// whatever a host overrides UserAdministration to admit, an API key (which
-		// the revoke leaves standing) never fires it, and a delegated token, which
-		// names no audience here, is refused.
-		if d.GlobalRevoker != nil {
-			r.Handle("POST", "/auth/admin/sessions/revoke-all", h.adminRevokeAllSessions, svc.RequirePrincipal(Accept(CredentialAccessToken, CredentialExternalToken), Live()), browserSafe)
 		}
 		if d.Passkeys != nil {
 			r.Handle("POST", "/auth/admin/users/{id}/passkeys/reset", h.adminResetPasskeys, auth.UserAdministration, browserSafe)

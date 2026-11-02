@@ -749,16 +749,15 @@ API keys at the MFA gates.
   `started`, then `success` (or `failure`) with the counts. It needs
   `Repositories.GlobalSessions`, which the bundled stores fill. Delegated OAuth2
   connections are sessions, so they end too; API keys and external IdP sessions do not.
-- **The opt-in route.** `AdministrationConfig.GlobalSessionRevocationRoute` mounts `POST
-  /auth/admin/sessions/revoke-all`: a first-party access token or an external token,
-  `Live()` (an API key or a delegated token is a 401), the browser-safe gate,
-  `UserAdminCheck` with the new action `UserAdminRevokeAllSessions`
-  (`revoke-all-sessions`), the admins MFA gate, then one call a minute per actor (429).
-  The body is strict `{}`; the 200 is `{"users","sessions","grants","batches","revoked_at"}`
-  and clears the session cookies (the caller's own session ends with the rest). The run
-  is detached from the request, with a 10-minute limit. JSON only; distinct from the
-  self-service `POST /auth/sessions/revoke-all`. **A `UserAdminCheck` that does not switch
-  on `Action` admits the new action.**
+- **Running it as a job (v0.42.0).** The opt-in route `POST /auth/admin/sessions/revoke-all`
+  was removed in v0.42.0 (#236): a fleet run outlasts a server write timeout, so its
+  response was lost. `Service.RevokeAllSessionsJobHandler()` is the handler for the job kind
+  `authlogic.RevokeAllSessionsJobKind` (`authentication.revoke_all_sessions`); the payload,
+  built by `authlogic.NewRevokeAllSessionsJob(actor)`, is
+  `{"actor_type","actor_id"}`. It decodes strictly (`ErrRevokeAllSessionsJobInvalid` with no
+  run) and applies a 10-minute limit. Enqueue it with one attempt; the trigger owns
+  authorization. A host without jobs calls `RevokeAllSessions` from a one-shot command. The
+  outcome is the `all_sessions_revoked_global` rows.
 - **Registration mode.** `IdentityConfig.Registration` (`AUTH_REGISTRATION`): `open` (the
   zero value), `invitation_only` or `closed`, applied on every account-creating path:
   `POST /auth/register`, passwordless provision-on-redeem (decided when the link is
@@ -795,7 +794,7 @@ API keys at the MFA gates.
   admins gate and the machine gate refuse it: 403 `mfa_credential_not_eligible` with no
   `WWW-Authenticate` challenge, recorded as `mfa_required_denied reason=api_key`.
   `MFAConfig.APIKeysExempt` restores the pass (production logs
-  `posture_waiver=APIKeysExempt`); the revoke-all route refuses keys regardless.
+  `posture_waiver=APIKeysExempt`).
 - **Boot lines.** `auth: registration registration=<mode> source=…`, `auth: api key
   lifetime api_key_max_ttl=<d>|unlimited source=…`, and `api_keys=denied|exempt` on the
   MFA posture line.

@@ -172,18 +172,6 @@ func WithMFAEnrollmentFloor(value EnrollmentFloor) Option {
 	return func(c *adapterConfig) { c.EnrollmentFloor = value }
 }
 
-// WithGlobalSessionRevocationRoute opts in to POST
-// /auth/admin/sessions/revoke-all: the service's RevokeAllSessions behind its
-// own Live authenticator (a first-party access token or an external token; no
-// API key, no delegated token), the browser-safe
-// gate, the UserAdminCheck with UserAdminRevokeAllSessions (and the admins MFA
-// gate) and one call a minute per actor. It mounts only beside
-// WithUserAdminCheck and a service whose global revocation is wired; enabling
-// it without either is sdk.ErrInvalidInput at New.
-func WithGlobalSessionRevocationRoute(enabled bool) Option {
-	return func(c *adapterConfig) { c.GlobalSessionRevocationRoute = enabled }
-}
-
 // WithMFAAPIKeysExempt lets an API key pass every MFA gate (MFAConfig.
 // APIKeysExempt): RequireMFA(), the admin and the machine gates. A key cannot
 // hold AAL2, so RequireMFA() and the machine gate admit it unverified, and the

@@ -221,7 +221,6 @@ keys are refused at the MFA gates, and production bounds API-key lifetimes.
 | authentication (all modes) | an `IdentityConfig.Registration` (`AUTH_REGISTRATION`) that is not `open`, `invitation_only` or `closed`; a typo never means `open` | `sdk.ErrInvalidInput` | none — fix the value |
 | authentication (all modes) | `invitation_only` without a Granter | `ErrRegistrationModeRequiresInvitations` | none |
 | authentication (all modes) | `closed` beside an external provider with `ProvisionOnFirstVerification` | `ErrRegistrationClosedWithProvisioning` | none |
-| authentication (all modes) | `AdministrationConfig.GlobalSessionRevocationRoute` without `Repositories.GlobalSessions` or a `UserAdminCheck` | `ErrGlobalSessionRevocationRouteRequires` | none |
 | authentication (all modes) | `AdministrationConfig.ServiceAccountStatus` (`AUTH_SERVICE_ACCOUNT_STATUS`) without `Repositories.ServiceAccountStatus`, `ServiceAccounts` and `APIKeys`; set with migration 0027 absent (probe under a 5 s deadline) | `ErrServiceAccountStatusRequires`; `ErrServiceAccountStatusSchemaMissing`, naming `0027_service_account_status.sql` | none — apply 0027 pre-boot, or leave the flag unset (the table is then never read) |
 
 **The boot lines.** Every `New` logs `auth: registration registration=<mode>
@@ -239,7 +238,7 @@ source=config|default|acknowledged`, and the MFA posture line gains
 - **`MFAConfig.APIKeysExempt`.** API keys are refused at `RequireMFA()`, the admins gate and
   the machine gate (403 `mfa_credential_not_eligible`, no challenge). The hatch restores the
   pass at every gate and logs `posture_waiver=APIKeysExempt` in production, or a plain WARN
-  in development. The revoke-all route refuses keys regardless.
+  in development.
 - **Registration mode.** `IdentityConfig.Registration` governs every account-creating path:
   register, passwordless provisioning, OAuth first sign-in and external first verification.
   `invitation_only` answers "an invitation is pending for this address" at

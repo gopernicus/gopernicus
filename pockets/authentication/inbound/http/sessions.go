@@ -180,13 +180,6 @@ type securityEventReader interface {
 	ListSecurityEvents(ctx context.Context, filter securityevent.ListFilter, req list.Request) (list.Page[securityevent.SecurityEvent], error)
 }
 
-// globalSessionRevoker is the fleet-wide revocation the opt-in revoke-all route
-// drives, resolved from the AuthenticationService at New like userEraser.
-type globalSessionRevoker interface {
-	GlobalSessionRevocationEnabled() bool
-	RevokeAllSessions(ctx context.Context, actor authlogic.Principal) (authlogic.GlobalRevocation, error)
-}
-
 // serviceAccountStatusManager is the service-account disable/enable status,
 // resolved from the AuthenticationService at New; the routes mount only when
 // it reports itself wired.
