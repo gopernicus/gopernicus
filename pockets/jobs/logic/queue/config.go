@@ -2,6 +2,7 @@ package queue
 
 import (
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
@@ -55,6 +56,14 @@ type serviceConfig struct {
 	maxAttempts int
 	clock       func() time.Time
 	ids         sdk.IDGenerator
+	logger      *slog.Logger
+}
+
+// WithLogger sets the logger for the construction-time lines (the
+// "jobs queue service constructed" record and its retention WARN). Nil selects
+// slog.Default.
+func WithLogger(logger *slog.Logger) Option {
+	return func(c *serviceConfig) { c.logger = logger }
 }
 
 // WithMaxAttempts replaces the admission retry limit. Nonpositive values select three attempts.

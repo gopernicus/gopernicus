@@ -114,6 +114,7 @@ Scheduler interface. No root facade is required for either extension.
 | `Repositories.Schedules` | nil omits scheduling; it also requires the ordinary queue |
 | `queue.TerminalPurger` on `Repositories.Queue` | absent: `NewService` WARNs and `PurgeTerminalJobs` returns `ErrTerminalPurgeRequired` (see [Retention](#retention)) |
 | `jobs.WithMaxAttempts` | ordinary admission defaults to 3 attempts |
+| `jobs.WithLogger` / `queue.WithLogger` | the logger for the queue service's construction lines; nil selects `slog.Default` |
 | `jobs.WithIDs` / `queue.WithIDs` / `schedules.WithIDs` | the zero value selects the class default: NanoID for identities, UUIDv7 for records (jobs has only records); a configured generator wins everywhere. `EnsureSchedule` mints a candidate on every call, so a counter-style generator skips values on updates |
 | `NewRuntime handlers` | runtime construction requires valid nonempty entries |
 | `queue.RuntimePolicy.Workers` | defaults to 4 |
@@ -336,7 +337,7 @@ its own bounded purge, and the two never mix:
   be positive (`sdk.ErrInvalidInput`). It needs the optional `queue.TerminalPurger`
   on `Repositories.Queue`; the memory, pgx and turso stores implement it.
   `NewService` resolves it once and logs `terminal_purge=wired|absent` through
-  `slog.Default`; an ordinary queue without it logs a WARN, and the method returns
+  the `jobs.WithLogger` / `queue.WithLogger` logger (default `slog.Default`); an ordinary queue without it logs a WARN, and the method returns
   `queue.ErrTerminalPurgeRequired` (`queue.ErrQueueRequired` on a fenced-only
   Service).
 - **`Service.PurgeTerminal(ctx, before, limit)`, the fenced queue, unchanged.**

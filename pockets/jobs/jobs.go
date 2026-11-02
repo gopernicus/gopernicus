@@ -38,6 +38,7 @@ func New(repos Repositories, opts ...Option) (*Components, error) {
 		queue.WithMaxAttempts(cfg.maxAttempts),
 		queue.WithClock(cfg.clock),
 		queue.WithIDs(cfg.ids),
+		queue.WithLogger(cfg.logger),
 	)
 	if err != nil {
 		return nil, err
