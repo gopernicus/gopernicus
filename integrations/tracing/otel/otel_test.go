@@ -283,3 +283,27 @@ func hasErrorEvent(events []sdktrace.Event) bool {
 	}
 	return false
 }
+
+// TestHasActiveSpan: false on a bare context and a nil *Tracer, true inside a
+// span this tracer started.
+func TestHasActiveSpan(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	defer provider.Shutdown(context.Background())
+	tracer, err := otel.Open(context.Background(), otel.Config{Exporter: otel.ExporterProvider, Provider: provider})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tracer.HasActiveSpan(context.Background()) {
+		t.Fatal("bare context reports an active span")
+	}
+	ctx, span := tracer.StartSpan(context.Background(), "parent")
+	defer span.Finish()
+	if !tracer.HasActiveSpan(ctx) {
+		t.Fatal("context inside StartSpan reports no active span")
+	}
+	var nilTracer *otel.Tracer
+	if nilTracer.HasActiveSpan(ctx) {
+		t.Fatal("nil *Tracer reports an active span")
+	}
+}

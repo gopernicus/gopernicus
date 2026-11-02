@@ -1,5 +1,23 @@
 # Releasing gopernicus modules
 
+## Pool statistics and SQL statement spans (#348, #349 — integrations/datastores/pgxdb v0.20.0, integrations/tracing/otel v0.7.0)
+
+**Status: pending merge and tag.** **MINOR, additive, opt-in.** Split from #309.
+
+- **pgxdb `(*DB).Stats() PoolStats`:** pool statistics as a pgxdb-owned value (connections,
+  cumulative acquires and wait time, churn), safe after `Close`. Replaces hosts reading
+  `Underlying().Stat()` or capturing the pool from an acquire tracer.
+- **pgxdb `NewSpanTracer(tracing.Tracer, SpanTracerConfig)`:** a `pgx.QueryTracer` and
+  `pgx.BatchTracer` installed through `Config.Tracer`. Child-only, with spans named by leading
+  keyword or `db.query`/`db.batch`. It records SQL with placeholders (2 KiB cap; `OmitQueryText`),
+  **never bind arguments**, and on failure only the SQLSTATE and constraint, never the error
+  text. `MultiQueryTracer` now forwards batch traces.
+- **otel `(*Tracer).HasActiveSpan(ctx)`:** the child-only question pgxdb asks through a type
+  assertion. Without it (older otel, other tracers) pgxdb falls back to
+  `sdk.TraceIDFromContext`.
+
+Independent releases: pgxdb works with today's otel through the fallback. No sdk change. AUDIT-072.
+
 ## Supported retention for `iam_audit` (#305 — pockets/authorization v0.36.0, stores pgx v0.25.0, turso v0.24.0 — published 2026-11-02)
 
 **Status: released.** **MINOR, additive, opt-in.** `Repositories.AuditExpiry` (an

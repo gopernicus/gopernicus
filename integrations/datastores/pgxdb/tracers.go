@@ -121,3 +121,35 @@ func (m *MultiQueryTracer) TraceQueryEnd(ctx context.Context, conn *jackpgx.Conn
 		t.TraceQueryEnd(ctx, conn, data)
 	}
 }
+
+// TraceBatchStart forwards to every tracer that implements jackpgx.BatchTracer,
+// so a batch-aware tracer (SpanTracer) still sees batches when composed with
+// LogQueries.
+func (m *MultiQueryTracer) TraceBatchStart(ctx context.Context, conn *jackpgx.Conn, data jackpgx.TraceBatchStartData) context.Context {
+	for _, t := range m.Tracers {
+		if b, ok := t.(jackpgx.BatchTracer); ok {
+			ctx = b.TraceBatchStart(ctx, conn, data)
+		}
+	}
+	return ctx
+}
+
+// TraceBatchQuery forwards to every jackpgx.BatchTracer.
+func (m *MultiQueryTracer) TraceBatchQuery(ctx context.Context, conn *jackpgx.Conn, data jackpgx.TraceBatchQueryData) {
+	for _, t := range m.Tracers {
+		if b, ok := t.(jackpgx.BatchTracer); ok {
+			b.TraceBatchQuery(ctx, conn, data)
+		}
+	}
+}
+
+// TraceBatchEnd forwards to every jackpgx.BatchTracer.
+func (m *MultiQueryTracer) TraceBatchEnd(ctx context.Context, conn *jackpgx.Conn, data jackpgx.TraceBatchEndData) {
+	for _, t := range m.Tracers {
+		if b, ok := t.(jackpgx.BatchTracer); ok {
+			b.TraceBatchEnd(ctx, conn, data)
+		}
+	}
+}
+
+var _ jackpgx.BatchTracer = (*MultiQueryTracer)(nil)

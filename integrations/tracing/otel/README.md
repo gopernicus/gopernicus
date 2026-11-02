@@ -125,6 +125,13 @@ so production asks for the loopback endpoint by name. Neither refusal has an
 acknowledgement. Development admits both and logs one WARN per condition through
 `slog.Default()`.
 
+## Child-only consumers — `HasActiveSpan`
+
+`(*Tracer).HasActiveSpan(ctx)` reports whether the context carries a valid span.
+Consumers that only make child spans ask it through a type assertion: pgxdb's
+`SpanTracer` (v0.20.0+) starts a SQL statement span only when it is true, so pool
+pings and pollers stay out of traces.
+
 ## Lifecycle
 
 `Open` never blocks on a live collector — an OTLP/gRPC tracer opens offline and

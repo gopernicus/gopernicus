@@ -389,7 +389,9 @@ the raw driver error sees the sentinel now.
 | `QuoteIdentifier(ident) (string, error)` | regex allow-list + per-segment double-quoting for dynamic identifiers (order columns); rejection wraps `ErrInvalidInput` |
 | `ApplyCursorPagination` / `AddOrderByClause` / `AddLimitClause` | NamedArgs SQL builders under `List`: tuple-comparison keyset predicate (direction × forPrevious operator table), ORDER BY with PK tiebreaker + optional `LOWER()`, `LIMIT @limit` |
 | `LoggingQueryTracer` / `NewLoggingQueryTracer(logger)` / `NewLoggingQueryTracerWithConfig(LoggingQueryTracerConfig{Logger, LogArgs})` | `pgx.QueryTracer` over `*slog.Logger`, context-aware (`request_id`): `sql`, `arg_count`, `arg_types`; a failed query's `sqlstate`/`constraint` or `error_type`. `LogArgs` adds `args` and the error text verbatim. **Dev-only** — see "Query logging" |
-| `MultiQueryTracer` / `NewMultiQueryTracer` | fans a query trace out to several `pgx.QueryTracer`s (pgx accepts only one) |
+| `MultiQueryTracer` / `NewMultiQueryTracer` | fans a query trace out to several `pgx.QueryTracer`s (pgx accepts only one), and batch traces to those that are `pgx.BatchTracer`s |
+| `SpanTracer` / `NewSpanTracer(tracer, SpanTracerConfig{OmitQueryText})` | child-only SQL statement spans through any sdk `tracing.Tracer`; no bind arguments, no error text (see "SQL statement spans") |
+| `(*DB).Stats() PoolStats` | pool statistics as a pgxdb-owned value (see "Pool statistics") |
 | `PrettyPrintSQL(sql) string` | whitespace-normalizes SQL for log lines |
 
 ## The list toolkit — `List[T]` over `ListQuery[T]`
@@ -973,6 +975,45 @@ posture WARN naming every source; production refuses all of them (see
 "Production posture"). A host composing its own tracer uses
 `NewLoggingQueryTracerWithConfig(pgxdb.LoggingQueryTracerConfig{Logger: l,
 LogArgs: false})` — `NewLoggingQueryTracer(l)` is the same safe default.
+
+## SQL statement spans — `SpanTracer`
+
+```go
+db, err := pgxdb.Open(ctx, pgxdb.Config{
+    DSN:    dsn,
+    Tracer: pgxdb.NewSpanTracer(tracer, pgxdb.SpanTracerConfig{}), // any sdk tracing.Tracer
+})
+```
+
+One span per statement, and one per `pgx.Batch`, under whatever span the context
+already carries; compose with `LogQueries` through `NewMultiQueryTracer`, which
+forwards batches too.
+
+- **Child-only.** No span starts without a parent, so pool pings, pollers and
+  pgxdb's own `Open` checks make no traces. The tracer is asked
+  `HasActiveSpan(ctx)` when it has that method (`integrations/tracing/otel`
+  v0.7.0+); otherwise a trace id on the context (`sdk.TraceIDFromContext`, set
+  inside a traced HTTP request) counts as a parent.
+- **Bounded names.** The statement's leading keyword (`SELECT`, `INSERT`, `WITH`,
+  `BEGIN`, …) from a fixed list, else `db.query`; a batch is `db.batch` with
+  `db.batch.size`. SQL text is never a span name.
+- **Attributes.** `db.system.name=postgresql`, `db.operation.name`, and
+  `db.query.text`: the SQL as sent, with its placeholders, cut to 2 KiB.
+  **Bind arguments are never recorded.** `SpanTracerConfig{OmitQueryText: true}`
+  drops the text for a host that builds SQL with inlined literals.
+- **Failures.** Only `db.response.status_code` (the SQLSTATE) and
+  `db.postgresql.constraint`, and a fixed `sql error <SQLSTATE>` (or `sql
+  canceled`) recorded error, never the driver's message, which can repeat values.
+
+## Pool statistics — `Stats()`
+
+`db.Stats()` returns a `PoolStats` value: total, acquired, idle, constructing and
+max connections; cumulative acquire, canceled-acquire and empty-acquire counts
+with `AcquireDuration` and `EmptyAcquireWaitTime`; and connection churn
+(`NewConnsCount`, `MaxLifetimeDestroyCount`, `MaxIdleDestroyCount`). It is a
+pgxdb-owned type, so no `pgxpool` type reaches the host, and it is safe for
+concurrent use and after `Close`. Feed it to the host's gauges in place of
+`Underlying().Stat()`.
 
 ## Symmetry is convention, not a guarantee
 
