@@ -151,10 +151,31 @@ cases; the `RuntimeMode` posture cases run `Open` over
 ```go
 router.Use(otel.Middleware(tracer, otel.HTTPConfig{
     TrustTraceContext: false,
-}), web.Logger(log), web.Panics(log))
+}), web.Logger(log), web.Panics(log), otel.RouteNames()) // RouteNames last
 ```
 
-Mount middleware inside routing so `r.Pattern` is available. This adapter starts
+### Route names under a global `Use`
+
+A global `Use` runs before the mux matches, and the mux writes `r.Pattern` only onto
+the request it receives: any layer that clones the request (`r.WithContext`, as most
+middleware does) never sees it. `otel.RouteNames()` is the opt-in fix. Install it as
+the **last** `Use`, directly on the mux. It records the matched pattern in a private
+slot `otel.Middleware` put in the context, and the span is named when it finishes:
+
+| request | span name | `http.route` |
+|---|---|---|
+| matched `GET /users/{id}` | `GET /users/{id}` | `/users/{id}` |
+| no match, 404 or 405 | `GET unmatched` | none |
+| `RouteNames` not installed | `GET` (method only) | none |
+
+Names never use the request path, which can carry ids and tokens. A `RouteNames`
+installed anywhere but last sees no pattern, and spans keep their method-only names; a
+matched route is never called `unmatched`, except when a misplaced `RouteNames` sits
+over a handler that itself answers 404 or 405. Without `otel.Middleware`,
+`RouteNames` does nothing. `otel.Middleware` mounted per route instead sees
+`r.Pattern` at start and needs no `RouteNames`.
+
+This adapter starts
 server spans and supplies current typed HTTP attributes at creation time, where
 the sampler can read them. It reuses SDK completion and context/log identity
 handling. Ordinary `tracer.StartSpan` still starts internal spans.

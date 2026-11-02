@@ -6388,3 +6388,17 @@ against the live Auth emulator.
   `TransactWithSettings`, and the no-leak live legs run over both.
 - **Residuals (deliberate):** no automatic retry on 40001; callers own it, as with
   `TransactSnapshot`. No SERIALIZABLE variant (none asked for).
+
+## AUDIT-070: Route-pattern span names under a global Use (#308)
+
+- **Status:** pending tag as `integrations/tracing/otel` v0.6.0. Record: `RELEASING.md`,
+  "Route-pattern span names under a global Use (#308)".
+- **Modules:** `integrations/tracing/otel`. No sdk or `web` change.
+- **Old behavior:** a globally mounted `otel.Middleware` named every server span by method
+  alone (the mux had not matched yet, and its pattern lands only on the request it receives);
+  hosts wrote their own innermost renamer with their own OTel dependency.
+- **New behavior:** opt-in `RouteNames()`, last `Use`, fills a private slot; the span is renamed
+  at finish to the matched route, or `<METHOD> unmatched` for a 404/405 with no match. The
+  request path never reaches a span name or attribute (tested with ids and a token in the path).
+- **Residuals (deliberate):** a misplaced `RouteNames` leaves method-only names, and over a
+  handler that itself answers 404/405 it names that span `<METHOD> unmatched`. Documented.
