@@ -6480,8 +6480,8 @@ against the live Auth emulator.
 
 ## AUDIT-075: A dead database is a 503, not a 500 (#123)
 
-- **Status:** pending tag as `integrations/datastores/pgxdb` v0.22.0. Record: `RELEASING.md`, "A
-  dead database is a 503, not a 500 (#123)".
+- **Status:** released as `integrations/datastores/pgxdb` v0.22.0 (`5e3280e4` → `3dbf2876`, #359).
+  Record: `RELEASING.md`, "A dead database is a 503, not a 500 (#123 — published 2026-11-02)".
 - **Modules:** `integrations/datastores/pgxdb`. No pocket or store change.
 - **Old behavior:** an unreachable database surfaced from the begin paths unclassified, so
   authorization's `Require` answered 500 while authentication answered 503 for the same outage.

@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## A dead database is a 503, not a 500 (#123 — integrations/datastores/pgxdb v0.22.0)
+## A dead database is a 503, not a 500 (#123 — integrations/datastores/pgxdb v0.22.0 — published 2026-11-02)
 
-**Status: pending merge and tag.** **MINOR, a behavior fix.** Connection-level failures (refused
+**Status: released.** **MINOR, a behavior fix.** Connection-level failures (refused
 or dropped connection, closed pool, pgx's "safe to retry", SQLSTATE `08xxx`, `57P01`–`57P03`,
 `53300`) now carry `sdk.ErrUnavailable` with the original error kept, through `MapError`, the
 begin paths, `QueryRow().Scan`, `Ping` and `StatusCheck`. authorization's `Require` (and anything
@@ -13,6 +13,14 @@ the authentication pocket. Cancellation, deadlines, `statement_timeout`, constra
 **Host note.** A host that matched a 500 during a database outage now sees 503; one that branched
 on `errors.Is(err, sdk.ErrUnavailable)` now sees it for outages. No pocket or store tag is needed:
 repin pgxdb. AUDIT-075.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `integrations/datastores/pgxdb/v0.22.0` | `5e3280e4` → `3dbf2876` | #359 | 41546614959 @ `3dbf2876` | OK; MVS selects sdk v0.28.0; a refused connection is `ErrUnavailable`, `context.Canceled` is not |
+
+Annotated, not signed. No example repin. **Run and look.** authorization's pgx store (cache off)
+behind `Require(HasRole("admin", Global()))`, PostgreSQL stopped mid-test: allowed and denied
+users both 503 (the previous pgxdb: 500); with the database up, 200 and 403.
 
 ## An sdk metrics port (#350, part 2 — sdk v0.28.0, otel v0.9.0, pgxdb v0.21.0 — published 2026-11-02)
 
