@@ -3,7 +3,7 @@
 An OpenTelemetry connector that implements the `sdk/capabilities/tracing.Tracer` facility
 port — it wraps exactly one external dependency, the OpenTelemetry Go family
 (`go.opentelemetry.io/otel`, its trace SDK `go.opentelemetry.io/otel/sdk`, and
-the bundled `stdout` and `OTLP/gRPC` exporters). `sdk/capabilities/tracing` stays stdlib-only
+the bundled `stdout`, `OTLP/gRPC` and `OTLP/HTTP` exporters). `sdk/capabilities/tracing` stays stdlib-only
 and ships just the `Noop` default; this module isolates the OpenTelemetry
 dependency so a host wires real span export by importing it and passing the
 resulting `*otel.Tracer` wherever an `sdk/capabilities/tracing.Tracer` is accepted.
@@ -22,13 +22,14 @@ lets `kvstores/goredis` back three ports from one client).
 
 ## Construction — exporter chosen by Config
 
-`Open(ctx, cfg)` returns a `*otel.Tracer`. `Config.Exporter` selects one of three
+`Open(ctx, cfg)` returns a `*otel.Tracer`. `Config.Exporter` selects one of four
 modes:
 
 | `Config.Exporter`     | destination | ownership |
 |---|---|---|
 | `ExporterStdout` (default outside production) | `Config.Stdout` (default `os.Stdout`), synchronous | module owns the provider; `Shutdown` flushes it |
 | `ExporterOTLPGRPC`    | OTLP/gRPC collector (Jaeger, Tempo, Grafana, an OpenTelemetry Collector), batched | module owns the provider; `Shutdown` flushes it |
+| `ExporterOTLPHTTP`    | OTLP/HTTP endpoint (Grafana Cloud's OTLP gateway, a collector's `:4318`), batched, gzip | module owns the provider; `Shutdown` flushes it |
 | `ExporterProvider`    | a caller-supplied `trace.TracerProvider` (`Config.Provider`) | caller owns the provider; `Shutdown` is a no-op |
 
 A zero `Config` is a usable dev tracer: empty `Exporter` defaults to stdout, empty
@@ -63,6 +64,37 @@ The scalar `Config` fields carry `env:` tags for `sdk/pkg/environment.ParseEnvTa
 `Open` fills stdout, so an unset exporter stays distinguishable from an explicit
 `TRACING_EXPORTER=stdout`.
 
+## OTLP/HTTP and Grafana Cloud
+
+`ExporterOTLPHTTP` (`TRACING_EXPORTER=otlphttp`) sends to an OTLP/HTTP endpoint
+with headers such as basic auth:
+
+```sh
+TRACING_EXPORTER=otlphttp
+TRACING_OTLP_ENDPOINT=https://otlp-gateway-prod-us-east-0.grafana.net/otlp
+TRACING_OTLP_HEADERS=Authorization=Basic%20<base64 of instance-id:token>
+```
+
+- **`Endpoint` is a base URL**, required in every mode. The exporter appends
+  `/v1/traces`, so the URL from Grafana Cloud's OTLP setup page goes in as-is; one
+  that already ends in `/v1/traces` is refused. The scheme decides the transport:
+  `https` is TLS (system roots, TLS 1.2+), `http` is plain. `Insecure` with an
+  `https` URL is refused as a contradiction. A URL with userinfo
+  (`https://user:pass@…`), a query or a fragment is refused: credentials go in
+  `Headers`.
+- **`Headers` is an `sdk.Secret`** in the `OTEL_EXPORTER_OTLP_HEADERS` format:
+  comma-separated `key=value`, percent-encoded (`%20` for the space in
+  `Basic <token>`). Keys must be HTTP header names and unique; values may not hold
+  control characters. It prints and logs as `[redacted]`, and no error carries a
+  value.
+- **The `OTEL_EXPORTER_OTLP_*` variables never apply.** The exporter sets every
+  option the OTLP/HTTP library would otherwise read from them: endpoint, path,
+  transport, headers (an empty set when `Headers` is unset), TLS, gzip
+  compression and a 10-second request timeout. The standard `HTTPS_PROXY` /
+  `NO_PROXY` variables still apply.
+
+Malformed values are `sdk.ErrInvalidInput` at `Open`, in every mode.
+
 ## Error text stays out of spans by default
 
 `RecordError` marks the span failed with `codes.Error` and the fixed status
@@ -85,6 +117,7 @@ refuses, before any default is filled:
 |---|---|---|
 | empty `Exporter` | `ErrExporterRequired` | set `TRACING_EXPORTER` — `stdout` explicitly is admitted |
 | `ExporterOTLPGRPC` with `Insecure` and an `Endpoint` that is not `127.0.0.1`, `::1` or `localhost` (with or without a port) | `ErrInsecureExporter` | unset `Insecure` to use TLS, or point at a loopback collector |
+| `ExporterOTLPHTTP` with an `http://` `Endpoint` whose host is not `127.0.0.1`, `::1` or `localhost` | `ErrInsecureExporter` | use an `https` endpoint, or point at a loopback collector |
 
 An empty `Endpoint` with `Insecure` counts as non-loopback: the OTLP exporter then
 resolves its target from `OTEL_EXPORTER_OTLP_*` variables this module never sees,
@@ -107,7 +140,10 @@ Hermetic, no network. The provider mode is exercised against otel's
 through the `sdk/capabilities/tracing.Tracer` surface, and that error text is
 exported only under `RecordErrorText`; the stdout mode redirects output to a
 buffer and asserts the emitted JSON; the OTLP/gRPC mode is verified to construct
-and shut down offline; the `RuntimeMode` posture cases run `Open` over
+and shut down offline; the OTLP/HTTP mode exports to an in-process receiver over
+plain HTTP and TLS (path, headers, gzip, decoded span), with every
+`OTEL_EXPORTER_OTLP_*` variable poisoned, plus the validation and redaction
+cases; the `RuntimeMode` posture cases run `Open` over
 `ParseEnvTags` output and the loopback matrix. Run with `go test ./...`.
 
 ## HTTP spans and propagation
