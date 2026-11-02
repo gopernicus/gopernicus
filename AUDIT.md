@@ -6361,8 +6361,8 @@ against the live Auth emulator.
 
 ## AUDIT-068: Fenced claims carry their kind (#311)
 
-- **Status:** pending tag as `pockets/jobs` v0.11.0. Record: `RELEASING.md`, "Fenced claims
-  carry their kind (#311)".
+- **Status:** released as `pockets/jobs` v0.11.0 (tag object `5deba091` → `02e347eb`, #338).
+  Record: `RELEASING.md`, "Fenced claims carry their kind (#311 — published 2026-11-02)".
 - **Modules:** `pockets/jobs`. No store, port or migration change.
 - **Old behavior:** `queue.FencedClaim` carried no kind, so fenced job middleware could not name
   a span or label a metric by kind; a host could only wrap its own handler map, which misses
@@ -6373,8 +6373,9 @@ against the live Auth emulator.
 
 ## AUDIT-069: A REPEATABLE READ transaction that applies settings (#306)
 
-- **Status:** pending tag as `integrations/datastores/pgxdb` v0.19.0. Record: `RELEASING.md`, "A
-  REPEATABLE READ transaction that applies settings (#306)".
+- **Status:** released as `integrations/datastores/pgxdb` v0.19.0 (tag object `a29d2ee7` →
+  `8f5a8f3c`, #339). Record: `RELEASING.md`, "A REPEATABLE READ transaction that applies
+  settings (#306 — published 2026-11-02)".
 - **Modules:** `integrations/datastores/pgxdb`. Docs only in `pockets/authorization/stores/pgx`
   and the row-level-security guide.
 - **Old behavior:** `TransactWithSettings` (READ COMMITTED) was the only way to bind a tenant

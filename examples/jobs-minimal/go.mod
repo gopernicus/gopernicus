@@ -4,7 +4,7 @@ go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/integrations/scheduling/robfig-cron v0.2.0
-	github.com/gopernicus/gopernicus/pockets/jobs v0.10.0
+	github.com/gopernicus/gopernicus/pockets/jobs v0.11.0
 	github.com/gopernicus/gopernicus/sdk v0.27.0
 )
 
