@@ -231,7 +231,7 @@ Both implement `sdk/capabilities/oauth.Provider`, take concrete `Config` values 
 | Module | Implements | Notes |
 |---|---|---|
 | `integrations/scheduling/robfig-cron` | jobs' cron-parser shape | five-field cron + descriptors, evaluated in UTC |
-| `integrations/tracing/otel` | `tracing.Tracer` | stdout, OTLP/gRPC, or caller-supplied provider |
+| `integrations/tracing/otel` | `tracing.Tracer` | stdout, OTLP/gRPC, OTLP/HTTP (with `sdk.Secret` headers, e.g. Grafana Cloud), or caller-supplied provider |
 
 The OpenTelemetry connector owns exporter construction and returns explicit `Shutdown`/`ForceFlush`. `otel.Middleware` starts HTTP server spans with typed metadata and optional W3C parent trust; passing a nil tracer yields Noop middleware. OTLP literal sample rate zero disables root sampling, while parent decisions take precedence. Environment loading defaults the ratio to one.
 

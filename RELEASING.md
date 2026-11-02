@@ -1,5 +1,22 @@
 # Releasing gopernicus modules
 
+## OTLP/HTTP exporter with secret headers (#307 — integrations/tracing/otel v0.5.0)
+
+**Status: pending merge and tag.** **MINOR, additive.** `ExporterOTLPHTTP`
+(`TRACING_EXPORTER=otlphttp`) exports spans over OTLP/HTTP, e.g. to Grafana Cloud's OTLP
+gateway:
+
+- `Config.Endpoint` (`TRACING_OTLP_ENDPOINT`) is a required base URL; the exporter appends
+  `/v1/traces`. The scheme decides the transport; userinfo, a query, a fragment, a URL already
+  ending in `/v1/traces`, and `Insecure` with `https` are refused (`sdk.ErrInvalidInput`).
+- `Config.Headers sdk.Secret` (`TRACING_OTLP_HEADERS`) in the `OTEL_EXPORTER_OTLP_HEADERS`
+  format. Never logged or put in an error.
+- Production refuses `http://` to a non-loopback host (`ErrInsecureExporter`); development WARNs.
+- No `OTEL_EXPORTER_OTLP_*` variable applies: every option is set explicitly.
+- New dependency: `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp` v1.45.0.
+
+Existing exporters are unchanged. No sdk change. AUDIT-067.
+
 ## Global revoke-all runs as a job; the route is removed (#236 — pockets/authentication v0.42.0 — published 2026-11-01)
 
 **Status: released.** **MINOR, BREAKING for hosts that mounted the route.** A

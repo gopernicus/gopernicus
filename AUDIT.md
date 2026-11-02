@@ -6335,3 +6335,23 @@ against the live Auth emulator.
 - **Residuals (deliberate):** the pocket enforces neither the single attempt (it imports no jobs
   implementation) nor a per-actor budget; both are the trigger's. No status read-back seam:
   the evidence rows are the record.
+
+## AUDIT-067: OTLP/HTTP exporter with secret headers (#307)
+
+- **Status:** pending tag as `integrations/tracing/otel` v0.5.0. Record: `RELEASING.md`,
+  "OTLP/HTTP exporter with secret headers (#307)".
+- **Modules:** `integrations/tracing/otel`. New dependency `otlptracehttp` v1.45.0, a companion
+  of the OpenTelemetry family the module already isolates (G13 holds).
+- **Old behavior:** stdout and OTLP/gRPC only. A host exporting to an authenticated OTLP/HTTP
+  gateway built its own `TracerProvider` (no posture checks) or let the SDK read
+  `OTEL_EXPORTER_OTLP_HEADERS` as a plain environment string.
+- **New behavior:**
+  - `ExporterOTLPHTTP`: a required base URL (`/v1/traces` appended); the scheme decides TLS;
+    URLs with userinfo, query or fragment refused; `Insecure` + `https` refused.
+  - `Config.Headers` is an `sdk.Secret` credential input: redacted in `fmt`, `slog` and JSON;
+    validation errors name an entry's position, never its value.
+  - Production refuses plain HTTP to a non-loopback host (`ErrInsecureExporter`).
+  - Every option the OTLP/HTTP library reads from `OTEL_EXPORTER_OTLP_*` is set explicitly, so
+    those variables never redirect the export or inject headers (tested by poisoning all of them).
+- **Residuals (deliberate):** no custom CA or mTLS configuration; `HTTPS_PROXY` / `NO_PROXY`
+  still apply; OTLP/gRPC takes no headers (out of scope; ask if a host needs it).

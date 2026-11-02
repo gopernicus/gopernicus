@@ -2,6 +2,7 @@ package otel
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -33,6 +35,10 @@ const (
 	// ExporterOTLPGRPC sends spans to an OTLP/gRPC collector (Jaeger, Tempo,
 	// Grafana Alloy, an OpenTelemetry Collector, …) via otlptracegrpc.
 	ExporterOTLPGRPC Exporter = "otlpgrpc"
+	// ExporterOTLPHTTP sends spans to an OTLP/HTTP endpoint (Grafana Cloud's
+	// OTLP gateway, an OpenTelemetry Collector's :4318, …) via otlptracehttp.
+	// Config.Endpoint is a base URL and Config.Headers carries credentials.
+	ExporterOTLPHTTP Exporter = "otlphttp"
 	// ExporterProvider adapts a caller-supplied TracerProvider (Config.Provider);
 	// this module builds no exporter and never shuts the provider down.
 	ExporterProvider Exporter = "provider"
@@ -53,10 +59,11 @@ var (
 	// (TRACING_EXPORTER), stdout included.
 	ErrExporterRequired = errors.New("otel: production requires an explicit Config.Exporter (TRACING_EXPORTER)")
 
-	// ErrInsecureExporter refuses an OTLP/gRPC exporter with Config.Insecure
-	// unless Config.Endpoint names a loopback host (127.0.0.1, ::1 or
-	// localhost). An empty Endpoint is refused too: the exporter then resolves
-	// its target from OTEL_EXPORTER_OTLP_* variables this module never sees.
+	// ErrInsecureExporter refuses an OTLP/gRPC exporter with Config.Insecure,
+	// or an OTLP/HTTP exporter to an http:// Config.Endpoint, unless the
+	// endpoint names a loopback host (127.0.0.1, ::1 or localhost). An empty
+	// OTLP/gRPC Endpoint is refused too: the exporter then resolves its target
+	// from OTEL_EXPORTER_OTLP_* variables this module never sees.
 	ErrInsecureExporter = errors.New("otel: production refuses an insecure OTLP exporter to a non-loopback endpoint")
 )
 
@@ -85,11 +92,24 @@ type Config struct {
 	// precedence. Stdout samples roots and respects parents; Provider owns its policy.
 	SampleRate float64 `env:"TRACING_SAMPLE_RATE" default:"1"`
 
-	// Endpoint is the OTLP/gRPC collector address (host:port). Empty lets the
-	// exporter use its own default (localhost:4317).
+	// Endpoint is the OTLP collector. For ExporterOTLPGRPC it is host:port;
+	// empty lets the exporter use its own default (localhost:4317). For
+	// ExporterOTLPHTTP it is a required absolute base URL, e.g.
+	// https://otlp-gateway-prod-us-east-0.grafana.net/otlp: the exporter
+	// appends /v1/traces, and the scheme decides the transport (https is TLS,
+	// http is plain). An OTLP/HTTP URL may not carry userinfo, a query or a
+	// fragment.
 	Endpoint string `env:"TRACING_OTLP_ENDPOINT" default:""`
-	// Insecure disables transport security for the OTLP/gRPC connection.
+	// Insecure disables transport security for the OTLP/gRPC connection. For
+	// ExporterOTLPHTTP the scheme decides instead; Insecure with an https
+	// Endpoint is refused as a contradiction.
 	Insecure bool `env:"TRACING_OTLP_INSECURE" default:"false"`
+	// Headers are sent with every ExporterOTLPHTTP request, in the
+	// OTEL_EXPORTER_OTLP_HEADERS format: comma-separated key=value entries,
+	// percent-encoded, e.g. "Authorization=Basic%20<base64>". It is a
+	// credential: never logged, never put in an error. Ignored by the other
+	// exporters.
+	Headers sdk.Secret `env:"TRACING_OTLP_HEADERS" default:""`
 
 	// PrettyPrint indents the stdout exporter's JSON output.
 	PrettyPrint bool `env:"TRACING_STDOUT_PRETTY" default:"false"`
@@ -119,6 +139,10 @@ type Config struct {
 	// carries no env tag: the host reads its mode from the process environment
 	// in its composition root and sets it here.
 	RuntimeMode environment.Mode
+
+	// tlsConfig overrides the OTLP/HTTP client's TLS configuration; tests
+	// set it to trust a local certificate. Nil uses the system roots.
+	tlsConfig *tls.Config
 }
 
 // Open builds a *Tracer for cfg.Exporter. Zero fields take the documented
@@ -131,7 +155,15 @@ type Config struct {
 // lazily on first export. A non-zero RuntimeMode is validated and enforced
 // before any default is applied.
 func Open(ctx context.Context, cfg Config) (*Tracer, error) {
-	if err := cfg.checkPosture(); err != nil {
+	var httpTarget otlpHTTPTarget
+	if cfg.Exporter == ExporterOTLPHTTP {
+		target, err := parseOTLPHTTP(cfg)
+		if err != nil {
+			return nil, err
+		}
+		httpTarget = target
+	}
+	if err := cfg.checkPosture(httpTarget); err != nil {
 		return nil, err
 	}
 	if cfg.Exporter == "" {
@@ -154,15 +186,18 @@ func Open(ctx context.Context, cfg Config) (*Tracer, error) {
 		return openStdout(cfg)
 	case ExporterOTLPGRPC:
 		return openOTLPGRPC(ctx, cfg)
+	case ExporterOTLPHTTP:
+		return openOTLPHTTP(ctx, cfg, httpTarget)
 	default:
 		return nil, fmt.Errorf("otel: unknown exporter %q", cfg.Exporter)
 	}
 }
 
 // checkPosture enforces RuntimeMode over the Config as the host supplied it,
-// before Open fills the stdout default. The zero mode returns nil and logs
-// nothing.
-func (cfg Config) checkPosture() error {
+// before Open fills the stdout default. httpTarget is the validated
+// OTLP/HTTP endpoint (zero for other exporters). The zero mode returns nil and
+// logs nothing.
+func (cfg Config) checkPosture(httpTarget otlpHTTPTarget) error {
 	if cfg.RuntimeMode == "" {
 		return nil
 	}
@@ -179,6 +214,13 @@ func (cfg Config) checkPosture() error {
 	if cfg.Exporter == ExporterOTLPGRPC && cfg.Insecure && !isLoopbackEndpoint(cfg.Endpoint) {
 		if production {
 			return fmt.Errorf("%w: endpoint %q; enable TLS (unset Insecure) or name a loopback collector", ErrInsecureExporter, cfg.Endpoint)
+		}
+		slog.Default().Warn("otel: insecure OTLP exporter to a non-loopback endpoint; production refuses it",
+			slog.String("endpoint", cfg.Endpoint))
+	}
+	if cfg.Exporter == ExporterOTLPHTTP && httpTarget.insecure && !isLoopbackEndpoint(httpTarget.url.Hostname()) {
+		if production {
+			return fmt.Errorf("%w: endpoint %q; use an https endpoint or name a loopback collector", ErrInsecureExporter, cfg.Endpoint)
 		}
 		slog.Default().Warn("otel: insecure OTLP exporter to a non-loopback endpoint; production refuses it",
 			slog.String("endpoint", cfg.Endpoint))

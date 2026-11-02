@@ -7,12 +7,13 @@
 // accepted.
 //
 // One module carries the whole OpenTelemetry family as a single coherent
-// dependency (ruling R-KV1): the otel API, the trace SDK, and both bundled
-// exporters (stdout and OTLP/gRPC) version together, so splitting them into
+// dependency (ruling R-KV1): the otel API, the trace SDK, and the bundled
+// exporters (stdout, OTLP/gRPC and OTLP/HTTP) version together, so splitting them into
 // separate modules would only triplicate the same require/go.sum surface.
 //
 // The exporter is chosen by Config.Exporter — stdout for local development,
-// OTLP/gRPC for a collector (Jaeger/Tempo/Grafana/…), or an adapter over a
+// OTLP/gRPC for a collector (Jaeger/Tempo/Grafana/…), OTLP/HTTP for an
+// authenticated gateway such as Grafana Cloud's, or an adapter over a
 // caller-supplied TracerProvider when the host already builds its own. Open
 // returns a *Tracer whose Shutdown flushes and stops any provider this module
 // created; in provider mode the caller retains ownership of its provider's
