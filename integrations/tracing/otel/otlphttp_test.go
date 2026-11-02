@@ -329,7 +329,7 @@ func TestOTLPHTTPConfigFromEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseOTLPHTTP: %v", err)
 	}
-	if target.url.String() != "https://collector.example.com/otlp/v1/traces" || target.headers["Authorization"] != "Basic ZW52OnRlc3Q=" {
-		t.Fatalf("target = %s %v", target.url, len(target.headers))
+	if target.signalURL(otlpHTTPTracesPath) != "https://collector.example.com/otlp/v1/traces" || target.signalURL(otlpHTTPLogsPath) != "https://collector.example.com/otlp/v1/logs" || target.headers["Authorization"] != "Basic ZW52OnRlc3Q=" {
+		t.Fatalf("target = %s %v", target.base, len(target.headers))
 	}
 }

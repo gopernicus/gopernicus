@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	stdouttrace "go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	otellog "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -116,6 +117,11 @@ type Config struct {
 	// Stdout is the destination for ExporterStdout. Nil defaults to os.Stdout;
 	// tests can redirect it to a buffer.
 	Stdout io.Writer
+
+	// LoggerProvider is the caller-supplied log provider OpenLogs adapts in
+	// ExporterProvider mode; required there, ignored otherwise. Its lifecycle
+	// stays the caller's.
+	LoggerProvider otellog.LoggerProvider
 
 	// Provider is the caller-supplied TracerProvider used by ExporterProvider.
 	// Required for that mode; ignored otherwise. Its lifecycle stays the
@@ -218,7 +224,7 @@ func (cfg Config) checkPosture(httpTarget otlpHTTPTarget) error {
 		slog.Default().Warn("otel: insecure OTLP exporter to a non-loopback endpoint; production refuses it",
 			slog.String("endpoint", cfg.Endpoint))
 	}
-	if cfg.Exporter == ExporterOTLPHTTP && httpTarget.insecure && !isLoopbackEndpoint(httpTarget.url.Hostname()) {
+	if cfg.Exporter == ExporterOTLPHTTP && httpTarget.insecure && !isLoopbackEndpoint(httpTarget.base.Hostname()) {
 		if production {
 			return fmt.Errorf("%w: endpoint %q; use an https endpoint or name a loopback collector", ErrInsecureExporter, cfg.Endpoint)
 		}

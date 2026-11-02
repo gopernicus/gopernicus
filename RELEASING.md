@@ -1,5 +1,22 @@
 # Releasing gopernicus modules
 
+## Logs over OTLP beside traces (#350, part 1 — integrations/tracing/otel v0.8.0)
+
+**Status: pending merge and tag.** **MINOR, additive, opt-in.**
+
+- `OpenLogs(ctx, Config) (*Logs, error)` with the same `Config`, validation, posture and env
+  isolation as `Open`; OTLP/HTTP sends to `<Endpoint>/v1/logs`; provider mode takes the new
+  `Config.LoggerProvider`.
+- `(*Logs).Handler(level)` is a `slog.Handler` over OpenTelemetry's `otelslog` bridge, meant to sit
+  last in the chain after redaction; trace and span ids come from the record's context.
+- `InstallErrorHandler(console, every) (restore func())` sends OpenTelemetry's internal errors to
+  the console, rate-limited, never through the log pipeline.
+- **The OpenTelemetry family moves from v1.45.0 to v1.47.0** (the log API is stable from v1.47);
+  log exporters v0.23.0 and `otelslog` v0.21.0. Trace behavior is unchanged: the existing trace
+  suites pass as-is.
+
+No sdk change. Metrics (#350 part 2) are not in this release. AUDIT-073.
+
 ## Pool statistics and SQL statement spans (#348, #349 — integrations/datastores/pgxdb v0.20.0, integrations/tracing/otel v0.7.0 — published 2026-11-02)
 
 **Status: released.** **MINOR, additive, opt-in.** Split from #309.

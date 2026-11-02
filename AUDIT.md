@@ -6445,3 +6445,19 @@ against the live Auth emulator.
   host that inlines literals must set `OmitQueryText`. Copy, prepare and connect tracing are not
   covered. The trace-id fallback counts only HTTP-request traces as parents for tracers without
   `HasActiveSpan`.
+
+## AUDIT-073: Logs over OTLP beside traces (#350, part 1)
+
+- **Status:** pending tag as `integrations/tracing/otel` v0.8.0. Record: `RELEASING.md`, "Logs over
+  OTLP beside traces (#350, part 1)".
+- **Modules:** `integrations/tracing/otel` (OpenTelemetry family v1.45.0 → v1.47.0; adds log,
+  sdk/log, the OTLP and stdout log exporters, and `contrib/bridges/otelslog`). No sdk change.
+- **Old behavior:** traces only; hosts built their own logger provider and slog bridge.
+- **New behavior:** opt-in `OpenLogs` + `Handler`. Export is a data-egress path, so it reuses the
+  trace exporter's controls: credential headers as `sdk.Secret`, userinfo URLs refused, production
+  refuses plain HTTP off loopback, `OTEL_EXPORTER_OTLP_*` never applies (tested by poisoning).
+  The documented chain puts the handler after `RedactHandler`; a test proves a redacted key never
+  reaches the exported record. `InstallErrorHandler` keeps OpenTelemetry's errors out of the
+  pipeline that produced them.
+- **Residuals (deliberate):** a host that places `Handler` before its redaction exports what it
+  logs; documented, not enforceable. The handler level is per handler, not per logger name.

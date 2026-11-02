@@ -3,7 +3,8 @@
 An OpenTelemetry connector that implements the `sdk/capabilities/tracing.Tracer` facility
 port — it wraps exactly one external dependency, the OpenTelemetry Go family
 (`go.opentelemetry.io/otel`, its trace SDK `go.opentelemetry.io/otel/sdk`, and
-the bundled `stdout`, `OTLP/gRPC` and `OTLP/HTTP` exporters). `sdk/capabilities/tracing` stays stdlib-only
+the bundled `stdout`, `OTLP/gRPC` and `OTLP/HTTP` exporters for traces and logs, and the
+OpenTelemetry slog bridge). `sdk/capabilities/tracing` stays stdlib-only
 and ships just the `Noop` default; this module isolates the OpenTelemetry
 dependency so a host wires real span export by importing it and passing the
 resulting `*otel.Tracer` wherever an `sdk/capabilities/tracing.Tracer` is accepted.
@@ -124,6 +125,37 @@ resolves its target from `OTEL_EXPORTER_OTLP_*` variables this module never sees
 so production asks for the loopback endpoint by name. Neither refusal has an
 acknowledgement. Development admits both and logs one WARN per condition through
 `slog.Default()`.
+
+## Logs — `OpenLogs`
+
+`otel.OpenLogs(ctx, cfg)` takes the same `Config` as `Open` (exporter, endpoint, `sdk.Secret`
+headers, posture and `OTEL_EXPORTER_OTLP_*` isolation; OTLP/HTTP sends to `<Endpoint>/v1/logs`;
+provider mode adapts `Config.LoggerProvider`). `logs.Handler(level)` is a `slog.Handler` over
+OpenTelemetry's slog bridge. Put it **last**, after redaction, so nothing a redacting handler
+removes is exported:
+
+```go
+logs, err := otel.OpenLogs(ctx, cfg)
+if err != nil {
+    return err
+}
+defer logs.Shutdown(context.Background())
+
+log := slog.New(logging.NewContextHandler(logging.NewRedactHandler(
+    slog.NewMultiHandler(console, logs.Handler(slog.LevelInfo)), redactKeys)))
+```
+
+A record logged with a context carrying a span gets that span's trace and span ids, so a backend
+links the log line to its trace. Records below the handler's level are dropped before the bridge.
+
+### OpenTelemetry's own errors — `InstallErrorHandler`
+
+`restore := otel.InstallErrorHandler(console, time.Minute)` sends OpenTelemetry's internal errors
+(a background export that failed, a dropped batch) to `console` at WARN, at most once per
+interval, each line carrying `suppressed=<n>`. Pass the console logger, not the chain that includes
+`logs.Handler`: an exporter that keeps failing must not feed its own errors back into itself.
+`ForceFlush` and `Shutdown` return their export errors to the caller instead. The handler is
+process-wide; `restore` reinstates the previous one.
 
 ## Child-only consumers — `HasActiveSpan`
 
