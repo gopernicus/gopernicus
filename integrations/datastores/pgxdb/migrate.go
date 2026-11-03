@@ -106,6 +106,9 @@ func RunMigrations(ctx context.Context, db *DB, migrationsFS fs.FS, migrationsDi
 		slog.String("dir", migrationsDir), slog.String("schema", cfg.schema.String()))
 
 	err := db.InTx(ctx, func(tx *Tx) error {
+		if err := lockMigrationStream(ctx, tx, cfg.schema); err != nil {
+			return err
+		}
 		num, version, err := readServerVersion(ctx, tx)
 		if err != nil {
 			return fmt.Errorf("read server version: %w", MapError(err))
@@ -354,4 +357,43 @@ func applyMigration(ctx context.Context, tx *Tx, src migrationSource, file strin
 func isInsufficientPrivilege(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == insufficientPrivilege
+}
+
+// migrationLockWaitLog is how long a runner must wait for the stream lock
+// before RunMigrations logs that it waited for a concurrent runner.
+const migrationLockWaitLog = 100 * time.Millisecond
+
+// migrationLockKey names the advisory lock serializing runners of one stream:
+// per schema, so streams in different schemas never wait on each other.
+func migrationLockKey(schema Schema) string {
+	name := schema.String()
+	if name == "" {
+		name = "(default)"
+	}
+	return "gopernicus.migrations/" + name
+}
+
+// lockMigrationStream takes the stream's transaction-scoped advisory lock as
+// the migration transaction's first statement, before the ledger is read or
+// created, so two concurrent runners serialize: the second waits, then finds
+// nothing to apply. The lock is released at commit or rollback. The wait is
+// bounded by ctx, not the pool's lock_timeout, which would turn "wait for the
+// other deploy" into a failed deploy; the session value is restored for the
+// migration files themselves.
+func lockMigrationStream(ctx context.Context, tx *Tx, schema Schema) error {
+	if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout = 0"); err != nil {
+		return fmt.Errorf("migration lock: clear lock_timeout: %w", err)
+	}
+	start := time.Now()
+	if _, err := tx.Exec(ctx, "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))", migrationLockKey(schema)); err != nil {
+		return fmt.Errorf("migration lock: %w", err)
+	}
+	if waited := time.Since(start); waited > migrationLockWaitLog {
+		slog.InfoContext(ctx, "migrations: waited for a concurrent runner",
+			slog.String("schema", schema.String()), slog.Duration("waited", waited))
+	}
+	if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout TO DEFAULT"); err != nil {
+		return fmt.Errorf("migration lock: restore lock_timeout: %w", err)
+	}
+	return nil
 }

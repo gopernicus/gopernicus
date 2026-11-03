@@ -543,7 +543,25 @@ qualify them** (`public.uuid_generate_v4()`).
 The four ledger statements are explicitly qualified through `Schema.Table`,
 never left to `search_path`.
 
+### Concurrent runners serialize
+
+Two `RunMigrations` calls on one stream (two deploy jobs started together) no longer race.
+The migration transaction's first statement takes a transaction-scoped advisory lock keyed per
+stream, `pg_advisory_xact_lock(hashtextextended('gopernicus.migrations/<schema>', 0))` (the
+default stream is `gopernicus.migrations/(default)`). The second runner waits, then finds every
+file in the ledger. Streams in different schemas don't wait on each other. The wait is bounded by
+the caller's context, not `Config.LockTimeout`, so a strict pool lock timeout doesn't turn "wait
+for the other deploy" into a failed deploy. A wait longer than 100ms logs
+`migrations: waited for a concurrent runner`. The lock is released at commit or rollback.
+
 ### If you run the exported stream with your own runner
+
+Take the same lock as the transaction's first statement so your runner serializes with
+`RunMigrations` and with itself:
+
+```sql
+SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('gopernicus.migrations/<schema>', 0));
+```
 
 `ExportMigrations` is unchanged and the exported SQL is unqualified. Apply it
 either inside a transaction that has run `SET LOCAL search_path TO "<schema>"`,

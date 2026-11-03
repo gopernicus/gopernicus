@@ -6504,3 +6504,16 @@ against the live Auth emulator.
   Per-runtime channels keep a runtime that does not claim the kind from consuming the owner's
   wake (tested with two runtimes on one Service).
 - **Residuals:** cross-process admissions still wait for `IdleInterval` (#98).
+
+## AUDIT-077: Concurrent migration runners serialize (#298)
+
+- **Status:** pending tag as `integrations/datastores/pgxdb` v0.23.0. Record: `RELEASING.md`,
+  "Concurrent migration runners serialize (#298)".
+- **Modules:** `integrations/datastores/pgxdb`; tests and docs only in `integrations/datastores/turso`.
+- **Old behavior:** two runners on one stream raced; one deploy failed (`already exists`, duplicate
+  ledger row, or a pool lock timeout). The S8 change-control plan's runner lock was never built.
+- **New behavior:** a transaction-scoped advisory lock per stream, taken first; the second runner
+  waits (bounded by ctx, not the pool's lock_timeout) and applies nothing. Live: two OS processes
+  migrating the authorization stream into one database both exit 0 with one ledger row per file
+  (three of three attempts); the previous pgxdb failed one process every time.
+- **Residuals:** a host running exported SQL with its own runner must take the documented lock.
