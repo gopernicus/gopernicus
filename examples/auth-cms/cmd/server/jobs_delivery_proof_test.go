@@ -800,3 +800,165 @@ func sameRenderedMessage(a, b email.Message) bool {
 	}
 	return a.Subject == b.Subject && a.Text == b.Text && a.HTML == b.HTML
 }
+
+// flakySender fails its first failures sends, then delivers to the embedded
+// captureSender.
+type flakySender struct {
+	captureSender
+	failures int
+	calls    int
+}
+
+func (s *flakySender) Send(ctx context.Context, m email.Message) error {
+	s.mu.Lock()
+	s.calls++
+	fail := s.calls <= s.failures
+	s.mu.Unlock()
+	if fail {
+		return errors.New("provider unavailable")
+	}
+	return s.captureSender.Send(ctx, m)
+}
+
+func (s *flakySender) sends() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+// bootRole builds one auth instance in jobs mode over the shared fenced store and
+// auth repositories, playing role. The server and the worker of a split deployment
+// are two of these over one store.
+func bootRole(t *testing.T, authRepos auth.Repositories, store job.FencedQueueRepository, role delivery.Role, configure func(*authenticationConfig)) (*auth.Components, *jobs.Components, authenticationConfig) {
+	t.Helper()
+	deliveryJobs, err := jobs.New(jobs.Repositories{FencedQueue: store})
+	if err != nil {
+		t.Fatalf("jobs.New: %v", err)
+	}
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
+	if err != nil {
+		t.Fatalf("buildAuthConfig: %v", err)
+	}
+	cfg.DeliveryMode = delivery.ModeJobs
+	cfg.Role = role
+	cfg.DeliveryDispatcher = authjobs.NewDispatcher(deliveryJobs.Queue)
+	if configure != nil {
+		configure(&cfg)
+	}
+	svc, err := auth.New(authRepos, cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
+	if err != nil {
+		t.Fatalf("auth.New (role %q): %v", role, err)
+	}
+	return svc, deliveryJobs, cfg
+}
+
+// TestSplitRolesDeliverEndToEnd proves a split deployment delivers: an
+// enqueue-only server with no Mailer admits a passwordless sign-in code, and a
+// process-only worker with the refusing signer, sharing the server's fenced queue
+// and repositories, sends it.
+func TestSplitRolesDeliverEndToEnd(t *testing.T) {
+	stableDeliveryEnv(t)
+	store := newInspectingQueue()
+	authRepos := authmem.New().Repositories()
+	ctx := context.Background()
+
+	server, _, serverCfg := bootRole(t, authRepos, store, delivery.RoleEnqueue, func(c *authenticationConfig) {
+		c.Mailer = nil
+		c.MailFrom = ""
+	})
+	if _, ok := server.Delivery.JobRuntime(); ok {
+		t.Fatal("the enqueue-only server exposed a delivery job runtime")
+	}
+
+	sender := &captureSender{}
+	worker, workerJobs, _ := bootRole(t, authRepos, store, delivery.RoleProcess, func(c *authenticationConfig) {
+		c.TokenSigner = auth.RefusingSigner{}
+		c.Mailer = sender
+	})
+	rt, ok := worker.Delivery.JobRuntime()
+	if !ok {
+		t.Fatal("the process-only worker did not expose a delivery job runtime")
+	}
+	runtime, err := runtimeFromDeliveryConfig(workerJobs.Queue, rt, func(c *deliveryRuntimeTestConfig) {
+		c.PollInterval = 10 * time.Millisecond
+		c.IdleInterval = 10 * time.Millisecond
+	})
+	if err != nil {
+		t.Fatalf("worker runtime: %v", err)
+	}
+
+	const addr = "split-roles@example.com"
+	if _, err := server.Authentication.Register(ctx, addr, "correct-horse-battery-staple", "Split User"); err != nil {
+		t.Fatalf("Register on the server: %v", err)
+	}
+	code, ok := renderedSecretFor(store, serverCfg.DeliveryEncrypter, addr)
+	if !ok {
+		t.Fatal("the server admitted no rendered verification payload")
+	}
+	if err := server.Authentication.Verify(ctx, addr, code); err != nil {
+		t.Fatalf("Verify on the server: %v", err)
+	}
+	if err := server.Authentication.StartPasswordless(ctx, "email", addr, "code"); err != nil {
+		t.Fatalf("StartPasswordless on the server: %v", err)
+	}
+	if sender.count() != 0 {
+		t.Fatal("a message was sent before the worker ran")
+	}
+
+	cancel, done := runRuntime(runtime)
+	deadline := time.Now().Add(5 * time.Second)
+	var signIn email.Message
+	for time.Now().Before(deadline) && signIn.Subject == "" {
+		for _, m := range sender.all() {
+			if m.Subject == "Your sign-in code" && len(m.To) == 1 && m.To[0] == addr {
+				signIn = m
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stopRuntime(t, cancel, done)
+	if signIn.Subject == "" {
+		t.Fatalf("the worker sent no sign-in code; sent: %+v", sender.all())
+	}
+	if signIn.From != "auth@localhost" {
+		t.Fatalf("sign-in code From = %q, want the worker's MailFrom", signIn.From)
+	}
+}
+
+// TestJobsRetryBudgetReachesProcessor proves a provider that fails six times
+// and then recovers still delivers when the host raises the fenced runtime's cap
+// to the pocket's default of ten. Before the pocket passed its cap to the
+// processor, the engine's own five dead-lettered the message first.
+func TestJobsRetryBudgetReachesProcessor(t *testing.T) {
+	stableDeliveryEnv(t)
+	store := newInspectingQueue()
+	authRepos := authmem.New().Repositories()
+	sender := &flakySender{failures: 6}
+
+	svc, deliveryJobs, _ := bootRole(t, authRepos, store, delivery.RoleBoth, func(c *authenticationConfig) {
+		c.Mailer = sender
+	})
+	rt, ok := svc.Delivery.JobRuntime()
+	if !ok {
+		t.Fatal("jobs runtime not exposed")
+	}
+	runtime, err := runtimeFromDeliveryConfig(deliveryJobs.Queue, rt, func(c *deliveryRuntimeTestConfig) {
+		c.PollInterval = 10 * time.Millisecond
+		c.IdleInterval = 10 * time.Millisecond
+		c.MaxAttempts = 10
+		c.Backoff = func(int) time.Duration { return 5 * time.Millisecond }
+	})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+
+	if _, err := svc.Authentication.Register(context.Background(), "retry-budget@example.com", "correct-horse-battery-staple", "Retry User"); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	cancel, done := runRuntime(runtime)
+	waitMsgCount(t, &sender.captureSender, 1)
+	stopRuntime(t, cancel, done)
+	if got := sender.sends(); got != 7 {
+		t.Fatalf("provider sends = %d, want 7 (six failures, then delivery)", got)
+	}
+}

@@ -5,6 +5,7 @@ import (
 
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 )
 
 // ErrHasherRequired and ErrMailerRequired are returned by New
@@ -287,4 +288,26 @@ var (
 	// ErrMFAEnrollmentGraceInvalid is returned by New when
 	// MFAConfig.EnrollmentGrace is negative or above MaxMFAEnrollmentGrace.
 	ErrMFAEnrollmentGraceInvalid = errors.New("auth: MFAConfig.EnrollmentGrace must be between zero (DefaultMFAEnrollmentGrace) and MaxMFAEnrollmentGrace")
+)
+
+// The split-role delivery sentinels: DeliveryConfig.Role, MailFrom and the
+// refusing signer a processing-only instance runs with.
+var (
+	// ErrDeliveryRoleInvalid is returned by New when DeliveryConfig.Role is not
+	// "both", "enqueue", or "process".
+	ErrDeliveryRoleInvalid = delivery.ErrRoleInvalid
+	// ErrDeliveryRoleRequiresJobs is returned by New when DeliveryConfig.Role is
+	// "enqueue" or "process" and DeliveryMode is not "jobs": only the jobs queue
+	// is shared across processes.
+	ErrDeliveryRoleRequiresJobs = errors.New(`auth: DeliveryConfig.Role "enqueue" or "process" requires DeliveryMode "jobs"`)
+	// ErrMailFromRequired is returned by New when delivery is enabled, the
+	// instance sends (Role is not "enqueue"), and DeliveryConfig.MailFrom is
+	// empty: mail would go out with no From address.
+	ErrMailFromRequired = errors.New("auth: DeliveryConfig.MailFrom is required while delivery is enabled (AUTH_MAIL_FROM)")
+	// ErrMailFromInvalid is returned by New in every mode and role when a
+	// non-empty DeliveryConfig.MailFrom does not parse as an RFC 5322 address.
+	ErrMailFromInvalid = errors.New("auth: DeliveryConfig.MailFrom must be an RFC 5322 address, such as no-reply@example.com or \"Example Co <no-reply@example.com>\"")
+	// ErrSignerRefused is returned by every RefusingSigner method: the instance
+	// was built to process delivery and holds no token key.
+	ErrSignerRefused = errors.New("auth: this instance holds no token signer (DeliveryConfig.Role process)")
 )

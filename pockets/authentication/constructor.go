@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	deliverycmd "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery/command"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -30,6 +32,12 @@ import (
 // security-event rows (every oauth2_grant_failed row, the OAuth callback's
 // unknown_provider row) one client IP may write per minute, per limiter.
 const auditFailureRowsPerMinute = 60
+
+// defaultJobsMaxAttempts is the jobs-mode delivery attempt cap when
+// DeliveryConfig.JobsDelivery.MaxAttempts is zero. Under the jobs runtime's
+// backoff (5s doubling to 5m) ten attempts ride out about twenty minutes of
+// provider outage, which an invitation or verification link outlives.
+const defaultJobsMaxAttempts = 10
 
 // resolveListStrategy validates AdministrationConfig.ListStrategy and maps it to a
 // list.Strategy. Empty (the zero value of a literally-built constructorConfig) resolves to
@@ -87,11 +95,23 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if !cfg.PasswordFlowsDisabled && nilDependency(cfg.Hasher) {
 		return nil, ErrHasherRequired
 	}
-	if cfg.DeliveryMode != delivery.ModeOff && nilDependency(cfg.Mailer) {
+	// The delivery role decides which collaborators this instance needs: an
+	// enqueue-only instance never sends, so it needs no Mailer; a process-only
+	// instance never signs, so a nil signer becomes RefusingSigner. The zero role
+	// is "both", which needs both, as before roles existed.
+	role, err := delivery.ParseRole(string(cfg.DeliveryRole))
+	if err != nil {
+		return nil, err
+	}
+	cfg.DeliveryRole = role
+	if cfg.DeliveryMode != delivery.ModeOff && role != delivery.RoleEnqueue && nilDependency(cfg.Mailer) {
 		return nil, ErrMailerRequired
 	}
 	if nilDependency(cfg.TokenSigner) {
-		return nil, ErrTokenSignerRequired
+		if role != delivery.RoleProcess {
+			return nil, ErrTokenSignerRequired
+		}
+		cfg.TokenSigner = RefusingSigner{}
 	}
 	// RuntimeMode is a required enum with no default, so a host can never
 	// accidentally inherit the development posture (design §8). Validated after
@@ -105,6 +125,12 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	// empty/unknown failure; the mode-specific capability/acknowledgment matrix is
 	// enforced in the delivery block below.
 	if err := validateDeliveryMode(cfg.DeliveryMode); err != nil {
+		return nil, err
+	}
+	if err := validateDeliveryRole(cfg.DeliveryRole, cfg.DeliveryMode); err != nil {
+		return nil, err
+	}
+	if err := validateMailFrom(cfg.MailFrom, cfg.DeliveryMode, cfg.DeliveryRole); err != nil {
 		return nil, err
 	}
 	if len(cfg.Providers) > 0 && (repos.OAuthAccounts == nil || repos.OAuthStates == nil) {
@@ -247,6 +273,9 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		if cfg.RuntimeMode == environment.ModeProduction && !cfg.DeliveryJobsAcknowledged {
 			return nil, ErrDeliveryJobsUnacknowledged
 		}
+		if err := cfg.JobsDelivery.Validate(); err != nil {
+			return nil, err
+		}
 	case delivery.ModeInProcess:
 		// in_process: bounded, process-local, EPHEMERAL delivery. It is explicitly
 		// non-durable; production requires the explicit crash-loss acknowledgment, since
@@ -274,15 +303,16 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	// Fail closed on delivery transport security (design §6.3): in production a
 	// development-only or metadata-less Mailer/BodySender is rejected; in
 	// development a development-only transport warns. The Mailer is validated non-
-	// nil above. An opportunistic-STARTTLS refusal is waivable, so it is reported
-	// with the other posture violations below rather than here.
+	// nil above unless the instance only enqueues, which checks whatever it wires.
+	// An opportunistic-STARTTLS refusal is waivable, so it is reported with the
+	// other posture violations below rather than here.
 	transportLog := cfg.Logger
 	if transportLog == nil {
 		transportLog = slog.Default()
 	}
 	var startTLS []string
 	var opportunistic error
-	if cfg.Mailer != nil {
+	if cfg.Mailer != nil || cfg.DeliveryRole == delivery.RoleEnqueue {
 		startTLS, opportunistic, err = validateDeliveryTransports(cfg.RuntimeMode, cfg.Mailer, bodySenders, cfg.OpportunisticTLSAcknowledged, transportLog)
 		if err != nil {
 			return nil, err
@@ -326,20 +356,29 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	// consumed by BOTH authentication service and invitation service so the outbound email/SMS content
 	// and the email/notify kind fork have a single definition instead of two
 	// drifting copies. It renders an encrypted-job-ready Envelope; the durable
-	// worker (phase 4) sends it. The Mailer is validated non-nil above, so the
-	// router is always buildable here.
+	// worker (phase 4) sends it. An enqueue-only instance gets a render-only
+	// router that holds no transport — its Deliver refuses — and routes the kinds
+	// its BodySenders name; every other delivering instance has the Mailer
+	// validated non-nil above.
 	var deliveryRouter *delivery.Router
-	if cfg.Mailer != nil {
-		routerOptions := []delivery.RouterOption{
-			delivery.WithTemplates(delivery.TemplatesConfig{AppTemplates: cfg.EmailContentTemplates, AppLayouts: cfg.EmailLayouts, Branding: cfg.EmailBranding, Subjects: cfg.EmailSubjects, SMSBodies: cfg.SMSBodies}),
-			delivery.WithMailFrom(cfg.MailFrom),
-			delivery.WithBodySenders(bodySenders),
-			delivery.WithDataHook(cfg.DeliveryData),
-			delivery.WithRouterLogger(cfg.Logger),
+	routerOptions := []delivery.RouterOption{
+		delivery.WithTemplates(delivery.TemplatesConfig{AppTemplates: cfg.EmailContentTemplates, AppLayouts: cfg.EmailLayouts, Branding: cfg.EmailBranding, Subjects: cfg.EmailSubjects, SMSBodies: cfg.SMSBodies}),
+		delivery.WithMailFrom(cfg.MailFrom),
+		delivery.WithDataHook(cfg.DeliveryData),
+		delivery.WithRouterLogger(cfg.Logger),
+	}
+	if cfg.OpportunisticTLSAcknowledged {
+		routerOptions = append(routerOptions, delivery.WithOpportunisticTLSAcknowledged())
+	}
+	switch {
+	case cfg.DeliveryRole == delivery.RoleEnqueue:
+		routerOptions = append(routerOptions, delivery.WithRenderOnly(slices.Sorted(maps.Keys(bodySenders))...))
+		deliveryRouter, err = delivery.NewRouter(nil, routerOptions...)
+		if err != nil {
+			return nil, err
 		}
-		if cfg.OpportunisticTLSAcknowledged {
-			routerOptions = append(routerOptions, delivery.WithOpportunisticTLSAcknowledged())
-		}
+	case cfg.Mailer != nil:
+		routerOptions = append(routerOptions, delivery.WithBodySenders(bodySenders))
 		deliveryRouter, err = delivery.NewRouter(cfg.Mailer, routerOptions...)
 		if err != nil {
 			return nil, err
@@ -670,6 +709,10 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	//     registers it on the generic jobs runtime.
 	//   - in_process mode (AV3D-4.1): build the same processor behind a bounded pool the
 	//     host runs via Runtime.Run.
+	//
+	// Each branch hands the engine its configured attempt cap; without it the
+	// engine's own default of five made the permanent verdict first.
+	// An enqueue-only instance builds no processor, so JobRuntime reports false.
 	var jobsProcessor *delivery.JobsProcessor
 	var inProcessRuntime *delivery.InProcessRuntime
 	processorOptions := []delivery.ProcessorOption{delivery.WithProcessorInitializer(authComponents.DeliveryInitializer)}
@@ -678,6 +721,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	}
 	switch {
 	case cfg.DeliveryMode == delivery.ModeInProcess:
+		processorOptions = append(processorOptions, delivery.WithProcessorPolicy(deliverycmd.Config{MaxAttempts: cfg.InProcessDelivery.MaxAttempts}))
 		processor, err := delivery.NewJobsProcessor(cfg.DeliveryEncrypter, deliveryRouter, processorOptions...)
 		if err != nil {
 			return nil, err
@@ -691,7 +735,8 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		if err != nil {
 			return nil, err
 		}
-	case cfg.DeliveryMode == delivery.ModeJobs && cfg.DeliveryDispatcher != nil:
+	case cfg.DeliveryMode == delivery.ModeJobs && cfg.DeliveryDispatcher != nil && cfg.DeliveryRole != delivery.RoleEnqueue:
+		processorOptions = append(processorOptions, delivery.WithProcessorPolicy(deliverycmd.Config{MaxAttempts: jobsMaxAttempts(cfg)}))
 		jobsProcessor, err = delivery.NewJobsProcessor(cfg.DeliveryEncrypter, deliveryRouter, processorOptions...)
 		if err != nil {
 			return nil, err
@@ -747,6 +792,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		return nil, err
 	}
 	logMaintenancePosture(cfg, maintenanceService, transportLog)
+	logDelivery(cfg, transportLog)
 	logMFAPosture(cfg, transportLog)
 	logAccountPosture(cfg, repos, transportLog)
 	logSessionLifetime(cfg, authService.SessionPolicy(), transportLog)
@@ -774,6 +820,31 @@ func logEdgeWaivers(cfg constructorConfig, log *slog.Logger) {
 	if cfg.PublicRouteLimiterFailOpen {
 		log.Warn("auth: production posture requirement waived", "posture_waiver", "PublicRouteLimiterFailOpen", "runtime_mode", cfg.RuntimeMode.String())
 	}
+}
+
+// jobsMaxAttempts resolves DeliveryConfig.JobsDelivery.MaxAttempts: zero selects
+// defaultJobsMaxAttempts.
+func jobsMaxAttempts(cfg constructorConfig) int {
+	if cfg.JobsDelivery.MaxAttempts > 0 {
+		return cfg.JobsDelivery.MaxAttempts
+	}
+	return defaultJobsMaxAttempts
+}
+
+// logDelivery logs the one auth: delivery boot line in every mode: the mode,
+// the role, whether a Mailer is wired, and the jobs-mode attempt cap. A jobs
+// instance that processes also names the jobs runtime's cap, because the lower
+// of the two wins and only the host can raise the runtime's.
+func logDelivery(cfg constructorConfig, log *slog.Logger) {
+	mailer := "absent"
+	if !nilDependency(cfg.Mailer) {
+		mailer = "wired"
+	}
+	attrs := []any{"mode", string(cfg.DeliveryMode), "role", string(cfg.DeliveryRole), "mailer", mailer, "jobs_max_attempts", jobsMaxAttempts(cfg)}
+	if cfg.DeliveryMode == delivery.ModeJobs && cfg.DeliveryRole != delivery.RoleEnqueue {
+		attrs = append(attrs, "jobs_runtime_cap", "set FencedRuntimePolicy.MaxAttempts to at least jobs_max_attempts; the lower cap dead-letters first")
+	}
+	log.Info("auth: delivery", attrs...)
 }
 
 // logMaintenancePosture logs the retention registration line and, in

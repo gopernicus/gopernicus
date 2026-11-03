@@ -69,7 +69,7 @@ func TestWithIDsReachesEveryClass(t *testing.T) {
 			cfg := browserBaseConfig()
 			opts := append([]Option{
 				WithPassword(PasswordConfig{Hasher: cfg.Hasher, PasswordFlowsDisabled: true}),
-				WithDelivery(DeliveryConfig{Mailer: cfg.Mailer, DeliveryEncrypter: stubEncrypter{}}),
+				WithDelivery(DeliveryConfig{MailFrom: fixtureMailFrom, Mailer: cfg.Mailer, DeliveryEncrypter: stubEncrypter{}}),
 				WithInvitations(InvitationsConfig{Granter: stubGranter{}, InviteCheck: allowInvite}),
 				WithAdministration(AdministrationConfig{MachineRoutesGate: func(next http.Handler) http.Handler { return next }}),
 			}, tc.opts()...)

@@ -3333,8 +3333,10 @@ store upgrade is needed.
 | development-only providers (`OAuthConfig.Providers`, `WithExternal`) | A provider declaring `oauth.Capabilities{DevelopmentOnly: true}` or the authentication capability's `Capabilities{DevelopmentOnly: true}` is **refused in production** (`ErrDevelopmentOnlyProvider`, re-exported from `authlogic`) and WARNed in development. Providers that declare nothing are accepted. No acknowledgement exists. |
 | keys (`NewKeys`) | `NewKeys(mode, KeysInput, log, need...)` decodes the five hex keys (table below). **Production** reports every unset or malformed needed key in one `errors.Join` of `ErrKeyRequired`, each naming its variable and never its value; development mints an ephemeral key with a WARN. `AUTH_TOKEN_ENCRYPTER_KEY` stays optional in every mode. The pocket never reads the process environment. |
 | `Hasher` (PasswordHasher) | Required when password flows are enabled. Host owns algorithm and password strength policy. |
-| `Mailer` (email.Sender) | Required when delivery is enabled; may be nil with `DeliveryModeOff`. |
-| `MailFrom` | From address on verification/reset/change mail. |
+| `Mailer` (email.Sender) | Required when delivery is enabled (`ErrMailerRequired`); may be nil with `DeliveryModeOff` or on an instance whose `DeliveryConfig.Role` is `enqueue`. |
+| `MailFrom` | From address on verification/reset/change mail (`AUTH_MAIL_FROM`). **Required while delivery is enabled** (`ErrMailFromRequired`), except on an `enqueue`-role instance, which never sends. A non-empty value must parse as an RFC 5322 address (`net/mail.ParseAddress`) in every mode and role (`ErrMailFromInvalid`): `no-reply@example.com` and `Example Co <no-reply@example.com>` pass, `no-reply` does not. |
+| `DeliveryConfig.Role` | `AUTH_DELIVERY_ROLE`: the part this instance plays in `DeliveryMode: "jobs"` — `both` (the zero value: enqueues and processes, as before roles existed), `enqueue` (admits work and never sends: no Mailer, no `MailFrom`, no processor, so `Components.Delivery.JobRuntime()` reports `ok=false`), or `process` (processes and never signs: a nil signer becomes `authentication.RefusingSigner`, whose `Sign`/`Verify` return `ErrSignerRefused`). `enqueue`/`process` outside jobs mode → `ErrDeliveryRoleRequiresJobs`; any other value → `ErrDeliveryRoleInvalid`. See [Composition and lifecycle ownership](#composition-and-lifecycle-ownership-host-wiring). |
+| `DeliveryConfig.JobsDelivery` | `delivery.JobsConfig{MaxAttempts}`: the attempt on which a transient jobs-mode delivery failure becomes permanent. Zero → **10** (about 20 minutes of provider outage under the jobs runtime's 5s-doubling-to-5m backoff); negative → `delivery.ErrJobsMaxAttemptsInvalid`. The jobs runtime keeps its own cap (`FencedRuntimePolicy.MaxAttempts`, default 5) and **the lower one wins**, so raise both. `InProcessDelivery.MaxAttempts` likewise reaches the processor, so an in-process cap above 5 now takes effect. |
 | `CompromisedPasswordChecker` | nil → no breach/blocklist check (length policy still applies). Wired → register/set/change/reset all consult it; the core ships none and adds no network dependency. |
 | `CompromisedPasswordFailOpen` | false (**FAIL CLOSED**): an unavailable breach service rejects the password rather than becoming a silent bypass. true trades coverage for availability (WARN-logged). |
 | `ChallengeProtector` | REQUIRED once `Challenges` is wired (`ErrChallengeProtectorRequired`). The bundled `HMACChallengeProtector` peppers OTP codes with an in-process HMAC **key ring** (active key ID stamped on each challenge; an overlapping rotation still verifies an unexpired code) and SHA-256-digests 256-bit tokens. The pepper is **local code, not a service** (below). |
@@ -3910,6 +3912,39 @@ lifecycle, exactly like the jobs and events pollers.
   cancels the context to drain on shutdown (see the Quickstart). Set
   `DeliveryEphemeralAcknowledged: true` for production, and expect the ephemeral
   posture above.
+
+- **Split roles (`jobs` mode only).** A host that runs a server which only
+  enqueues and a worker which only processes declares it with
+  `DeliveryConfig.Role` (`AUTH_DELIVERY_ROLE`); both processes point at one durable
+  fenced queue and one set of repositories, and share the delivery, challenge and
+  identifier keys.
+
+  | role | Mailer + `MailFrom` | signer | `JobRuntime()` |
+  |---|---|---|---|
+  | `both` (zero) | required | required | ok |
+  | `enqueue` | optional (validated when wired) | required | not ok — run no runtime |
+  | `process` | required | optional — nil becomes `RefusingSigner` | ok |
+
+  An `enqueue` instance renders through a render-only router
+  (`delivery.WithRenderOnly`): its `Deliver` returns `delivery.ErrRouterRenderOnly`,
+  so nothing it builds can send. A `process` instance that mounts the HTTP surface
+  answers token routes with errors from `RefusingSigner` — mount it only where
+  delivery runs. Every mode logs one `auth: delivery` boot line (`mode`, `role`,
+  `mailer=wired|absent`, `jobs_max_attempts`), and `auth: keys` reports
+  `jwt_signer=refusing` on a process instance.
+
+  ```go
+  // server: enqueues, never sends
+  auth.WithDelivery(auth.DeliveryConfig{Role: delivery.RoleEnqueue,
+      DeliveryDispatcher: dispatcher, DeliveryEncrypter: deliveryKey, DeliveryJobsAcknowledged: true})
+  // worker: sends, never signs — pass nil or auth.RefusingSigner{} as the signer
+  auth.WithDelivery(auth.DeliveryConfig{Role: delivery.RoleProcess, Mailer: mailer, MailFrom: mailFrom,
+      DeliveryDispatcher: dispatcher, DeliveryEncrypter: deliveryKey, DeliveryJobsAcknowledged: true,
+      JobsDelivery: delivery.JobsConfig{MaxAttempts: 10}})
+  // and the worker's runtime cap to match:
+  authjobs.NewRuntime(jobsSvc.Queue, deliveryRuntime,
+      queue.WithFencedRuntimePolicy(queue.FencedRuntimePolicy{MaxAttempts: 10}))
+  ```
 
 ## Provision-on-consumption — magic links for addresses with no account
 

@@ -244,6 +244,8 @@ func describeKeyRole(role, prefix string, v any) keyRole {
 		d.kind, d.active = "ring", r.ActiveKeyID()
 	case *cryptids.AESGCM:
 		d.kind = "single"
+	case RefusingSigner, *RefusingSigner:
+		d.kind = "refusing"
 	}
 	return d
 }

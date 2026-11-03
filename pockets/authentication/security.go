@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net/mail"
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/redirect"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
@@ -264,6 +266,23 @@ var (
 	ErrPasswordlessDeliveryRequired = errors.New(`auth: PasswordlessConfig.Passwordless requires a delivery runtime (DeliveryMode "jobs" or "in_process")`)
 )
 
+// RefusingSigner is the token signer of an instance that only processes
+// delivery (DeliveryConfig.Role "process"): it holds no key, and Sign and
+// Verify return ErrSignerRefused. New installs it when that role is given a
+// nil signer; a host may pass it explicitly. A processing-only instance that
+// mounts the HTTP surface answers every token route with an error.
+type RefusingSigner struct{}
+
+// Sign refuses.
+func (RefusingSigner) Sign(map[string]any, time.Time) (string, error) {
+	return "", ErrSignerRefused
+}
+
+// Verify refuses.
+func (RefusingSigner) Verify(string) (map[string]any, error) {
+	return nil, ErrSignerRefused
+}
+
 // validateRuntimeMode enforces the required-enum rule (design §8): empty →
 // ErrRuntimeModeRequired, unknown → ErrRuntimeModeInvalid, else nil. The rule
 // itself is the canonical environment.ValidateMode; this only
@@ -297,11 +316,38 @@ func validateDeliveryMode(m delivery.Mode) error {
 	}
 }
 
+// validateDeliveryRole enforces the mode half of DeliveryConfig.Role, already
+// parsed by delivery.ParseRole: "both" is legal in every mode, "enqueue" and
+// "process" only with DeliveryMode "jobs".
+func validateDeliveryRole(role delivery.Role, mode delivery.Mode) error {
+	if role != delivery.RoleBoth && mode != delivery.ModeJobs {
+		return fmt.Errorf("%w: role %q with DeliveryMode %q", ErrDeliveryRoleRequiresJobs, role, mode)
+	}
+	return nil
+}
+
+// validateMailFrom enforces DeliveryConfig.MailFrom: a non-empty value must
+// parse as an RFC 5322 address in every mode and role; an empty value is
+// ErrMailFromRequired when the instance can send (delivery on, role not
+// "enqueue").
+func validateMailFrom(mailFrom string, mode delivery.Mode, role delivery.Role) error {
+	if mailFrom != "" {
+		if _, err := mail.ParseAddress(mailFrom); err != nil {
+			return fmt.Errorf("%w: %q", ErrMailFromInvalid, mailFrom)
+		}
+		return nil
+	}
+	if mode != delivery.ModeOff && role != delivery.RoleEnqueue {
+		return ErrMailFromRequired
+	}
+	return nil
+}
+
 // validateDeliveryTransports enforces the transport-security posture (design
 // §6.3): in production a development-only or metadata-less email Sender or
 // BodySender is ErrInsecureDeliveryTransport; in development a development-only
-// transport emits a startup WARN. The Mailer is always the required email
-// transport; each wired BodySender is checked too.
+// transport emits a startup WARN. The Mailer is checked when wired — an
+// enqueue-only instance may have none; each wired BodySender is checked too.
 //
 // Unless opportunisticTLSAcknowledged, production also refuses a transport
 // declaring STARTTLS (notify.RequireMandatoryTLS). That refusal is the only
@@ -325,7 +371,10 @@ func validateDeliveryTransports(mode environment.Mode, mailer email.Sender, body
 		label     string
 		transport any
 	}
-	transports := []labeled{{"email sender", mailer}}
+	var transports []labeled
+	if !nilDependency(mailer) {
+		transports = append(transports, labeled{"email sender", mailer})
+	}
 	for _, kind := range slices.Sorted(maps.Keys(bodySenders)) {
 		transports = append(transports, labeled{"body sender " + kind, bodySenders[kind]})
 	}

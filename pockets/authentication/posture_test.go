@@ -233,7 +233,7 @@ func TestPasswordlessAloneIsSingleFactor(t *testing.T) {
 		WithPassword(PasswordConfig{PasswordFlowsDisabled: true}),
 		WithIdentity(IdentityConfig{ChallengeProtector: passwordlessProtector(t), IdentifierKeyer: prodKeyer{}}),
 		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
-		WithDelivery(DeliveryConfig{Mailer: prodMailer{}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}, DeliveryJobsAcknowledged: true}),
+		WithDelivery(DeliveryConfig{MailFrom: fixtureMailFrom, Mailer: prodMailer{}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}, DeliveryJobsAcknowledged: true}),
 		WithPasswordless(PasswordlessConfig{Passwordless: []string{"email"}}),
 		WithLinks(LinksConfig{PublicAuthBaseURL: "https://auth.example.com"}),
 		WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}}),

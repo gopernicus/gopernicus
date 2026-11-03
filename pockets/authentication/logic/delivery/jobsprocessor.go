@@ -68,6 +68,9 @@ func NewJobsProcessor(encrypter cryptids.Encrypter, router *Router, opts ...Proc
 	if d.Router == nil {
 		return nil, ErrRouterRequired
 	}
+	if d.Router.renderOnly {
+		return nil, ErrRouterRenderOnly
+	}
 	var initializer deliverycmd.Initializer
 	if d.Initializer != nil {
 		initializer = commandInitializer{inner: d.Initializer}

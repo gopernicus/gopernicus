@@ -518,11 +518,12 @@ func (s *Service) CreatePrepared(ctx context.Context, p PreparedCreate) (CreateR
 }
 
 // kindSupported reports whether the host can deliver an invitation of kind
-// (deny-by-absence, ruling 6 / delta-fold 1): the email kind is always supported
-// while the required Mailer is wired, and every other kind is supported iff a
-// notifier of that kind is wired.
+// (deny-by-absence, ruling 6 / delta-fold 1): the email kind is supported while
+// the Mailer is wired or the delivery router supports it — an enqueue-only
+// instance has no Mailer, and another process sends — and every other kind is
+// supported iff a notifier of that kind is wired.
 func (s *Service) kindSupported(kind string) bool {
-	if kind == sdk.AddressKindEmail && s.mailer != nil {
+	if kind == sdk.AddressKindEmail && (s.mailer != nil || (s.deliverer != nil && s.deliverer.Supports(kind))) {
 		return true
 	}
 	_, ok := s.bodySenders[kind]

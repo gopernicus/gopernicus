@@ -307,6 +307,18 @@ remain absent.
     `DELIVERY_PURGE_BATCH` (default `500`). It is a no-op posture on this in-memory demo
     (nothing survives restart) but exercises the exact host-owned purge wiring a durable
     host uses; the purged count surfaces on `/healthz/delivery`.
+    `JOBS_MAX_ATTEMPTS` sets the fenced runtime's attempt cap (default 5). The pocket's
+    own cap, `DeliveryConfig.JobsDelivery.MaxAttempts`, defaults to 10, and the lower
+    of the two dead-letters first, so `JOBS_MAX_ATTEMPTS=10` uses the pocket's whole
+    budget; the pocket's `auth: delivery` boot line reports `jobs_max_attempts`.
+  - **`AUTH_DELIVERY_ROLE`** (jobs mode only) splits that wiring across processes.
+    `enqueue` wires no mailer and starts no delivery runtime or purge loop — the
+    instance only admits work, and logs `role=enqueue mailer=absent`. `process` wires no
+    token signer, so the pocket installs `authentication.RefusingSigner`
+    (`jwt_signer=refusing`) and token routes answer with an error; the instance runs the
+    delivery runtime. Empty or `both` is the single-process default. Because this host's
+    queue is in memory, an `enqueue` instance here never sends; a real split deployment
+    points both processes at one durable `FencedQueue` store.
   - **`AUTH_DELIVERY_MODE=in_process` (small/development — EPHEMERAL):** the same delivery
     processor runs behind a bounded queue + fixed worker pool the host drives via
     `authSvc.Delivery.Run`. No dispatcher, no jobs runtime;
@@ -394,7 +406,8 @@ v3 secrets (`AUTH_CHALLENGE_PEPPER`, `AUTH_IDENTIFIER_KEY`,
 `AUTH_PASSWORDLESS`), the invitation link (`AUTH_INVITATION_URL`,
 `AUTH_INVITATION_TOKEN_IN_QUERY`),
 `AUTH_DELIVERY_MODE` (`jobs` default / `in_process` for the ephemeral bounded variant —
-see the Delivery wiring bullet), and
+see the Delivery wiring bullet), `AUTH_DELIVERY_ROLE` (`enqueue` / `process`, jobs mode
+only), and
 `AUTH_DEBUG` + `AUTH_DEMO_ADMIN_EMAIL` + `OAUTH_CLIENT_ID/SECRET`. `AUTH_RUNTIME_MODE` is read from the process
 environment only — never from `.env`. In development (`AUTH_RUNTIME_MODE=development`)
 the host boots with **none** of the others set: every secret gets a

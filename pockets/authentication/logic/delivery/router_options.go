@@ -100,3 +100,16 @@ func WithOpportunisticTLSAcknowledged() RouterOption {
 		c.OpportunisticTLSAcknowledged = true
 	}
 }
+
+// WithRenderOnly builds a router for an instance that enqueues and never sends
+// (Role "enqueue"): the Mailer may be nil, Deliver returns ErrRouterRenderOnly,
+// NewJobsProcessor refuses the router, and ValidateTransports skips the Mailer.
+// Supports reports email, every wired BodySender's kind, and each of kinds — the
+// non-email kinds the processing instance can send.
+func WithRenderOnly(kinds ...string) RouterOption {
+	kinds = slices.Clone(kinds)
+	return func(c *routerConfig) {
+		c.RenderOnly = true
+		c.RenderOnlyKinds = slices.Clone(kinds)
+	}
+}

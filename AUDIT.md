@@ -6517,3 +6517,22 @@ against the live Auth emulator.
   migrating the authorization stream into one database both exit 0 with one ledger row per file
   (three of three attempts); the previous pgxdb failed one process every time.
 - **Residuals:** a host running exported SQL with its own runner must take the documented lock.
+
+## AUDIT-078: Jobs-mode delivery split roles (#229)
+
+- **Status:** pending tag as `pockets/authentication` v0.43.0. Record: `RELEASING.md`,
+  "Jobs-mode delivery split roles (#229)".
+- **Modules:** `pockets/authentication`; `examples/auth-cms` wiring. No store, sdk, views or jobs
+  change.
+- **Old behavior:** `New` demanded a Mailer whenever delivery was on and a token signer always, so
+  an enqueue-only server held mail credentials and a worker held the JWT key. Jobs-mode attempts
+  stopped at the engine's fixed 5 whatever the jobs runtime allowed, and the in-process engine was
+  clamped the same way. `MailFrom` was never validated.
+- **New behavior:** `DeliveryConfig.Role` — `enqueue` holds no Mailer and its router cannot send;
+  `process` runs on `RefusingSigner` when given no signer. The engine's cap follows
+  `JobsDelivery.MaxAttempts` (default 10) and `InProcessDelivery.MaxAttempts`. An empty `MailFrom`
+  is refused where the instance sends; a malformed one everywhere. Tests: the role matrix, a
+  server/worker pair over one in-memory fenced queue delivering a sign-in code, and six provider
+  failures then delivery under caps of 10 (dead-letters under 5).
+- **Residuals:** the two-OS-process leg over a durable queue is run outside the hermetic suite. A
+  host that raises only the pocket's cap still dead-letters at the jobs runtime's 5.
