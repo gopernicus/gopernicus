@@ -173,6 +173,9 @@ func NewFencedRuntime(svc *Service, inputHandlers map[string]FencedHandlerFunc, 
 	pool := workers.NewPool(work,
 		workers.WithMiddleware(cfg.WorkerMiddleware...),
 		workers.WithName("fenced-delivery"),
+		// A fenced admission wakes this runtime at once; IdleInterval is the
+		// backstop for a dropped signal and for work admitted by another process.
+		workers.WithWakeChannel(svc.registerFencedWake()),
 		workers.WithWorkerCount(workerCount),
 		workers.WithPollInterval(cfg.PollInterval),
 		workers.WithDrainBacklog(true),

@@ -74,6 +74,11 @@ func (s *Service) EnqueueOnceIn(ctx context.Context, in EnqueueOnceInput) (strin
 	if err != nil {
 		return "", err
 	}
+	// A duplicate returns the existing execution: only a fresh admission
+	// (the id just minted) is new work worth waking a runtime for.
+	if j.JobID == id {
+		s.signalFenced()
+	}
 	return j.JobID, nil
 }
 
@@ -101,6 +106,7 @@ func (s *Service) ReplaceIn(ctx context.Context, in ReplaceInput) (string, error
 	if err != nil {
 		return "", err
 	}
+	s.signalFenced()
 	return j.JobID, nil
 }
 

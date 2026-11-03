@@ -6492,3 +6492,15 @@ against the live Auth emulator.
 - **Residuals:** a commit that fails on a dropped connection is returned as-is (its outcome is
   unknown, so it is not reclassified). Tuple-cache Redis retries during a Redis outage are a
   separate issue.
+
+## AUDIT-076: Fenced admissions wake their runtime (#95)
+
+- **Status:** pending tag as `pockets/jobs` v0.12.0. Record: `RELEASING.md`, "Fenced admissions
+  wake their runtime (#95)".
+- **Modules:** `pockets/jobs`. No store, port or API change.
+- **Old behavior:** fenced admission never signaled; the fenced pool claimed new work only on its
+  idle poll, so time-sensitive mail (sign-in codes) waited up to `IdleInterval`.
+- **New behavior:** one cap-1 wake channel per fenced runtime, all signaled on a fresh admission.
+  Per-runtime channels keep a runtime that does not claim the kind from consuming the owner's
+  wake (tested with two runtimes on one Service).
+- **Residuals:** cross-process admissions still wait for `IdleInterval` (#98).

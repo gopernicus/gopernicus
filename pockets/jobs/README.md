@@ -135,6 +135,15 @@ construction. Captured callback state remains host-owned.
 share the same buffered wake signal by construction. A successful enqueue signals
 it; no host wiring can accidentally substitute a different channel.
 
+Each fenced runtime registers its own wake channel on the `Service` (since
+v0.12.0), and a fresh fenced admission (`EnqueueOnce`/`EnqueueOnceIn` that admits
+new work, `Replace`/`ReplaceIn`) signals every one, so a runtime that does not
+claim the admitted kind can never swallow the owner's wake. A sign-in code
+enqueued in jobs delivery mode is claimed at once instead of on the next
+`IdleInterval` poll. Wakes are **in-process**: work admitted by another process
+(an enqueue-only server beside a separate worker) still waits for the worker's
+`IdleInterval`; cross-process wake is #98.
+
 **Shutdown.** Canceling the ordinary runtime stops new polling iterations and
 allows active handlers and persistence to finish. The runtime joins queue and
 scheduler errors and cancels a sibling pool after a fatal failure. Hosts must

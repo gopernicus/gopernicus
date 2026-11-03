@@ -1,5 +1,18 @@
 # Releasing gopernicus modules
 
+## Fenced admissions wake their runtime (#95 — pockets/jobs v0.12.0)
+
+**Status: pending merge and tag.** **MINOR, a latency fix.** A fenced admission used to wait for
+the fenced pool's next idle poll (30s by default): a sign-in or verification code in jobs delivery
+mode arrived up to 30s late. Each fenced runtime now registers its own wake channel on the
+`Service`, and a fresh fenced admission (`EnqueueOnce`/`EnqueueOnceIn` that admits new work,
+`Replace`/`ReplaceIn`) signals all of them, coalescing and non-blocking; `IdleInterval` stays the
+backstop. Measured on the default policy: delivered after 0.00s (previously 28s).
+
+In-process only: an enqueue-only server beside a separate worker still waits for the worker's
+`IdleInterval` (#98). A host that lowered its fenced `IdleInterval` to hide this can restore it.
+No store, sdk or API change. AUDIT-076.
+
 ## A dead database is a 503, not a 500 (#123 — integrations/datastores/pgxdb v0.22.0 — published 2026-11-02)
 
 **Status: released.** **MINOR, a behavior fix.** Connection-level failures (refused
