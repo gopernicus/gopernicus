@@ -6495,8 +6495,8 @@ against the live Auth emulator.
 
 ## AUDIT-076: Fenced admissions wake their runtime (#95)
 
-- **Status:** pending tag as `pockets/jobs` v0.12.0. Record: `RELEASING.md`, "Fenced admissions
-  wake their runtime (#95)".
+- **Status:** released as `pockets/jobs` v0.12.0 (`0e51f5fa` → `0b8bb6ea`, #361). Record:
+  `RELEASING.md`, "Fenced admissions wake their runtime (#95 — published 2026-11-02)".
 - **Modules:** `pockets/jobs`. No store, port or API change.
 - **Old behavior:** fenced admission never signaled; the fenced pool claimed new work only on its
   idle poll, so time-sensitive mail (sign-in codes) waited up to `IdleInterval`.
@@ -6507,8 +6507,8 @@ against the live Auth emulator.
 
 ## AUDIT-077: Concurrent migration runners serialize (#298)
 
-- **Status:** pending tag as `integrations/datastores/pgxdb` v0.23.0. Record: `RELEASING.md`,
-  "Concurrent migration runners serialize (#298)".
+- **Status:** released as `integrations/datastores/pgxdb` v0.23.0 (`e2ae34e2` → `4a21a0a4`, #362).
+  Record: `RELEASING.md`, "Concurrent migration runners serialize (#298 — published 2026-11-02)".
 - **Modules:** `integrations/datastores/pgxdb`; tests and docs only in `integrations/datastores/turso`.
 - **Old behavior:** two runners on one stream raced; one deploy failed (`already exists`, duplicate
   ledger row, or a pool lock timeout). The S8 change-control plan's runner lock was never built.
