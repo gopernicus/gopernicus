@@ -5,21 +5,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// Service owns ordinary and fenced queue admission and the ordinary worker wake signal.
-// Build runtimes from this Service to share that signal by construction.
+// Service owns ordinary and fenced queue admission and the worker wake signals.
+// Build runtimes from this Service to share those signals by construction: the
+// ordinary runtime shares one channel; each fenced runtime registers its own,
+// and a fenced admission signals all of them.
 type Service struct {
 	repo           QueueRepository
 	fencedQueue    FencedQueueRepository
 	terminalPurger TerminalPurger
 	wake           chan struct{}
-	maxAttempts    int
-	now            func() time.Time
-	ids            sdk.IDGenerator
+
+	// fencedWakes holds one cap-1 channel per fenced runtime built from this
+	// Service, so a runtime that does not claim the admitted kind cannot
+	// swallow the signal its owner needs.
+	fencedMu    sync.Mutex
+	fencedWakes []chan struct{}
+
+	maxAttempts int
+	now         func() time.Time
+	ids         sdk.IDGenerator
 }
 
 // NewService validates the queue ports and resolves admission defaults. It starts no workers.
@@ -121,6 +131,28 @@ func (s *Service) signal() {
 	select {
 	case s.wake <- struct{}{}:
 	default:
+	}
+}
+
+// registerFencedWake adds a fenced runtime's wake channel.
+func (s *Service) registerFencedWake() chan struct{} {
+	ch := make(chan struct{}, 1)
+	s.fencedMu.Lock()
+	s.fencedWakes = append(s.fencedWakes, ch)
+	s.fencedMu.Unlock()
+	return ch
+}
+
+// signalFenced wakes every fenced runtime with the same coalescing,
+// non-blocking send as signal; IdleInterval is the backstop for a drop.
+func (s *Service) signalFenced() {
+	s.fencedMu.Lock()
+	defer s.fencedMu.Unlock()
+	for _, ch := range s.fencedWakes {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
 	}
 }
 
