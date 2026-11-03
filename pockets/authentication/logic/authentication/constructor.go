@@ -364,6 +364,28 @@ func validateServiceAccountStatus(d constructorConfig) error {
 	return nil
 }
 
+// validateRefreshGraceWindow checks a set SessionsConfig.RefreshGraceWindow
+// against the wiring exactly as validateIdleTimeout does, under the window's
+// own sentinels. A zero window probes nothing.
+func validateRefreshGraceWindow(d constructorConfig) error {
+	if d.RefreshGraceWindow == 0 {
+		return nil
+	}
+	activity, ok := d.Sessions.(session.ActivityRepository)
+	if !ok {
+		return ErrRefreshGraceWindowRequires
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), idleTimeoutProbeTimeout)
+	defer cancel()
+	if err := activity.ProbeSchema(ctx); err != nil {
+		if errors.Is(err, sdk.ErrNotFound) {
+			return fmt.Errorf("%w: %w", ErrRefreshGraceWindowSchemaMissing, err)
+		}
+		return fmt.Errorf("authentication: probing the session activity schema: %w: %w", sdk.ErrUnavailable, err)
+	}
+	return nil
+}
+
 // validateIdleTimeout checks a set SessionsConfig.IdleTimeout against the
 // wiring: Repositories.Sessions must implement session.ActivityRepository,
 // whose schema probe runs under a bounded deadline. Only a probe reporting

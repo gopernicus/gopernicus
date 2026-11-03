@@ -181,3 +181,46 @@ func TestSessionLifetimeRefusals(t *testing.T) {
 		}
 	}
 }
+
+// TestRefreshGraceWindowRefusals pins the root sentinels for
+// SessionsConfig.RefreshGraceWindow: out of range in every mode, a store
+// without session.ActivityRepository, the probe mapping, and a zero window
+// never probing; with the idle timeout also set, the window boots on its
+// probe.
+func TestRefreshGraceWindowRefusals(t *testing.T) {
+	build := func(sessions session.SessionRepository, sessionsCfg SessionsConfig) error {
+		cfg := noPasswordConfig()
+		cfg.IdleTimeout, cfg.RefreshGraceWindow = sessionsCfg.IdleTimeout, sessionsCfg.RefreshGraceWindow
+		_, err := newFixture(testRepositories(Repositories{Sessions: sessions}), cfg)
+		return err
+	}
+	wired := configActivitySessions{}
+
+	for _, w := range []time.Duration{-time.Second, MaxRefreshGraceWindow + time.Second} {
+		if err := build(wired, SessionsConfig{RefreshGraceWindow: w}); !errors.Is(err, ErrRefreshGraceWindowInvalid) || !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Errorf("RefreshGraceWindow %s = %v, want ErrRefreshGraceWindowInvalid", w, err)
+		}
+	}
+	if err := build(configSessions{}, SessionsConfig{RefreshGraceWindow: 10 * time.Second}); !errors.Is(err, ErrRefreshGraceWindowRequires) {
+		t.Errorf("window on a store without session.ActivityRepository = %v, want ErrRefreshGraceWindowRequires", err)
+	}
+	for _, w := range []time.Duration{10 * time.Second, MaxRefreshGraceWindow} {
+		if err := build(wired, SessionsConfig{RefreshGraceWindow: w}); err != nil {
+			t.Errorf("window %s on a migrated store = %v, want nil", w, err)
+		}
+	}
+	if err := build(wired, SessionsConfig{IdleTimeout: time.Hour, RefreshGraceWindow: 10 * time.Second}); err != nil {
+		t.Errorf("window with idle timeout = %v, want nil", err)
+	}
+
+	missing := configActivitySessions{probeErr: sdk.ErrNotFound}
+	if err := build(missing, SessionsConfig{RefreshGraceWindow: 10 * time.Second}); !errors.Is(err, ErrRefreshGraceWindowSchemaMissing) || errors.Is(err, sdk.ErrUnavailable) || !strings.Contains(err.Error(), "0029_session_activity.sql") {
+		t.Errorf("window on an unmigrated store = %v, want ErrRefreshGraceWindowSchemaMissing naming 0029", err)
+	}
+	if err := build(missing, SessionsConfig{}); err != nil {
+		t.Errorf("zero window on an unmigrated store = %v, want nil (never probed)", err)
+	}
+	if err := build(configActivitySessions{probeErr: context.DeadlineExceeded}, SessionsConfig{RefreshGraceWindow: 10 * time.Second}); !errors.Is(err, sdk.ErrUnavailable) || errors.Is(err, ErrRefreshGraceWindowSchemaMissing) {
+		t.Errorf("probe failure = %v, want sdk.ErrUnavailable, not schema-missing", err)
+	}
+}

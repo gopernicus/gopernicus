@@ -272,6 +272,7 @@ type constructorConfig struct {
 	AccessTokenTTL          time.Duration
 	RefreshTTL              time.Duration
 	IdleTimeout             time.Duration
+	RefreshGraceWindow      time.Duration
 	TokenIssuer             string
 	TokenAudience           string
 	Passwordless            []string
@@ -394,11 +395,13 @@ type Service struct {
 	tokenAudience string
 	accessTTL     time.Duration
 	refreshTTL    time.Duration
-	// idleTimeout is SessionsConfig.IdleTimeout; activity is the sessions
-	// store's ActivityRepository, non-nil exactly when idleTimeout is set, so
-	// an unwired refresh never reads or writes the activity column.
-	idleTimeout time.Duration
-	activity    session.ActivityRepository
+	// idleTimeout is SessionsConfig.IdleTimeout and refreshGraceWindow is
+	// SessionsConfig.RefreshGraceWindow; activity is the sessions store's
+	// ActivityRepository, non-nil exactly when either is set, so an unwired
+	// refresh never reads or writes the activity column.
+	idleTimeout        time.Duration
+	refreshGraceWindow time.Duration
+	activity           session.ActivityRepository
 
 	// passwordless is the resolved set of enabled passwordless kinds (PasswordlessConfig.Passwordless),
 	// keyed by kind for O(1) lookups. Empty when passwordless is off; the transport
@@ -529,7 +532,7 @@ func newService(d constructorConfig) *Service {
 		serviceAccountStatus = d.ServiceAccountStatuses
 	}
 	var activity session.ActivityRepository
-	if d.IdleTimeout > 0 {
+	if d.IdleTimeout > 0 || d.RefreshGraceWindow > 0 {
 		activity, _ = d.Sessions.(session.ActivityRepository)
 	}
 	var dummyHash string
@@ -591,6 +594,7 @@ func newService(d constructorConfig) *Service {
 		accessTTL:          accessTTL,
 		refreshTTL:         refreshTTL,
 		idleTimeout:        d.IdleTimeout,
+		refreshGraceWindow: d.RefreshGraceWindow,
 		activity:           activity,
 		passwordless:       passwordless,
 		publicBaseURL:      d.PublicAuthBaseURL,

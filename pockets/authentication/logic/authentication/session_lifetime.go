@@ -19,6 +19,12 @@ import (
 // a refusal: every refresh and every Live() read still bounds the window.
 const DefaultAccessTokenTTLCeiling = time.Hour
 
+// MaxRefreshGraceWindow is the longest SessionsConfig.RefreshGraceWindow:
+// the window only has to cover concurrent tabs refreshing together, and
+// every second of it is a second a copied previous token keeps minting access
+// tokens.
+const MaxRefreshGraceWindow = time.Minute
+
 const (
 	// idleTimeoutProbeTimeout bounds the boot-time probe of the activity
 	// column.
@@ -44,6 +50,19 @@ var (
 	// negative SessionsConfig.IdleTimeout, or one at or below the resolved
 	// AccessTokenTTL, under which every refresh would find its session idle.
 	ErrIdleTimeoutBelowAccessTokenTTL = fmt.Errorf("authentication: SessionsConfig.IdleTimeout must be zero (off) or greater than SessionsConfig.AccessTokenTTL: %w", sdk.ErrInvalidInput)
+	// ErrRefreshGraceWindowInvalid is returned by New in every mode for a
+	// negative SessionsConfig.RefreshGraceWindow or one above
+	// MaxRefreshGraceWindow.
+	ErrRefreshGraceWindowInvalid = fmt.Errorf("authentication: SessionsConfig.RefreshGraceWindow must be between zero (off) and %s: %w", MaxRefreshGraceWindow, sdk.ErrInvalidInput)
+	// ErrRefreshGraceWindowRequires is returned by New when
+	// SessionsConfig.RefreshGraceWindow is set and Repositories.Sessions does
+	// not implement session.ActivityRepository, whose rotation stamp the
+	// window is measured from.
+	ErrRefreshGraceWindowRequires = fmt.Errorf("authentication: SessionsConfig.RefreshGraceWindow requires Repositories.Sessions to implement session.ActivityRepository: %w", sdk.ErrInvalidInput)
+	// ErrRefreshGraceWindowSchemaMissing is returned by New when
+	// SessionsConfig.RefreshGraceWindow is set and the session store reports
+	// its activity column absent: apply migration 0029_session_activity.sql.
+	ErrRefreshGraceWindowSchemaMissing = errors.New("authentication: SessionsConfig.RefreshGraceWindow is set but the sessions schema is missing last_rotated_at (apply migration 0029_session_activity.sql)")
 	// ErrAccessTokenTTLExceedsRefreshTTL is returned by New in every mode when
 	// the resolved SessionsConfig.AccessTokenTTL exceeds the resolved
 	// SessionsConfig.RefreshTTL: an access token would outlive its session.
@@ -68,10 +87,10 @@ var (
 )
 
 // SessionPolicy reports the resolved session lifetimes: AccessTokenTTL and
-// RefreshTTL after their defaults, and IdleTimeout (zero when off), with the
-// first-party token Issuer and Audience (empty when unset).
+// RefreshTTL after their defaults, IdleTimeout and RefreshGraceWindow (zero
+// when off), with the first-party token Issuer and Audience (empty when unset).
 func (s *Service) SessionPolicy() SessionsConfig {
-	return SessionsConfig{AccessTokenTTL: s.accessTTL, RefreshTTL: s.refreshTTL, IdleTimeout: s.idleTimeout, Issuer: s.tokenIssuer, Audience: s.tokenAudience}
+	return SessionsConfig{AccessTokenTTL: s.accessTTL, RefreshTTL: s.refreshTTL, IdleTimeout: s.idleTimeout, RefreshGraceWindow: s.refreshGraceWindow, Issuer: s.tokenIssuer, Audience: s.tokenAudience}
 }
 
 // validateSessionLifetime checks SessionsConfig on its post-default values in
@@ -94,11 +113,14 @@ func validateSessionLifetime(d constructorConfig, log *slog.Logger) error {
 	if idle < 0 || (idle > 0 && idle <= access) {
 		return fmt.Errorf("%w (IdleTimeout %s, AccessTokenTTL %s)", ErrIdleTimeoutBelowAccessTokenTTL, idle, access)
 	}
+	if w := d.RefreshGraceWindow; w < 0 || w > MaxRefreshGraceWindow {
+		return fmt.Errorf("%w (RefreshGraceWindow %s)", ErrRefreshGraceWindowInvalid, w)
+	}
 	if d.RuntimeMode == environment.ModeProduction && access > DefaultAccessTokenTTLCeiling {
 		log.Warn("auth: access tokens outlive the recommended ceiling", "posture_warning", "access_token_ttl_long", "access_token_ttl", access.String(), "ceiling", DefaultAccessTokenTTLCeiling.String())
 	}
 	if idle == 0 {
-		return nil
+		return validateRefreshGraceWindow(d)
 	}
 	if idle < 2*access {
 		log.Warn("auth: the idle timeout is under twice the access-token lifetime, so idle expiry lands up to one access-token lifetime late", "posture_warning", "idle_granularity", "idle_timeout", idle.String(), "access_token_ttl", access.String())
@@ -106,6 +128,8 @@ func validateSessionLifetime(d constructorConfig, log *slog.Logger) error {
 	if idle >= refresh {
 		log.Warn("auth: the idle timeout is not below the refresh horizon, so a session expires before it can idle", "posture_warning", "idle_never_fires", "idle_timeout", idle.String(), "refresh_ttl", refresh.String())
 	}
+	// The idle timeout's probe covers the window's: both need the same
+	// capability and column.
 	return validateIdleTimeout(d)
 }
 
@@ -154,7 +178,7 @@ func idleSince(sess session.Session, a session.Activity) (time.Time, bool) {
 // idleExpired reports whether the wired idle timeout ends sess at s.now(),
 // and the activity instant it was judged on.
 func (s *Service) idleExpired(sess session.Session, a session.Activity) (time.Time, bool) {
-	if s.activity == nil || !sess.FirstParty() {
+	if s.idleTimeout == 0 || s.activity == nil || !sess.FirstParty() {
 		return time.Time{}, false
 	}
 	last, judged := idleSince(sess, a)
@@ -202,7 +226,9 @@ func (s *Service) reResolveIdle(ctx context.Context, sess session.Session, hash 
 			"warning", "session_activity_cas_mismatch", "session_id", sess.ID, "user_id", sess.UserID, "rotation_count", sess.RotationCount)
 		return TokenPair{}, fmt.Errorf("authentication: idle expiry of session %s: %w", sess.ID, errSessionActivityCASMismatch)
 	}
-	return s.reResolveFrom(ctx, sess, hash, fresh, match)
+	// No stamp on this read: a row that moved under an idle judgement takes
+	// the single-use grace, never the window.
+	return s.reResolveFrom(ctx, sess, hash, fresh, match, session.Activity{})
 }
 
 // recordIdleExpired appends the blocked session_idle_expired row. Details

@@ -3136,6 +3136,46 @@ detection is not swallowed.
   refresh for idleness: the listing does not judge.
 - Logout by refresh token of an idle session still succeeds (204).
 
+### Refresh grace window
+
+`SessionsConfig.RefreshGraceWindow` (`AUTH_REFRESH_GRACE_WINDOW`; zero is off,
+at most `MaxRefreshGraceWindow`, one minute) is for clients that cannot
+single-flight a refresh. Tabs on sibling origins that share one refresh cookie
+on an API host cannot coordinate (`navigator.locks` and `BroadcastChannel` are
+per-origin), so after a wake, or when the access token expires, every tab
+presents the same cookie at once. Without the window the first rotates, the
+second takes the single-use grace, and the third is read as reuse: the session
+is revoked for every tab and a false `refresh_reuse` is recorded.
+
+With the window set, the rotated-away token is admitted for that long after
+the row's last rotation, **any number of times**: each presentation gets a new
+access JWT only (no refresh token, so the cookie keeps the winning rotation's
+token), writes nothing, and records a `refresh` success with a `grace_window`
+detail. A lost rotation compare-and-swap re-resolves into the window too. Past
+the window, nothing changes: the single-use grace slot, then reuse detection
+and revocation.
+
+```go
+authentication.WithSessions(authentication.SessionsConfig{
+	RefreshGraceWindow: 10 * time.Second, // AUTH_REFRESH_GRACE_WINDOW=10s
+})
+```
+
+- **Wiring.** Set, it needs the same `session.ActivityRepository` and migration
+  `0029_session_activity.sql` as the idle timeout
+  (`ErrRefreshGraceWindowRequires`, `ErrRefreshGraceWindowSchemaMissing`; any
+  other probe failure is `sdk.ErrUnavailable`); out of range is
+  `ErrRefreshGraceWindowInvalid` in every mode. The window is measured from
+  `last_rotated_at`, so rotations go through `RotateAt` and stamp it even with
+  the idle timeout off; idle is still judged only when `IdleTimeout` is set. A
+  row last rotated before the window was wired is unstamped and never inside
+  it.
+- **The trade-off.** A copied previous token mints access tokens for at most
+  the window instead of once, under the per-session refresh limit (30 a
+  minute). Keep it to seconds: it only has to cover tabs refreshing together.
+- **One generation.** If a tab rotates twice inside the window, the oldest
+  token matches nothing and gets the generic 401, without a revocation.
+
 ### Access-token ceiling and the session-lifetime boot line
 
 `AccessTokenTTL > RefreshTTL` (after defaults) refuses boot in every mode
@@ -3146,7 +3186,7 @@ outlive its session. In production an `AccessTokenTTL` above
 a WARN, never a refusal. Every boot logs `auth: session lifetime
 access_token_ttl=<d> refresh_ttl=<d> idle_timeout=off|<d>
 idle_source=config|default activity=refresh_rotation idle_scope=first_party
-live_floor=enforced|relaxed` (an env value and a literal are both `config`: the
+refresh_grace_window=off|<d> live_floor=enforced|relaxed` (an env value and a literal are both `config`: the
 pocket never reads the process environment).
 
 ### The liveness floor under the sensitive bundled groups
@@ -5033,7 +5073,7 @@ only), `oauth_unlink_code_sent`, `oauth_unlinked`); `apikey_auth` (denials only:
 `RefuseActAsUserKeys()` adds a blocked, budgeted row with Details `reason`
 `act_as_user_refused`, `group`, `api_key_id` and `service_account_id` — no
 prefix); `token_issued`;
-`refresh` (with a `grace` detail) and `refresh_reuse` (blocked + unconditional
+`refresh` (with a `grace` or `grace_window` detail) and `refresh_reuse` (blocked + unconditional
 WARN even when `SecurityEvents` is nil, so a nil-audit host is never blind to
 token theft); `step_up_challenge_sent`, `step_up` (success/failure/blocked); the
 identifier events (`email_change_code_sent`/`email_changed`/`email_removed`,
@@ -5343,7 +5383,9 @@ passes; fails CLOSED on repository error).
 new pair; grace (previous, unused) → new access JWT only; reuse (previous, used)
 → revoke the session + `refresh_reuse` WARN + 401. Theft collapses correctly: a
 thief on the stale token gets at most one grace access JWT; the second arrival on
-the consumed slot burns the session. Two HttpOnly `SameSite=Lax` cookies: the
+the consumed slot burns the session. Clients that cannot single-flight a
+refresh set the opt-in [refresh grace window](#refresh-grace-window), which
+admits the previous token for a few seconds after a rotation. Two HttpOnly `SameSite=Lax` cookies: the
 access-JWT cookie (`Path=/`) and the refresh cookie (`<name>_refresh`,
 `Path=BrowserConfig.RefreshCookiePath` — `/auth` by default, `/api/v1/auth` on a
 prefixed host; the same path issues and clears it).

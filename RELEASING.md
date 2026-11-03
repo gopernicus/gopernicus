@@ -1,5 +1,22 @@
 # Releasing gopernicus modules
 
+## A refresh grace window for concurrent tabs (#54 — pockets/authentication v0.44.0)
+
+**Status: pending merge and tag.** **MINOR, opt-in; the default is unchanged.**
+`SessionsConfig.RefreshGraceWindow` (`AUTH_REFRESH_GRACE_WINDOW`, zero off, at most one minute)
+admits the rotated-away refresh token for that long after a rotation, any number of times. Each
+presentation gets an access token only, writes nothing, and records a `refresh` success with a
+`grace_window` detail. Without it, three or more tabs presenting one refresh cookie at once (sibling
+origins cannot single-flight a refresh) revoke the session for every tab and record a false
+`refresh_reuse`. Past the window the single-use grace slot and reuse detection apply unchanged.
+
+**Host note.** Setting the window needs the same `session.ActivityRepository` and migration
+`0029_session_activity.sql` as `IdleTimeout` (`ErrRefreshGraceWindowRequires`,
+`ErrRefreshGraceWindowSchemaMissing`; out of range is `ErrRefreshGraceWindowInvalid`). With the window
+set, rotations stamp `last_rotated_at` even while idle expiry is off; idle is still judged only
+when `IdleTimeout` is set. The `auth: session lifetime` boot line gains
+`refresh_grace_window=off|<d>`. No store, migration, sdk or views change. AUDIT-079.
+
 ## Jobs-mode delivery split roles (#229 — pockets/authentication v0.43.0 — published 2026-11-02)
 
 **Status: released.** **MINOR, with one boot-time behavior change.**

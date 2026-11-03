@@ -262,7 +262,7 @@ lowered below `Live()` on a sensitive group is raised back to it.
 
 **The boot lines.** Every `New` logs `auth: session lifetime access_token_ttl=<d>
 refresh_ttl=<d> idle_timeout=off|<d> idle_source=config|default activity=refresh_rotation
-idle_scope=first_party live_floor=enforced|relaxed`, and each external provider logs `auth:
+idle_scope=first_party refresh_grace_window=off|<d> live_floor=enforced|relaxed`, and each external provider logs `auth:
 external provider lifetime provider=<name> max_authentication_age=off|<d>
 revocation_checker=wired|none fail_open=<bool>`.
 

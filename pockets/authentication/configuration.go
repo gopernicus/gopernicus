@@ -197,19 +197,23 @@ func resolveAPIKeyMaxTTL(cfg constructorConfig) (time.Duration, string, error) {
 // logSessionLifetime logs the one boot line naming the resolved session
 // lifetimes: the access and refresh lifetimes, the idle timeout (off when
 // zero) with its source, what counts as activity, which sessions it governs,
-// and whether the liveness floor under the sensitive bundled groups is
-// enforced. An environment value and a literal are both source config: the
+// the refresh grace window (off when zero), and whether the liveness floor
+// under the sensitive bundled groups is enforced. An environment value and a literal are both source config: the
 // pocket never reads the process environment.
 func logSessionLifetime(cfg constructorConfig, policy authlogic.SessionsConfig, log *slog.Logger) {
 	idle, source := "off", "default"
 	if policy.IdleTimeout > 0 {
 		idle, source = policy.IdleTimeout.String(), "config"
 	}
+	grace := "off"
+	if policy.RefreshGraceWindow > 0 {
+		grace = policy.RefreshGraceWindow.String()
+	}
 	floor := "enforced"
 	if cfg.LivenessFloorRelaxed {
 		floor = "relaxed"
 	}
-	log.Info("auth: session lifetime", "access_token_ttl", policy.AccessTokenTTL.String(), "refresh_ttl", policy.RefreshTTL.String(), "idle_timeout", idle, "idle_source", source, "activity", "refresh_rotation", "idle_scope", "first_party", "live_floor", floor)
+	log.Info("auth: session lifetime", "access_token_ttl", policy.AccessTokenTTL.String(), "refresh_ttl", policy.RefreshTTL.String(), "idle_timeout", idle, "idle_source", source, "activity", "refresh_rotation", "idle_scope", "first_party", "refresh_grace_window", grace, "live_floor", floor)
 }
 
 // keyRole describes one key-bearing collaborator for the auth: keys boot line:

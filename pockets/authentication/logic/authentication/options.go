@@ -281,6 +281,17 @@ type SessionsConfig struct {
 	// (ErrIdleTimeoutRequires) over a migrated schema
 	// (ErrIdleTimeoutSchemaMissing).
 	IdleTimeout time.Duration
+	// RefreshGraceWindow admits the rotated-away refresh token for this long
+	// after a rotation, any number of times, each answered with an access
+	// token only and recorded as a refresh with detail grace_window, so
+	// concurrent tabs presenting one cookie never read as reuse. Zero (the
+	// default) keeps the single-use grace slot alone. After the window the
+	// single-use slot and reuse detection apply unchanged. At most
+	// MaxRefreshGraceWindow (ErrRefreshGraceWindowInvalid); set, it needs
+	// Repositories.Sessions to implement session.ActivityRepository
+	// (ErrRefreshGraceWindowRequires) over a migrated schema
+	// (ErrRefreshGraceWindowSchemaMissing).
+	RefreshGraceWindow time.Duration
 	// Issuer, when set, is stamped as iss on every first-party access token
 	// and required, exactly, on one: a first-party token without it is
 	// refused. Empty keeps the default, under which a first-party token
@@ -300,6 +311,7 @@ func WithSessions(value SessionsConfig) Option {
 		c.AccessTokenTTL = value.AccessTokenTTL
 		c.RefreshTTL = value.RefreshTTL
 		c.IdleTimeout = value.IdleTimeout
+		c.RefreshGraceWindow = value.RefreshGraceWindow
 		c.TokenIssuer = value.Issuer
 		c.TokenAudience = value.Audience
 	}
