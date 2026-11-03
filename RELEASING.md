@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## Jobs-mode delivery split roles (#229 — pockets/authentication v0.43.0)
+## Jobs-mode delivery split roles (#229 — pockets/authentication v0.43.0 — published 2026-11-02)
 
-**Status: pending merge and tag.** **MINOR, with one boot-time behavior change.**
+**Status: released.** **MINOR, with one boot-time behavior change.**
 `DeliveryConfig.Role` (`AUTH_DELIVERY_ROLE`) lets a jobs-mode host run a server that only
 enqueues beside a worker that only processes. `enqueue` needs no Mailer and no `MailFrom`, renders
 through a router that cannot send, and builds no processor (`JobRuntime()` reports false).
@@ -22,6 +22,17 @@ address in every mode (`ErrMailFromInvalid`). A host that boots today with deliv
 `AUTH_MAIL_FROM` unset fails at boot after the repin: set it first. New boot line: `auth: delivery
 mode=… role=… mailer=wired|absent jobs_max_attempts=…`; `auth: keys` reports
 `jwt_signer=refusing` on a process instance. No store, sdk, views or jobs change. AUDIT-078.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/authentication/v0.43.0` | `1bd96c4e` → `2d4c13df` | #364 | 41570099069 @ `2d4c13df` | OK; MVS selects sdk v0.24.0; `RefusingSigner` refuses, `ParseRole("enqueue")` parses |
+| — | none | — | PR-2: auth-cms, external-identity, production-baseline repin | — | each builds, vets and tests with `GOWORK=off` |
+
+Annotated, not signed. The authentication pgx store's live legs passed on merged `main` (PostgreSQL
+18, bare and with `POSTGRES_TEST_SCHEMA`). **Run and look.** One test binary run as separate OS
+processes over authentication's and jobs' pgx stores on PostgreSQL 18: an `enqueue` server with no
+Mailer registered a user; a `process` worker with no `AUTH_JWT_SECRET` (nil signer →
+`RefusingSigner`) sent "Verify your email" with the code 0.3s later.
 
 ## Concurrent migration runners serialize (#298 — integrations/datastores/pgxdb v0.23.0 — published 2026-11-02)
 

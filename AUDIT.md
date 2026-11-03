@@ -6520,8 +6520,7 @@ against the live Auth emulator.
 
 ## AUDIT-078: Jobs-mode delivery split roles (#229)
 
-- **Status:** pending tag as `pockets/authentication` v0.43.0. Record: `RELEASING.md`,
-  "Jobs-mode delivery split roles (#229)".
+- **Status:** released as `pockets/authentication` v0.43.0 (`1bd96c4e` → `2d4c13df`, #364).
 - **Modules:** `pockets/authentication`; `examples/auth-cms` wiring. No store, sdk, views or jobs
   change.
 - **Old behavior:** `New` demanded a Mailer whenever delivery was on and a token signer always, so
