@@ -1,5 +1,28 @@
 # Releasing gopernicus modules
 
+## Jobs-mode delivery split roles (#229 — pockets/authentication v0.43.0)
+
+**Status: pending merge and tag.** **MINOR, with one boot-time behavior change.**
+`DeliveryConfig.Role` (`AUTH_DELIVERY_ROLE`) lets a jobs-mode host run a server that only
+enqueues beside a worker that only processes. `enqueue` needs no Mailer and no `MailFrom`, renders
+through a router that cannot send, and builds no processor (`JobRuntime()` reports false).
+`process` may pass a nil signer; `New` installs the exported `authentication.RefusingSigner`, whose
+`Sign` and `Verify` return `ErrSignerRefused`. The zero role, `both`, is today's behavior. Either
+split role outside `DeliveryMode: "jobs"` is `ErrDeliveryRoleRequiresJobs`.
+
+**Retry budget.** The jobs-mode processor now goes permanent at `JobsDelivery.MaxAttempts`
+(default 10, about 20 minutes of provider outage) instead of the engine's fixed 5, and
+`InProcessDelivery.MaxAttempts` now reaches the in-process processor (a cap above 5 was silently
+5). The jobs runtime's own cap (`FencedRuntimePolicy.MaxAttempts`, default 5) still applies and the
+lower one wins, so a host raises it to match.
+
+**Host note — the behavior change.** `New` now refuses an empty `MailFrom` while delivery is on
+(`ErrMailFromRequired`; an `enqueue` instance is exempt) and a non-empty one that is not an RFC 5322
+address in every mode (`ErrMailFromInvalid`). A host that boots today with delivery on and
+`AUTH_MAIL_FROM` unset fails at boot after the repin: set it first. New boot line: `auth: delivery
+mode=… role=… mailer=wired|absent jobs_max_attempts=…`; `auth: keys` reports
+`jwt_signer=refusing` on a process instance. No store, sdk, views or jobs change. AUDIT-078.
+
 ## Concurrent migration runners serialize (#298 — integrations/datastores/pgxdb v0.23.0 — published 2026-11-02)
 
 **Status: released.** **MINOR, a deploy-safety fix.** `RunMigrations` now opens its

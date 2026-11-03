@@ -135,6 +135,8 @@ type constructorConfig struct {
 	SingleFactorAcknowledged      bool
 	AuditDisabledAcknowledged     bool
 	InProcessDelivery             delivery.InProcessConfig
+	DeliveryRole                  delivery.Role `env:"AUTH_DELIVERY_ROLE"`
+	JobsDelivery                  delivery.JobsConfig
 	PublicAuthBaseURL             string   `env:"AUTH_PUBLIC_BASE_URL"`
 	PasswordResetURL              string   `env:"AUTH_PASSWORD_RESET_URL"`
 	OAuthLinkBaseURL              string   `env:"AUTH_OAUTH_LINK_URL"`
@@ -427,11 +429,22 @@ func WithAbuseProtection(value AbuseProtectionConfig) Option {
 
 // DeliveryConfig supplies message rendering and delivery dependencies.
 type DeliveryConfig struct {
-	// Mailer is required while delivery is enabled. It delivers verification
-	// and password-reset messages.
+	// Mailer is required while delivery is enabled, except on an instance whose
+	// Role is "enqueue". It delivers verification and password-reset messages.
 	Mailer email.Sender
 	// MailFrom is the From address on verification/reset mail. (env: AUTH_MAIL_FROM)
+	// It is required while delivery is enabled, except on an instance whose Role is
+	// "enqueue" (ErrMailFromRequired), and a non-empty value must parse as an RFC
+	// 5322 address in every mode (ErrMailFromInvalid).
 	MailFrom string `env:"AUTH_MAIL_FROM"`
+	// Role is the part this instance plays in DeliveryMode "jobs": "both" (the
+	// zero value) enqueues and processes; "enqueue" only enqueues — no Mailer,
+	// no MailFrom, no processor, so Components.Delivery.JobRuntime reports
+	// ok=false; "process" only processes — signer may be nil, and New then
+	// installs RefusingSigner. "enqueue" and "process" are legal only with
+	// DeliveryMode "jobs" (ErrDeliveryRoleRequiresJobs); any other value is
+	// ErrDeliveryRoleInvalid. (env: AUTH_DELIVERY_ROLE)
+	Role delivery.Role `env:"AUTH_DELIVERY_ROLE"`
 	// BodySenders chooses a plain-text transport for each supported non-email
 	// identifier kind (for example "phone"). The pocket resolves eligibility and
 	// selects one route per queued command. Email always uses Mailer with full
@@ -497,6 +510,12 @@ type DeliveryConfig struct {
 	// InProcessDeliveryConfig for the per-process (NOT cross-instance) semantics: two
 	// instances each keep their own queue, de-duplication, and status, so both can send.
 	InProcessDelivery delivery.InProcessConfig
+	// JobsDelivery tunes the delivery processor for DeliveryMode "jobs". Its
+	// MaxAttempts is the attempt on which a transient failure becomes permanent;
+	// zero selects 10, negative is delivery.ErrJobsMaxAttemptsInvalid. The jobs
+	// runtime keeps its own cap (FencedRuntimePolicy.MaxAttempts, default 5) and
+	// the lower one wins, so a host raises both together.
+	JobsDelivery delivery.JobsConfig
 }
 
 // WithDelivery replaces the complete DeliveryConfig group, including zero values.
@@ -514,6 +533,8 @@ func WithDelivery(value DeliveryConfig) Option {
 		c.DeliveryEphemeralAcknowledged = value.DeliveryEphemeralAcknowledged
 		c.OpportunisticTLSAcknowledged = value.OpportunisticTLSAcknowledged
 		c.InProcessDelivery = value.InProcessDelivery
+		c.DeliveryRole = value.Role
+		c.JobsDelivery = value.JobsDelivery
 	}
 }
 

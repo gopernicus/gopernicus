@@ -1,5 +1,15 @@
 package delivery
 
+import (
+	"fmt"
+
+	"github.com/gopernicus/gopernicus/sdk"
+)
+
+// ErrRoleInvalid is returned by ParseRole, and by the pocket root's New, for a
+// Role other than "both", "enqueue", or "process".
+var ErrRoleInvalid = fmt.Errorf(`delivery: role must be "both", "enqueue", or "process": %w`, sdk.ErrInvalidInput)
+
 // Mode is the host's EXPLICIT selection of the outbound-delivery execution
 // model (authv3-delivery-refactor §"No automatic production fallback"). It is a
 // REQUIRED enum with no default — construction never infers a mode from a non-nil
@@ -29,3 +39,34 @@ const (
 	ModeInProcess Mode = "in_process"
 	ModeJobs      Mode = "jobs"
 )
+
+// Role is the part of DeliveryMode "jobs" one instance plays when a host splits
+// enqueueing from processing across processes. The zero value is RoleBoth.
+//
+//   - RoleBoth: the instance enqueues and builds the processor. It is the only
+//     role every Mode accepts.
+//   - RoleEnqueue: the instance enqueues and never sends. It needs no Mailer
+//     and no MailFrom, and builds no processor, so Runtime.JobRuntime reports
+//     ok=false.
+//   - RoleProcess: the instance builds the processor and sends. It needs the
+//     Mailer and MailFrom and may run without a token signer.
+type Role string
+
+const (
+	RoleBoth    Role = "both"
+	RoleEnqueue Role = "enqueue"
+	RoleProcess Role = "process"
+)
+
+// ParseRole maps s to a Role. Empty is RoleBoth; any other unknown value is
+// ErrRoleInvalid.
+func ParseRole(s string) (Role, error) {
+	switch r := Role(s); r {
+	case "", RoleBoth:
+		return RoleBoth, nil
+	case RoleEnqueue, RoleProcess:
+		return r, nil
+	default:
+		return "", fmt.Errorf("%w: %q", ErrRoleInvalid, s)
+	}
+}

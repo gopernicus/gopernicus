@@ -209,6 +209,10 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 		return err
 	}
 	mode := deliverySelection.DeliveryMode
+	// AUTH_DELIVERY_ROLE splits jobs mode across processes: "enqueue" wires no Mailer
+	// and runs no delivery runtime, "process" wires no token signer. Empty is "both".
+	// An unknown value, or a split role outside jobs mode, is auth.New's loud error.
+	role := deliverySelection.Role
 
 	// Host operational health for delivery (AV3D-5.3): a secret-free, bounded, host-COMPOSED
 	// surface (pockets/authentication/outbound/deliveryhealth). It observes the runtime lifecycle (host-owned), the
@@ -231,16 +235,19 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 		deliveryJobs       *jobs.Components
 		deliveryDispatcher *authjobs.Dispatcher
 	)
+	// JOBS_MAX_ATTEMPTS sets both the row default and the fenced runtime's attempt
+	// cap. The pocket's own cap (DeliveryConfig.JobsDelivery, default 10) applies too,
+	// and the lower of the two dead-letters first.
+	jobsSettings := struct {
+		MaxAttempts   int `env:"JOBS_MAX_ATTEMPTS"`
+		ScheduleBatch int `env:"JOBS_SCHEDULE_BATCH"`
+	}{}
 	if mode == delivery.ModeJobs {
-		settings := struct {
-			MaxAttempts   int `env:"JOBS_MAX_ATTEMPTS"`
-			ScheduleBatch int `env:"JOBS_SCHEDULE_BATCH"`
-		}{}
-		if err := environment.ParseEnvTags("", &settings); err != nil {
+		if err := environment.ParseEnvTags("", &jobsSettings); err != nil {
 			return err
 		}
 		dj, err := jobs.New(jobs.Repositories{FencedQueue: jobsmem.NewFencedQueue()},
-			jobs.WithMaxAttempts(settings.MaxAttempts), jobs.WithScheduleBatchSize(settings.ScheduleBatch))
+			jobs.WithMaxAttempts(jobsSettings.MaxAttempts), jobs.WithScheduleBatchSize(jobsSettings.ScheduleBatch))
 		if err != nil {
 			return err
 		}
@@ -382,6 +389,16 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	// is best-effort: a dropped or failed event never changes delivery state, and a forward
 	// failure surfaces on the health endpoint as observer_failures.
 	authCfg.DeliveryEventsEmitter = health.Emitter(bus)
+	switch role {
+	case delivery.RoleEnqueue:
+		authCfg.Mailer = nil
+		log.WarnContext(ctx, "AUTH_DELIVERY_ROLE=enqueue: this instance enqueues delivery and never sends. "+
+			"This proof host's jobs queue is in-memory, so no other process can drain it; "+
+			"a split deployment shares a durable FencedQueue store.",
+			"delivery_role", "enqueue")
+	case delivery.RoleProcess:
+		authCfg.TokenSigner = nil
+	}
 
 	// authSvc is the auth pocket's driving surface (FS2): its RequireAccessToken()
 	// middleware is what cms gates its admin routes on, and
@@ -565,7 +582,7 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	// already self-bounding (a finite max-entry count + TTL), so nothing accumulates to purge.
 	var deliveryPurge func(context.Context) (int, error)
 	var deliveryPurgeInterval time.Duration
-	if mode == delivery.ModeJobs {
+	if mode == delivery.ModeJobs && role != delivery.RoleEnqueue {
 		deliveryRuntime, ok := authSvc.Delivery.JobRuntime()
 		if !ok {
 			return fmt.Errorf("auth delivery job runtime unavailable: jobs-mode dispatcher not wired")
@@ -576,7 +593,7 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 		// sends finish and settle within deliveryDrainTimeout.
 		df, err := authjobs.NewRuntime(deliveryJobs.Queue, deliveryRuntime,
 			queue.WithFencedRuntimeLogger(log),
-			queue.WithFencedRuntimePolicy(queue.FencedRuntimePolicy{PollInterval: time.Second, IdleInterval: time.Second, ProcessTimeout: 20 * time.Second, DrainTimeout: deliveryDrainTimeout}))
+			queue.WithFencedRuntimePolicy(queue.FencedRuntimePolicy{PollInterval: time.Second, IdleInterval: time.Second, ProcessTimeout: 20 * time.Second, DrainTimeout: deliveryDrainTimeout, MaxAttempts: jobsSettings.MaxAttempts}))
 		if err != nil {
 			return err
 		}
@@ -754,10 +771,10 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	// below. MarkStarted/MarkStopped bracket the goroutine so the health surface reports
 	// not-started vs running.
 	var deliveryRun func(context.Context) error
-	switch mode {
-	case delivery.ModeInProcess:
+	switch {
+	case mode == delivery.ModeInProcess:
 		deliveryRun = authSvc.Delivery.Run
-	default:
+	case deliveryFenced != nil:
 		deliveryRun = deliveryFenced.Run
 	}
 
@@ -775,7 +792,11 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	hostCtx, cancelHost := context.WithCancel(ctx)
 	defer cancelHost()
 	deliveryCtx, cancelDelivery := context.WithCancel(context.Background())
-	supervisor := deliveryhealth.Supervise(deliveryCtx, cancelHost, deliveryRun, health, log)
+	// An enqueue-only instance runs no delivery runtime, so there is nothing to supervise.
+	var supervisor *deliveryhealth.Supervisor
+	if deliveryRun != nil {
+		supervisor = deliveryhealth.Supervise(deliveryCtx, cancelHost, deliveryRun, health, log)
+	}
 
 	// Host-owned scheduled terminal purge (IX-10), jobs mode only. Without it the durable
 	// delivery rows and their encrypted metadata grow without bound despite the documented
@@ -835,16 +856,18 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	runErr := web.Run(hostCtx, router, srv, log)
 
 	// Stop the delivery runtime after HTTP drains (its own context, like the poller).
-	log.InfoContext(context.Background(), "stopping delivery runtime")
 	cancelDelivery()
-	if !supervisor.Wait(deliveryStopWait) {
-		log.WarnContext(context.Background(), "delivery runtime did not stop in time", "waited", deliveryStopWait)
-	}
-	log.InfoContext(context.Background(), "delivery runtime stopped")
-	// If the delivery runtime exited unexpectedly (it drove this shutdown, not a signal),
-	// surface its cause so run returns nonzero even though web.Run drained cleanly.
-	if runErr == nil {
-		runErr = supervisor.ExitErr()
+	if supervisor != nil {
+		log.InfoContext(context.Background(), "stopping delivery runtime")
+		if !supervisor.Wait(deliveryStopWait) {
+			log.WarnContext(context.Background(), "delivery runtime did not stop in time", "waited", deliveryStopWait)
+		}
+		log.InfoContext(context.Background(), "delivery runtime stopped")
+		// If the delivery runtime exited unexpectedly (it drove this shutdown, not a signal),
+		// surface its cause so run returns nonzero even though web.Run drained cleanly.
+		if runErr == nil {
+			runErr = supervisor.ExitErr()
+		}
 	}
 
 	// Stop the terminal-purge scheduler after the delivery runtime (its own context, like the

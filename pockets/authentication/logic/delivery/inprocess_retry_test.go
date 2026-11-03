@@ -286,6 +286,50 @@ func TestInProcessAttemptCapDeadLettersThenDiscards(t *testing.T) {
 	}
 }
 
+// TestInProcessConfiguredCapReachesProcessor proves a cap above the engine
+// default runs every attempt when the processor is given the same cap, and that
+// without it the engine's default of five dead-letters first — the clamp the
+// pocket root closes by passing InProcessDelivery.MaxAttempts to both.
+func TestInProcessConfiguredCapReachesProcessor(t *testing.T) {
+	t.Parallel()
+	const maxAttempts = 7
+	for _, tc := range []struct {
+		name   string
+		policy deliverycmd.Config
+		want   int
+	}{
+		{"processor given the cap", deliverycmd.Config{MaxAttempts: maxAttempts}, maxAttempts},
+		{"processor on its default", deliverycmd.Config{}, 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			notifier := &recordingNotifier{failFirst: 100}
+			proc := newInProcProcessor(t, notifier, nil, nil, tc.policy)
+			q := newInProcessQueue(inProcessQueueConfig{Capacity: 4})
+			rt, err := NewInProcessRuntime(q,
+				proc,
+				WithRetryPolicy(RetryPolicyConfig{MaxAttempts: maxAttempts, Backoff: func(int) time.Duration { return time.Millisecond }}),
+				WithWorkerCount(1),
+				WithShutdownDeadline(2*time.Second))
+			if err != nil {
+				t.Fatalf("NewInProcessRuntime: %v", err)
+			}
+			if _, err := q.Submit(context.Background(), JobKind, "characterization", "cap7", sealRenderedEnvelope(t, "cap7", "CAP-SECRET")); err != nil {
+				t.Fatalf("Submit: %v", err)
+			}
+			stop := runRuntime(t, rt)
+			waitFor(t, 3*time.Second, func() bool {
+				state, _ := q.LatestStatus(context.Background(), "cap7")
+				return state == string(work.StatusDeadLetter)
+			})
+			stop()
+			if got := notifier.count(); got != tc.want {
+				t.Fatalf("provider sends = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestInProcessPermanentDeadLettersImmediately proves a permanent failure dead-letters on
 // the FIRST attempt (no retry) and discards the challenge, without spending the budget.
 func TestInProcessPermanentDeadLettersImmediately(t *testing.T) {

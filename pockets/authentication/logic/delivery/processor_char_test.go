@@ -620,3 +620,23 @@ func TestProcessorObserverReceivesDeadLettered(t *testing.T) {
 		t.Fatalf("status after dead-letter = %+v ok=%v, want Failed", st, ok)
 	}
 }
+
+// TestProcessorPolicyCapsAttempts proves the engine turns a transient delivery
+// failure permanent at the attempt cap WithProcessorPolicy names, not at the
+// engine default of five: the pocket root passes the configured jobs and
+// in-process caps through this option.
+func TestProcessorPolicyCapsAttempts(t *testing.T) {
+	const maxAttempts = 10
+	proc := newInProcProcessor(t, &recordingNotifier{failFirst: maxAttempts}, nil, nil, cmd.Config{MaxAttempts: maxAttempts})
+	payload := sealRenderedEnvelope(t, "policy-cap", "CAP-SECRET")
+	checkpoint := func(context.Context, []byte) error { return nil }
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err := proc.Handle(context.Background(), "exec-cap", payload, attempt, checkpoint)
+		if err == nil {
+			t.Fatalf("attempt %d delivered through a failing notifier", attempt)
+		}
+		if got, want := HandleErrorPermanent(err), attempt == maxAttempts; got != want {
+			t.Fatalf("attempt %d: permanent = %v, want %v", attempt, got, want)
+		}
+	}
+}

@@ -113,6 +113,11 @@ var (
 	// empty (after trimming whitespace) or contains a CR or LF — a header-injection
 	// hazard. It is checked before an envelope is built.
 	ErrSubjectInvalid = fmt.Errorf("delivery: rendered email subject is empty or contains a line break: %w", sdk.ErrInvalidInput)
+	// ErrRouterRenderOnly is returned by Deliver on a router built with
+	// WithRenderOnly, and by NewJobsProcessor when handed one: a render-only
+	// router has no transport, so a send through it fails loudly rather than
+	// dropping the message.
+	ErrRouterRenderOnly = fmt.Errorf("delivery: router is render-only and cannot send: %w", sdk.ErrInvalidInput)
 )
 
 // Reserved template data fields. They are framework-owned: the renderer inserts
@@ -223,6 +228,10 @@ type routerConfig struct {
 	// OpportunisticTLSAcknowledged admits a STARTTLS transport in
 	// ValidateTransports' production verdict.
 	OpportunisticTLSAcknowledged bool
+	// RenderOnly builds a router that renders and never sends (WithRenderOnly);
+	// RenderOnlyKinds are the non-email kinds its Supports reports.
+	RenderOnly      bool
+	RenderOnlyKinds []string
 }
 
 // TemplateOverride registers a host's email content templates at email.LayerApp so
@@ -272,9 +281,14 @@ type Router struct {
 	// opportunisticTLSAcknowledged drops notify.RequireMandatoryTLS from
 	// ValidateTransports (WithOpportunisticTLSAcknowledged).
 	opportunisticTLSAcknowledged bool
+	// renderOnly refuses every Deliver (WithRenderOnly); renderOnlyKinds are the
+	// non-email kinds Supports reports beside any wired BodySender.
+	renderOnly      bool
+	renderOnlyKinds map[string]struct{}
 }
 
-// NewRouter builds a Router. A nil Mailer is ErrMailerRequired. It registers the
+// NewRouter builds a Router. A nil Mailer is ErrMailerRequired unless the router
+// is render-only (WithRenderOnly). It registers the
 // pocket's LayerCore email templates plus any host LayerApp content and layout
 // overrides, and parses the in-core subject and SMS body templates once.
 func NewRouter(mailer email.Sender, opts ...RouterOption) (*Router, error) {
@@ -287,12 +301,21 @@ func NewRouter(mailer email.Sender, opts ...RouterOption) (*Router, error) {
 		opt(&d)
 	}
 
-	if nilDependency(d.Mailer) {
+	if d.RenderOnly {
+		d.Mailer = nil
+	} else if nilDependency(d.Mailer) {
 		return nil, ErrMailerRequired
 	}
 	bodySenders, err := CopyBodySenders(d.BodySenders)
 	if err != nil {
 		return nil, err
+	}
+	renderOnlyKinds := make(map[string]struct{}, len(d.RenderOnlyKinds))
+	for _, kind := range d.RenderOnlyKinds {
+		if strings.TrimSpace(kind) == "" || kind != strings.TrimSpace(kind) {
+			return nil, fmt.Errorf("delivery: render-only kind must be a non-blank identifier kind: %w", sdk.ErrInvalidInput)
+		}
+		renderOnlyKinds[kind] = struct{}{}
 	}
 	logger := d.Logger
 	if logger == nil {
@@ -363,6 +386,8 @@ func NewRouter(mailer email.Sender, opts ...RouterOption) (*Router, error) {
 		logger:      logger,
 
 		opportunisticTLSAcknowledged: d.OpportunisticTLSAcknowledged,
+		renderOnly:                   d.RenderOnly,
+		renderOnlyKinds:              renderOnlyKinds,
 	}, nil
 }
 
@@ -485,11 +510,15 @@ func cloneData(data map[string]any) map[string]any {
 
 // Supports reports whether a transport is wired for kind (design §6.3,
 // deny-by-absence). Email is always supported (the Mailer is required); every
-// other kind is supported only when a BodySender for that kind is wired. A start
+// other kind is supported only when a BodySender for that kind is wired, or, on a
+// render-only router, when WithRenderOnly names it. A start
 // site consults it to reject an add/change targeting an unsupported kind
 // (ErrKindNotSupported) BEFORE it creates any flow state or delivers a secret.
 func (r *Router) Supports(kind string) bool {
 	if kind == sdk.AddressKindEmail {
+		return true
+	}
+	if _, ok := r.renderOnlyKinds[kind]; ok {
 		return true
 	}
 	_, ok := r.bodySenders[kind]
@@ -504,7 +533,11 @@ func (r *Router) Supports(kind string) bool {
 // delivery is dispatched through notify.Send. Unsupported kinds return
 // ErrKindUnsupported. DeliveryError wraps the cause without including content
 // in its own error message; hosts must handle provider diagnostics deliberately.
+// A render-only router refuses every send with ErrRouterRenderOnly.
 func (r *Router) Deliver(ctx context.Context, kind string, env Envelope) error {
+	if r.renderOnly {
+		return fmt.Errorf("%w: kind %q", ErrRouterRenderOnly, kind)
+	}
 	if err := ctx.Err(); err != nil {
 		return &DeliveryError{Kind: kind, Err: err}
 	}
@@ -552,14 +585,16 @@ func renderTemplate(t *template.Template, data map[string]any) (string, error) {
 // runtime mode, including when this router is composed without the pocket root.
 // Production refuses a sender declaring opportunistic STARTTLS
 // (notify.ErrOpportunisticTLS) unless the router was built with
-// WithOpportunisticTLSAcknowledged.
+// WithOpportunisticTLSAcknowledged. A render-only router has no Mailer to check.
 func (r *Router) ValidateTransports(mode environment.Mode) error {
 	var opts []notify.CheckOption
 	if !r.opportunisticTLSAcknowledged {
 		opts = append(opts, notify.RequireMandatoryTLS())
 	}
-	if _, err := notify.CheckTransport(mode, r.mailer, opts...); err != nil {
-		return err
+	if !r.renderOnly {
+		if _, err := notify.CheckTransport(mode, r.mailer, opts...); err != nil {
+			return err
+		}
 	}
 	for _, sender := range r.bodySenders {
 		if _, err := notify.CheckTransport(mode, sender, opts...); err != nil {

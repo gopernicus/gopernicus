@@ -8,6 +8,9 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
+// ErrJobsMaxAttemptsInvalid is returned when JobsConfig.MaxAttempts is negative.
+var ErrJobsMaxAttemptsInvalid = fmt.Errorf("delivery: jobs max attempts must not be negative: %w", sdk.ErrInvalidInput)
+
 // Claim is one claimed delivery job a jobs-mode transport hands the
 // authentication processor (AV3D-3.1). It is stdlib-typed so a composition adapter
 // builds it from a generic job without the authentication core importing the jobs
@@ -84,6 +87,18 @@ type InProcessConfig struct {
 	// reads as unknown; 0 selects the package default. Negative →
 	// ErrInProcessStatusTTLInvalid.
 	StatusTTL time.Duration
+}
+
+// JobsConfig tunes the delivery processor for DeliveryMode "jobs". The zero
+// value selects the pocket root's default.
+//
+// The generic jobs runtime keeps its own attempt cap, and the lower of the two
+// wins: an engine cap above the runtime's is inert, and a runtime cap above the
+// engine's dead-letters at the engine's. A host that raises one raises both.
+type JobsConfig struct {
+	// MaxAttempts is the attempt on which a transient delivery failure becomes
+	// permanent; 0 selects the default. Negative → ErrJobsMaxAttemptsInvalid.
+	MaxAttempts int
 }
 
 // Runtime.Run runs the bounded, EPHEMERAL in-process delivery runtime until ctx is
@@ -170,6 +185,14 @@ func (c InProcessConfig) Validate() error {
 		return err
 	}
 	return (inProcessRuntimeConfig{Workers: c.Workers, ShutdownDeadline: c.ShutdownDeadline, MaxAttempts: c.MaxAttempts}).Validate()
+}
+
+// Validate checks the jobs-mode attempt cap without starting work.
+func (c JobsConfig) Validate() error {
+	if c.MaxAttempts < 0 {
+		return fmt.Errorf("%w: %d", ErrJobsMaxAttemptsInvalid, c.MaxAttempts)
+	}
+	return nil
 }
 
 // Runtime owns the configured delivery execution mode. The host starts it or

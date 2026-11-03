@@ -405,6 +405,36 @@ authentication page's *Added by S4c-2*). External-only `all` is unchanged.
   `SingleFactorAcknowledged` and is refused without it. *Operations runbooks*, "Turn on MFA for
   everyone", has the rollout and break-glass.
 
+**Added by authentication v0.43.0** (no store, sdk, views or jobs tag). `DeliveryConfig.Role`
+(`AUTH_DELIVERY_ROLE`) lets a jobs-mode host split a server that only enqueues from a worker
+that only processes; the zero role, `both`, keeps row 3 above as it was. **A host that boots
+today with delivery on and `MailFrom` empty is refused after the repin** — set
+`AUTH_MAIL_FROM` before upgrading.
+
+| Module | Refuses | Sentinel | Acknowledgement |
+|---|---|---|---|
+| authentication (all modes) | delivery on (`jobs` or `in_process`) with `DeliveryConfig.MailFrom` (`AUTH_MAIL_FROM`) empty, unless the role is `enqueue` | `ErrMailFromRequired` | none — set a From address |
+| authentication (all modes) | a non-empty `MailFrom` that `net/mail.ParseAddress` rejects, in every mode and role | `ErrMailFromInvalid` | none |
+| authentication (all modes) | a `Role` other than `both`, `enqueue` or `process`; `enqueue` or `process` outside `DeliveryMode: "jobs"` | `ErrDeliveryRoleInvalid`; `ErrDeliveryRoleRequiresJobs` | none |
+| authentication (all modes) | a negative `DeliveryConfig.JobsDelivery.MaxAttempts` | `delivery.ErrJobsMaxAttemptsInvalid` | none |
+
+- **Role matrix.** `enqueue` needs no Mailer and no `MailFrom` (a wired transport is still
+  checked), builds no processor, and renders through a router whose `Deliver` refuses
+  (`delivery.ErrRouterRenderOnly`). `process` may pass a nil signer: `New` installs
+  `authentication.RefusingSigner`, whose `Sign` and `Verify` return `ErrSignerRefused`, so a
+  process instance that mounts HTTP answers token routes with errors — mount it only where
+  delivery runs.
+- **Retry budget.** The jobs-mode processor now goes permanent at
+  `JobsDelivery.MaxAttempts` (default 10, about 20 minutes of provider outage) instead of
+  the engine's fixed 5, and `InProcessDelivery.MaxAttempts` now reaches the in-process
+  processor, so a cap above 5 takes effect. The jobs runtime keeps its own cap
+  (`FencedRuntimePolicy.MaxAttempts`, default 5) and the lower one wins: **raising the
+  pocket's cap changes nothing until the host raises the runtime's**.
+- **The boot lines.** Every `New` logs `auth: delivery mode=<mode> role=<role>
+  mailer=wired|absent jobs_max_attempts=<n>`, and a jobs instance that processes adds a
+  `jobs_runtime_cap` reminder. `auth: keys` reports `jwt_signer=refusing` on a process
+  instance.
+
 ## Retention (S3)
 
 Every row class the pockets write has an owner-set lifetime, each disposal is bounded, and the

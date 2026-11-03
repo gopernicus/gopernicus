@@ -483,3 +483,39 @@ func TestRenderEmailBranding(t *testing.T) {
 		t.Errorf("unset branding lost the fallback: %q", env.Body)
 	}
 }
+
+// TestRenderOnlyRouterRendersAndNeverSends proves a WithRenderOnly router needs
+// no Mailer, reports email and the named kinds, renders, and refuses every send
+// and every processor rather than dropping a message.
+func TestRenderOnlyRouterRendersAndNeverSends(t *testing.T) {
+	r, err := NewRouter(nil, WithRenderOnly(sdk.AddressKindPhone))
+	if err != nil {
+		t.Fatalf("NewRouter(nil, WithRenderOnly): %v", err)
+	}
+	for kind, want := range map[string]bool{sdk.AddressKindEmail: true, sdk.AddressKindPhone: true, "fax": false} {
+		if got := r.Supports(kind); got != want {
+			t.Errorf("Supports(%q) = %v, want %v", kind, got, want)
+		}
+	}
+	env, err := r.Render(context.Background(), Request{Kind: sdk.AddressKindEmail, Purpose: PurposeLoginCode, Destination: "user@example.com", Secret: "123456"})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for _, kind := range []string{sdk.AddressKindEmail, sdk.AddressKindPhone} {
+		if err := r.Deliver(context.Background(), kind, env); !errors.Is(err, ErrRouterRenderOnly) {
+			t.Errorf("Deliver(%q): err = %v, want ErrRouterRenderOnly", kind, err)
+		}
+	}
+	if err := r.ValidateTransports("production"); err != nil {
+		t.Errorf("ValidateTransports with no Mailer: %v", err)
+	}
+	if _, err := NewJobsProcessor(fakeEncrypter{}, r); !errors.Is(err, ErrRouterRenderOnly) {
+		t.Errorf("NewJobsProcessor over a render-only router: err = %v, want ErrRouterRenderOnly", err)
+	}
+	if _, err := NewRouter(nil); !errors.Is(err, ErrMailerRequired) {
+		t.Errorf("NewRouter(nil) without WithRenderOnly: err = %v, want ErrMailerRequired", err)
+	}
+	if _, err := NewRouter(nil, WithRenderOnly(" ")); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Errorf("blank render-only kind: err = %v, want sdk.ErrInvalidInput", err)
+	}
+}

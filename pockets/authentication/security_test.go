@@ -322,7 +322,7 @@ func TestNewServiceDevelopmentToleratesUnacknowledgedRuntime(t *testing.T) {
 		environment.ModeDevelopment,
 		delivery.ModeJobs,
 		WithPassword(PasswordConfig{Hasher: stubHasher{}, PasswordFlowsDisabled: true}),
-		WithDelivery(DeliveryConfig{Mailer: stubMailer{}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}}))
+		WithDelivery(DeliveryConfig{MailFrom: fixtureMailFrom, Mailer: stubMailer{}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}}))
 	if err != nil {
 		t.Errorf("unacknowledged jobs runtime in development: err=%v, want nil", err)
 	}
@@ -338,7 +338,7 @@ func TestNewServiceDevelopmentOutboxStillRequiresEncrypter(t *testing.T) {
 		environment.ModeDevelopment,
 		delivery.ModeJobs,
 		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
-		WithDelivery(DeliveryConfig{Mailer: stubMailer{}, DeliveryDispatcher: stubDispatcher{}}))
+		WithDelivery(DeliveryConfig{MailFrom: fixtureMailFrom, Mailer: stubMailer{}, DeliveryDispatcher: stubDispatcher{}}))
 	if !errors.Is(err, ErrDeliveryEncrypterRequired) {
 		t.Errorf("dev outbox without encrypter: err=%v, want ErrDeliveryEncrypterRequired", err)
 	}
@@ -682,7 +682,7 @@ func TestNewServiceProductionPasswordlessRejectsHTTPBaseURL(t *testing.T) {
 		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
 		WithIdentity(IdentityConfig{ChallengeProtector: passwordlessProtector(t), IdentifierKeyer: prodKeyer{}, SingleFactorAcknowledged: true}),
 		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
-		WithDelivery(DeliveryConfig{Mailer: prodMailer{}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}, DeliveryJobsAcknowledged: true}),
+		WithDelivery(DeliveryConfig{MailFrom: fixtureMailFrom, Mailer: prodMailer{}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}, DeliveryJobsAcknowledged: true}),
 		WithPasswordless(PasswordlessConfig{Passwordless: []string{"email"}}),
 		WithLinks(LinksConfig{PublicAuthBaseURL: "http://auth.example.com"}),
 		WithAuditDisabledAcknowledged())
@@ -703,7 +703,7 @@ func TestNewServiceProductionPasswordlessAcceptsFullWiring(t *testing.T) {
 		WithPassword(PasswordConfig{Hasher: stubHasher{}, PasswordFlowsDisabled: true}),
 		WithIdentity(IdentityConfig{ChallengeProtector: passwordlessProtector(t), IdentifierKeyer: prodKeyer{}, SingleFactorAcknowledged: true}),
 		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
-		WithDelivery(DeliveryConfig{Mailer: prodMailer{}, BodySenders: map[string]delivery.BodySender{"phone": prodNotifier{}}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}, DeliveryJobsAcknowledged: true}),
+		WithDelivery(DeliveryConfig{MailFrom: fixtureMailFrom, Mailer: prodMailer{}, BodySenders: map[string]delivery.BodySender{"phone": prodNotifier{}}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}, DeliveryJobsAcknowledged: true}),
 		WithPasswordless(PasswordlessConfig{Passwordless: []string{"email", "phone"}}),
 		WithLinks(LinksConfig{PublicAuthBaseURL: "https://auth.example.com"}),
 		WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}}),
@@ -729,7 +729,7 @@ func TestNewServiceProductionPasswordlessRejectsConsolePhone(t *testing.T) {
 		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
 		WithIdentity(IdentityConfig{ChallengeProtector: passwordlessProtector(t), IdentifierKeyer: prodKeyer{}}),
 		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
-		WithDelivery(DeliveryConfig{Mailer: prodMailer{}, BodySenders: map[string]delivery.BodySender{sdk.AddressKindPhone: notify.NewConsole(nil)}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}, DeliveryJobsAcknowledged: true}),
+		WithDelivery(DeliveryConfig{MailFrom: fixtureMailFrom, Mailer: prodMailer{}, BodySenders: map[string]delivery.BodySender{sdk.AddressKindPhone: notify.NewConsole(nil)}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}, DeliveryJobsAcknowledged: true}),
 		WithPasswordless(PasswordlessConfig{Passwordless: []string{"phone"}}),
 		WithLinks(LinksConfig{PublicAuthBaseURL: "https://auth.example.com"}))
 	if !errors.Is(err, ErrInsecureDeliveryTransport) {
