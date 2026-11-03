@@ -82,6 +82,10 @@ const DefaultAPIKeyMaxTTL = 365 * 24 * time.Hour
 // refuses.
 const DefaultAccessTokenTTLCeiling = authlogic.DefaultAccessTokenTTLCeiling
 
+// MaxRefreshGraceWindow is the longest SessionsConfig.RefreshGraceWindow New
+// admits: one minute.
+const MaxRefreshGraceWindow = authlogic.MaxRefreshGraceWindow
+
 // The MFAConfig.Methods values.
 const (
 	// MFAMethodPasskey admits AAL2 from a user-verified passkey.
@@ -164,6 +168,7 @@ type constructorConfig struct {
 	AccessTokenTTL                time.Duration `env:"AUTH_ACCESS_TOKEN_TTL" default:"15m"`
 	RefreshTTL                    time.Duration `env:"AUTH_REFRESH_TTL" default:"168h"`
 	IdleTimeout                   time.Duration `env:"AUTH_IDLE_TIMEOUT"`
+	RefreshGraceWindow            time.Duration `env:"AUTH_REFRESH_GRACE_WINDOW"`
 	TokenIssuer                   string        `env:"AUTH_TOKEN_ISSUER"`
 	TokenAudience                 string        `env:"AUTH_TOKEN_AUDIENCE"`
 	Granter                       invitations.Granter
@@ -298,6 +303,24 @@ type SessionsConfig struct {
 	// migration 0029_session_activity.sql (ErrIdleTimeoutSchemaMissing): setting
 	// the env var on an unmigrated database refuses boot.
 	IdleTimeout time.Duration `env:"AUTH_IDLE_TIMEOUT"`
+	// RefreshGraceWindow admits the rotated-away refresh token for this long
+	// after a rotation, any number of times, each answered with an access
+	// token only (POST /auth/refresh's grace lane, recorded as a refresh with
+	// detail grace_window). It is for clients that cannot single-flight a
+	// refresh: tabs on sibling origins sharing one refresh cookie all refresh
+	// after a wake, and without it the third presentation of the old token
+	// revokes the session as reuse. Zero (the default) keeps the single-use
+	// grace slot alone; past the window that slot and reuse detection apply
+	// unchanged. A copied previous token mints access tokens for at most the
+	// window, under the per-session refresh rate limit.
+	//
+	// At most MaxRefreshGraceWindow, one minute (ErrRefreshGraceWindowInvalid,
+	// every mode). Set, it needs Repositories.Sessions to implement
+	// session.ActivityRepository (ErrRefreshGraceWindowRequires) over a schema
+	// with migration 0029_session_activity.sql
+	// (ErrRefreshGraceWindowSchemaMissing); rotations then stamp
+	// last_rotated_at even with IdleTimeout off.
+	RefreshGraceWindow time.Duration `env:"AUTH_REFRESH_GRACE_WINDOW"`
 	// Issuer, when set, is stamped as iss on every first-party access token
 	// and required, exactly, on one; Audience does the same for aud (a string
 	// or a one-element array). Either may be set alone. Enabling them makes
@@ -316,6 +339,7 @@ func WithSessions(value SessionsConfig) Option {
 		c.AccessTokenTTL = value.AccessTokenTTL
 		c.RefreshTTL = value.RefreshTTL
 		c.IdleTimeout = value.IdleTimeout
+		c.RefreshGraceWindow = value.RefreshGraceWindow
 		c.TokenIssuer = value.Issuer
 		c.TokenAudience = value.Audience
 	}

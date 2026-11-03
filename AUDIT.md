@@ -6518,6 +6518,27 @@ against the live Auth emulator.
   (three of three attempts); the previous pgxdb failed one process every time.
 - **Residuals:** a host running exported SQL with its own runner must take the documented lock.
 
+## AUDIT-079: Refresh grace window for concurrent tabs (#54)
+
+- **Status:** pending merge and tag as `pockets/authentication` v0.44.0.
+- **Modules:** `pockets/authentication`; `examples/auth-cms` documents the env var. No store,
+  migration, sdk or views change.
+- **Old behavior:** the previous refresh token had one grace use. Three concurrent refreshes with one
+  cookie rotated, took the grace slot, and then revoked the session as reuse, recording
+  `refresh_reuse`. Reproduced on auth-cms: three tabs answered 200, 200, 401, and the winning tab's
+  new token then answered 401.
+- **New behavior:** opt-in `SessionsConfig.RefreshGraceWindow` (at most one minute) admits the
+  previous token any number of times within the window of the row's `last_rotated_at`, issuing an
+  access token only and recording `refresh` with detail `grace_window`. Past the window the
+  single-use slot and reuse revocation are unchanged. Tests: five concurrent refreshes all succeed
+  with one rotation and no reuse; sequential in-window use leaves the slot unconsumed and expiry
+  restores reuse detection; a consumed slot and a lost rotation CAS both take the window; window-only
+  wiring never judges idleness; constructor refusals. With the window disabled, the four window
+  tests fail.
+- **Residuals:** within the window a copied previous token mints access tokens for its length
+  instead of once, under the 30-per-minute per-session refresh limit. A double rotation inside the
+  window leaves the oldest token answering the generic 401 without a revocation.
+
 ## AUDIT-078: Jobs-mode delivery split roles (#229)
 
 - **Status:** released as `pockets/authentication` v0.43.0 (`1bd96c4e` → `2d4c13df`, #364).

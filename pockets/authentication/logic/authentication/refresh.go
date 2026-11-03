@@ -31,6 +31,12 @@ var ErrInvalidRefreshToken = fmt.Errorf("invalid refresh token: %w", sdk.ErrUnau
 //  5. Matched previous, already consumed → reuse: revoke the session, record
 //     refresh_reuse (blocked, + unconditional WARN), 401.
 //
+// With SessionsConfig.RefreshGraceWindow wired, a previous match within the
+// window of the row's last rotation is branch 4a, ahead of 4 and 5: a new
+// access JWT only, any number of times, with no write, recorded as a refresh
+// success with a "grace_window" detail. Concurrent tabs presenting one cookie
+// then never read as reuse. Past the window, branches 4 and 5 apply unchanged.
+//
 // With SessionsConfig.IdleTimeout wired, branches 3 and 4 first judge the
 // session's last activity (idleSince's grandfather rule): an idle session is
 // deleted with a compare-and-swap DeleteIfIdle, recorded once as
@@ -56,17 +62,7 @@ func (s *Service) Refresh(ctx context.Context, presented string) (TokenPair, err
 }
 
 func (s *Service) refreshByHash(ctx context.Context, hash string) (TokenPair, error) {
-	var (
-		sess     session.Session
-		match    session.RefreshMatch
-		activity session.Activity
-		err      error
-	)
-	if s.activity != nil {
-		sess, match, activity, err = s.activity.GetByRefreshHashWithActivity(ctx, hash)
-	} else {
-		sess, match, err = s.sessions.GetByRefreshHash(ctx, hash)
-	}
+	sess, match, activity, err := s.getByRefreshHash(ctx, hash)
 	if err != nil {
 		if errors.Is(err, sdk.ErrNotFound) {
 			return TokenPair{}, ErrInvalidRefreshToken // branch 1
@@ -102,6 +98,9 @@ func (s *Service) refreshByHash(ctx context.Context, hash string) (TokenPair, er
 		}
 		return s.rotate(ctx, sess, hash)
 	case session.RefreshMatchPrevious:
+		if s.inGraceWindow(activity) {
+			return s.graceWindow(ctx, sess) // branch 4a
+		}
 		if !sess.PreviousUsed {
 			if last, idle := s.idleExpired(sess, activity); idle {
 				return s.expireIdle(ctx, sess, hash, activity, last)
@@ -111,6 +110,41 @@ func (s *Service) refreshByHash(ctx context.Context, hash string) (TokenPair, er
 	default:
 		return TokenPair{}, ErrInvalidRefreshToken
 	}
+}
+
+// getByRefreshHash reads the row for hash, with its activity stamp when the
+// activity column is wired.
+func (s *Service) getByRefreshHash(ctx context.Context, hash string) (session.Session, session.RefreshMatch, session.Activity, error) {
+	if s.activity != nil {
+		return s.activity.GetByRefreshHashWithActivity(ctx, hash)
+	}
+	sess, match, err := s.sessions.GetByRefreshHash(ctx, hash)
+	return sess, match, session.Activity{}, err
+}
+
+// inGraceWindow reports whether a previous-slot match falls within
+// SessionsConfig.RefreshGraceWindow of the row's last rotation. An unstamped
+// row (rotated before the window was wired) is never within it.
+func (s *Service) inGraceWindow(a session.Activity) bool {
+	return s.refreshGraceWindow > 0 && a.Stamped && s.now().Before(a.LastRotatedAt.Add(s.refreshGraceWindow))
+}
+
+// graceWindow performs branch 4a: a previous-slot match within the window
+// mints an access JWT only. It writes nothing, so neither the single-use slot
+// nor the activity stamp moves, and it never judges idleness: the row rotated
+// within the window.
+func (s *Service) graceWindow(ctx context.Context, sess session.Session) (TokenPair, error) {
+	enrollment, err := s.enrollmentDeadline(ctx, sess.UserID, sess.Authentication)
+	if err != nil {
+		return TokenPair{}, err
+	}
+	access, expiresAt, err := s.signAccessToken(sess.UserID, sess.ID, sess.Authentication, enrollment)
+	if err != nil {
+		return TokenPair{}, err
+	}
+	s.recordRefresh(ctx, sess, "grace_window")
+	// No new refresh token: the cookie client keeps the winning rotation's token.
+	return TokenPair{AccessToken: access, AccessExpiresAt: expiresAt}, nil
 }
 
 // rotate performs branch 3: compare-and-swap the live refresh token, minting a
@@ -178,28 +212,31 @@ func (s *Service) grace(ctx context.Context, sess session.Session, previousHash 
 
 // reResolve is the once-only re-resolution after a Rotate CAS conflict (§1.3
 // branch 3): if the presented hash now sits in the previous slot, it is a benign
-// race with a concurrent rotation → fall through to the grace path; if it now
-// matches nothing, treat it as reuse (revoke + refresh_reuse). Any other outcome
-// (still current — impossible under the single-writer-per-hash invariant) fails
-// closed as reuse.
+// race with a concurrent rotation → fall through to the grace window (4a) or the
+// grace path; if it now matches nothing, treat it as reuse (revoke +
+// refresh_reuse). Any other outcome (still current — impossible under the
+// single-writer-per-hash invariant) fails closed as reuse.
 func (s *Service) reResolve(ctx context.Context, sess session.Session, hash string) (TokenPair, error) {
-	fresh, match, err := s.sessions.GetByRefreshHash(ctx, hash)
+	fresh, match, activity, err := s.getByRefreshHash(ctx, hash)
 	if err != nil {
 		if errors.Is(err, sdk.ErrNotFound) {
 			return s.reuse(ctx, sess)
 		}
 		return TokenPair{}, err
 	}
-	return s.reResolveFrom(ctx, sess, hash, fresh, match)
+	return s.reResolveFrom(ctx, sess, hash, fresh, match, activity)
 }
 
 // reResolveFrom is reResolve's branch over an already-read row, so a caller
 // that has just read it does not read again.
-func (s *Service) reResolveFrom(ctx context.Context, sess session.Session, hash string, fresh session.Session, match session.RefreshMatch) (TokenPair, error) {
+func (s *Service) reResolveFrom(ctx context.Context, sess session.Session, hash string, fresh session.Session, match session.RefreshMatch, activity session.Activity) (TokenPair, error) {
 	if !fresh.FirstParty() {
 		return TokenPair{}, ErrDelegatedCredential
 	}
 	if match == session.RefreshMatchPrevious {
+		if s.inGraceWindow(activity) {
+			return s.graceWindow(ctx, fresh)
+		}
 		return s.grace(ctx, fresh, hash)
 	}
 	return s.reuse(ctx, fresh)

@@ -352,7 +352,7 @@ func TestSessionLifetimeBootLine(t *testing.T) {
 	if _, err := wiring.build(environment.ModeProduction, log); err != nil {
 		t.Fatalf("default lifetimes: %v", err)
 	}
-	if want := `msg="auth: session lifetime" access_token_ttl=15m0s refresh_ttl=168h0m0s idle_timeout=off idle_source=default activity=refresh_rotation idle_scope=first_party live_floor=enforced`; strings.Count(buf.String(), want) != 1 {
+	if want := `msg="auth: session lifetime" access_token_ttl=15m0s refresh_ttl=168h0m0s idle_timeout=off idle_source=default activity=refresh_rotation idle_scope=first_party refresh_grace_window=off live_floor=enforced`; strings.Count(buf.String(), want) != 1 {
 		t.Errorf("default boot line missing %q:\n%s", want, buf.String())
 	}
 	if strings.Contains(buf.String(), "access_token_ttl_long") {

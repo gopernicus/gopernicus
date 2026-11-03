@@ -247,6 +247,18 @@ var (
 	// ErrIdleTimeoutBelowAccessTokenTTL is returned by New in every mode for a
 	// negative SessionsConfig.IdleTimeout or one at or below AccessTokenTTL.
 	ErrIdleTimeoutBelowAccessTokenTTL = authlogic.ErrIdleTimeoutBelowAccessTokenTTL
+	// ErrRefreshGraceWindowInvalid is returned by New in every mode for a
+	// negative SessionsConfig.RefreshGraceWindow or one above
+	// MaxRefreshGraceWindow.
+	ErrRefreshGraceWindowInvalid = authlogic.ErrRefreshGraceWindowInvalid
+	// ErrRefreshGraceWindowRequires is returned by New when
+	// SessionsConfig.RefreshGraceWindow is set and Repositories.Sessions does
+	// not implement session.ActivityRepository.
+	ErrRefreshGraceWindowRequires = authlogic.ErrRefreshGraceWindowRequires
+	// ErrRefreshGraceWindowSchemaMissing is returned by New when
+	// SessionsConfig.RefreshGraceWindow is set and the store reports migration
+	// 0029_session_activity.sql absent.
+	ErrRefreshGraceWindowSchemaMissing = authlogic.ErrRefreshGraceWindowSchemaMissing
 	// ErrAccessTokenTTLExceedsRefreshTTL is returned by New in every mode when
 	// SessionsConfig.AccessTokenTTL exceeds RefreshTTL (after defaults).
 	ErrAccessTokenTTLExceedsRefreshTTL = authlogic.ErrAccessTokenTTLExceedsRefreshTTL

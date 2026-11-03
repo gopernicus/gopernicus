@@ -1234,8 +1234,8 @@ func buildAuthConfig(log *slog.Logger, mode environment.Mode, granter invitation
 	// AUTH_PASSWORD_RESET_URL, AUTH_OAUTH_LINK_URL, AUTH_OAUTH_CALLBACK_BASE,
 	// AUTH_REDIRECT_ALLOWLIST, AUTH_REQUIRE_VERIFIED_EMAIL,
 	// AUTH_DELIVERY_MODE, AUTH_ACCESS_TOKEN_TTL, AUTH_REFRESH_TTL, AUTH_IDLE_TIMEOUT
-	// (authmem implements session.ActivityRepository, so setting it wires idle
-	// expiry), AUTH_LIST_STRATEGY, the AUTH_COOKIE_* nested cookie keys, and the
+	// and AUTH_REFRESH_GRACE_WINDOW (authmem implements
+	// session.ActivityRepository, so setting either wires it), AUTH_LIST_STRATEGY, the AUTH_COOKIE_* nested cookie keys, and the
 	// remaining flags. An empty value
 	// keeps what the literal seeded; an unrecognized mode or strategy is the pocket's
 	// loud construction error.

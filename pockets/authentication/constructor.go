@@ -639,7 +639,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	}
 	logicOptions := []authlogic.Option{
 		authlogic.WithPassword(authlogic.PasswordConfig{Hasher: cfg.Hasher, ValidatePassword: cfg.ValidatePassword, Compromised: cfg.CompromisedPasswordChecker, CompromisedFailOpen: cfg.CompromisedPasswordFailOpen, PasswordFlowsDisabled: cfg.PasswordFlowsDisabled, RequireVerifiedEmail: cfg.RequireVerifiedEmail}),
-		authlogic.WithSessions(authlogic.SessionsConfig{AccessTokenTTL: cfg.AccessTokenTTL, RefreshTTL: cfg.RefreshTTL, IdleTimeout: cfg.IdleTimeout, Issuer: cfg.TokenIssuer, Audience: cfg.TokenAudience}),
+		authlogic.WithSessions(authlogic.SessionsConfig{AccessTokenTTL: cfg.AccessTokenTTL, RefreshTTL: cfg.RefreshTTL, IdleTimeout: cfg.IdleTimeout, RefreshGraceWindow: cfg.RefreshGraceWindow, Issuer: cfg.TokenIssuer, Audience: cfg.TokenAudience}),
 		authlogic.WithIdentity(authlogic.IdentityConfig{Normalizer: cfg.IdentifierNormalizer, IdentifierKeyer: cfg.IdentifierKeyer, CredentialPolicy: cfg.CredentialPolicy, Registration: cfg.Registration}),
 		authlogic.WithMachine(authlogic.MachineConfig{APIKeyMaxTTL: cfg.APIKeyMaxTTL, ServiceAccountStatus: cfg.ServiceAccountStatus, APIKeyLastUsedInterval: cfg.APIKeyLastUsedInterval}),
 		authlogic.WithDelivery(logicDelivery),
