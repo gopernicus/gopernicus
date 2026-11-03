@@ -1,5 +1,18 @@
 # Releasing gopernicus modules
 
+## Concurrent migration runners serialize (#298 — integrations/datastores/pgxdb v0.23.0)
+
+**Status: pending merge and tag.** **MINOR, a deploy-safety fix.** `RunMigrations` now opens its
+transaction with a per-stream `pg_advisory_xact_lock` (key `gopernicus.migrations/<schema>`,
+`(default)` for the zero schema), before the ledger is read or created. Two runners on one stream
+used to race (the second failed with `create schema_migrations: already exists` or a duplicate
+ledger row); now the second waits and finds nothing to apply. Different schemas don't wait on each
+other. The wait ignores `Config.LockTimeout` (bounded by ctx) and logs once above 100ms. Hosts
+running the exported stream with their own runner should take the same lock (README).
+
+turso: no change. `BEGIN IMMEDIATE` already serializes runners; a new integration test proves it
+and the README says so. Closes the CC8.1 schema-change-control gap. AUDIT-077.
+
 ## Fenced admissions wake their runtime (#95 — pockets/jobs v0.12.0)
 
 **Status: pending merge and tag.** **MINOR, a latency fix.** A fenced admission used to wait for

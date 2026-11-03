@@ -39,7 +39,10 @@ in every mode and before any I/O, with an error wrapping
 `sdk.ErrRedactedSecret` that names the field and says to read it with `Reveal()`.
 
 Migration streams are flat: `RunMigrations` reads direct `.sql` files in lexical
-filename order, skipping directories and names beginning with `_`.
+filename order, skipping directories and names beginning with `_`. Concurrent
+runners serialize without a separate lock: the migration transaction opens with
+`BEGIN IMMEDIATE`, which takes the database write lock, so a second runner waits,
+then finds the stream applied (tested with two connections).
 `ExportMigrations` copies direct `.sql` files, including underscore-prefixed SQL
 for the host to manage, and skips documentation and nested directories.
 
