@@ -6495,8 +6495,8 @@ against the live Auth emulator.
 
 ## AUDIT-076: Fenced admissions wake their runtime (#95)
 
-- **Status:** pending tag as `pockets/jobs` v0.12.0. Record: `RELEASING.md`, "Fenced admissions
-  wake their runtime (#95)".
+- **Status:** released as `pockets/jobs` v0.12.0 (`0e51f5fa` → `0b8bb6ea`, #361). Record:
+  `RELEASING.md`, "Fenced admissions wake their runtime (#95 — published 2026-11-02)".
 - **Modules:** `pockets/jobs`. No store, port or API change.
 - **Old behavior:** fenced admission never signaled; the fenced pool claimed new work only on its
   idle poll, so time-sensitive mail (sign-in codes) waited up to `IdleInterval`.

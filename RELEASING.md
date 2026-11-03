@@ -13,9 +13,9 @@ running the exported stream with their own runner should take the same lock (REA
 turso: no change. `BEGIN IMMEDIATE` already serializes runners; a new integration test proves it
 and the README says so. Closes the CC8.1 schema-change-control gap. AUDIT-077.
 
-## Fenced admissions wake their runtime (#95 — pockets/jobs v0.12.0)
+## Fenced admissions wake their runtime (#95 — pockets/jobs v0.12.0 — published 2026-11-02)
 
-**Status: pending merge and tag.** **MINOR, a latency fix.** A fenced admission used to wait for
+**Status: released.** **MINOR, a latency fix.** A fenced admission used to wait for
 the fenced pool's next idle poll (30s by default): a sign-in or verification code in jobs delivery
 mode arrived up to 30s late. Each fenced runtime now registers its own wake channel on the
 `Service`, and a fresh fenced admission (`EnqueueOnce`/`EnqueueOnceIn` that admits new work,
@@ -25,6 +25,15 @@ backstop. Measured on the default policy: delivered after 0.00s (previously 28s)
 In-process only: an enqueue-only server beside a separate worker still waits for the worker's
 `IdleInterval` (#98). A host that lowered its fenced `IdleInterval` to hide this can restore it.
 No store, sdk or API change. AUDIT-076.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/jobs/v0.12.0` | `0e51f5fa` → `0b8bb6ea` | #361 | 41550372753 @ `0b8bb6ea` | OK; default policy delivers a fenced job after 0.00s |
+| — | none | — | PR-2: auth-cms, jobs-minimal repin | — | each builds, vets and tests with `GOWORK=off` |
+
+Annotated, not signed. auth-cms keeps its fenced `IdleInterval: 1s` (it hid this bug; now only a
+backstop). **Run and look.** A host-shaped program on the default fenced policy (30s idle), one
+job enqueued after the workers went idle: 0.00s on v0.12.0, 28.00s before.
 
 ## A dead database is a 503, not a 500 (#123 — integrations/datastores/pgxdb v0.22.0 — published 2026-11-02)
 
