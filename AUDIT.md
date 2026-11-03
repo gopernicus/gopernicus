@@ -6507,8 +6507,8 @@ against the live Auth emulator.
 
 ## AUDIT-077: Concurrent migration runners serialize (#298)
 
-- **Status:** pending tag as `integrations/datastores/pgxdb` v0.23.0. Record: `RELEASING.md`,
-  "Concurrent migration runners serialize (#298)".
+- **Status:** released as `integrations/datastores/pgxdb` v0.23.0 (`e2ae34e2` → `4a21a0a4`, #362).
+  Record: `RELEASING.md`, "Concurrent migration runners serialize (#298 — published 2026-11-02)".
 - **Modules:** `integrations/datastores/pgxdb`; tests and docs only in `integrations/datastores/turso`.
 - **Old behavior:** two runners on one stream raced; one deploy failed (`already exists`, duplicate
   ledger row, or a pool lock timeout). The S8 change-control plan's runner lock was never built.

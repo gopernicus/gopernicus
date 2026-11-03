@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## Concurrent migration runners serialize (#298 — integrations/datastores/pgxdb v0.23.0)
+## Concurrent migration runners serialize (#298 — integrations/datastores/pgxdb v0.23.0 — published 2026-11-02)
 
-**Status: pending merge and tag.** **MINOR, a deploy-safety fix.** `RunMigrations` now opens its
+**Status: released.** **MINOR, a deploy-safety fix.** `RunMigrations` now opens its
 transaction with a per-stream `pg_advisory_xact_lock` (key `gopernicus.migrations/<schema>`,
 `(default)` for the zero schema), before the ledger is read or created. Two runners on one stream
 used to race (the second failed with `create schema_migrations: already exists` or a duplicate
@@ -12,6 +12,15 @@ running the exported stream with their own runner should take the same lock (REA
 
 turso: no change. `BEGIN IMMEDIATE` already serializes runners; a new integration test proves it
 and the README says so. Closes the CC8.1 schema-change-control gap. AUDIT-077.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `integrations/datastores/pgxdb/v0.23.0` | `e2ae34e2` → `4a21a0a4` | #362 | 41552527635 @ `4a21a0a4` | OK; MVS selects sdk v0.28.0; the published `migrate.go` takes the lock |
+
+Annotated, not signed. No turso tag (no code change). **Run and look.** Two OS processes migrating
+the authorization pgx store's 7-file stream into one fresh PostgreSQL 18 database, three attempts:
+both exit 0 with 7 ledger rows each time; the previous pgxdb failed one process every time with
+`create schema_migrations: already exists`.
 
 ## Fenced admissions wake their runtime (#95 — pockets/jobs v0.12.0 — published 2026-11-02)
 
