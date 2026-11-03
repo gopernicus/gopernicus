@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## A refresh grace window for concurrent tabs (#54 — pockets/authentication v0.44.0)
+## A refresh grace window for concurrent tabs (#54 — pockets/authentication v0.44.0 — published 2026-11-02)
 
-**Status: pending merge and tag.** **MINOR, opt-in; the default is unchanged.**
+**Status: released.** **MINOR, opt-in; the default is unchanged.**
 `SessionsConfig.RefreshGraceWindow` (`AUTH_REFRESH_GRACE_WINDOW`, zero off, at most one minute)
 admits the rotated-away refresh token for that long after a rotation, any number of times. Each
 presentation gets an access token only, writes nothing, and records a `refresh` success with a
@@ -16,6 +16,16 @@ origins cannot single-flight a refresh) revoke the session for every tab and rec
 set, rotations stamp `last_rotated_at` even while idle expiry is off; idle is still judged only
 when `IdleTimeout` is set. The `auth: session lifetime` boot line gains
 `refresh_grace_window=off|<d>`. No store, migration, sdk or views change. AUDIT-079.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/authentication/v0.44.0` | `af23d51a` → `76427eb4` | #366 | 41582104454 @ `76427eb4` | OK; MVS selects sdk v0.24.0; `SessionsConfig.RefreshGraceWindow` and `MaxRefreshGraceWindow` (1m) resolve |
+| — | none | — | PR-2: auth-cms, external-identity, production-baseline repin | — | each builds, vets and tests with `GOWORK=off` |
+
+Annotated, not signed. **Run and look.** auth-cms on this build with `AUTH_REFRESH_GRACE_WINDOW=10s`:
+five concurrent cookie refreshes all answered 200 with one rotation, the winner's token still
+refreshed, and no reuse WARN; replaying the old token 11s later answered 200, then 401 with the WARN.
+With the window unset, the same five answered 200 200 401 401 401, as on v0.43.0.
 
 ## Jobs-mode delivery split roles (#229 — pockets/authentication v0.43.0 — published 2026-11-02)
 

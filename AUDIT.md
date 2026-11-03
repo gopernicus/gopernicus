@@ -6520,7 +6520,7 @@ against the live Auth emulator.
 
 ## AUDIT-079: Refresh grace window for concurrent tabs (#54)
 
-- **Status:** pending merge and tag as `pockets/authentication` v0.44.0.
+- **Status:** released as `pockets/authentication` v0.44.0 (`af23d51a` → `76427eb4`, #366).
 - **Modules:** `pockets/authentication`; `examples/auth-cms` documents the env var. No store,
   migration, sdk or views change.
 - **Old behavior:** the previous refresh token had one grace use. Three concurrent refreshes with one
