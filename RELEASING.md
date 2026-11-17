@@ -1,5 +1,22 @@
 # Releasing gopernicus modules
 
+## The secrets pgx store's tests build at current pins (#371 — pockets/secrets/stores/pgx v0.2.2 — published 2026-11-17)
+
+**Status: released.** **PATCH, tests and pins only; no store code change.** v0.2.1's
+`audit_live_test.go` and `conformance_test.go` passed a `string` as `pgxdb.Config.DSN`, which has been
+an `sdk.Secret` since pgxdb's Secret DSN change (#183). A host on sdk v0.28.0 and pgxdb v0.23.0 could
+build the store but not run its conformance suite. `main` already wrapped both call sites and
+repinned the module to sdk v0.18.0 / pgxdb v0.14.0 (#185); this tags it. `pockets/secrets` is not
+retagged: since v0.2.0 it changed only in comments, README and tests. AUDIT-080.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/secrets/stores/pgx/v0.2.2` | `f8728a59` → `e871a2a9` | #185 (pins), #183 (call sites) | 41582104454 @ `76427eb4` (store bytes unchanged at `e871a2a9`) | OK; host at sdk v0.28.0 / pgxdb v0.23.0, `GOWORK=off go test .../pockets/secrets/...` all ok against live PostgreSQL 18; v0.2.1 still fails to build |
+
+Annotated, not signed. No example repin (no example uses the secrets pocket). **Run and look.** The
+store's live suite at sdk v0.28.0 / pgxdb v0.23.0 on a disposable PostgreSQL 18, bare and with
+`POSTGRES_TEST_SCHEMA`: conformance, audit rail and the three concurrency cases pass with no skips.
+
 ## A refresh grace window for concurrent tabs (#54 — pockets/authentication v0.44.0 — published 2026-11-02)
 
 **Status: released.** **MINOR, opt-in; the default is unchanged.**
