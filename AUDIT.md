@@ -6556,3 +6556,15 @@ against the live Auth emulator.
   failures then delivery under caps of 10 (dead-letters under 5).
 - **Residuals:** the two-OS-process leg over a durable queue is run outside the hermetic suite. A
   host that raises only the pocket's cap still dead-letters at the jobs runtime's 5.
+
+## AUDIT-080: The secrets pgx store's tests build at current pins (#371)
+
+- **Status:** released as `pockets/secrets/stores/pgx` v0.2.2 (`f8728a59` → `e871a2a9`).
+  Record: `RELEASING.md`, "The secrets pgx store's tests build at current pins (#371 — published 2026-11-17)".
+- **Modules:** `pockets/secrets/stores/pgx`, tests and pins only. No store code, migration or
+  `pockets/secrets` change.
+- **Old behavior:** v0.2.1's tests passed a `string` as `pgxdb.Config.DSN` (an `sdk.Secret` since
+  #183), so under a host's sdk v0.28.0 / pgxdb v0.23.0 the store's conformance suite did not compile.
+- **New behavior:** both call sites wrap the DSN in `sdk.Secret`; the module requires sdk v0.18.0 and
+  pgxdb v0.14.0. Cold-verified from the proxy at the host's pins against PostgreSQL 18.
+- **Residuals:** none.
