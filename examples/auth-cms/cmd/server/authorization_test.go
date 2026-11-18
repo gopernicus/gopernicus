@@ -209,7 +209,7 @@ func demoGrant(operationID, relation, subjectID string) invitations.GrantInput {
 func TestBaselineInvitationGranterNeedsNoMutationLifecycle(t *testing.T) {
 	t.Parallel()
 	store := authzmem.New()
-	comps, err := authorization.New(authorization.Repositories{Tuples: store.Tuples()}, authorization.WithModel(authzSchema()))
+	comps, err := authorization.New(authorization.Repositories{Tuples: store.Tuples()}, authorization.WithModel(authorizationModel()))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
