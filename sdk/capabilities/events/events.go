@@ -168,8 +168,8 @@ type Emitter interface {
 }
 
 // Subscriber receives notifications for an exact topic or "*" (all topics).
-// Every matching local subscription receives its own invocation. A distributed
-// work consumer group has a separate integration-specific API.
+// Every matching local subscription receives its own invocation. Reliable
+// competing-consumer work uses TaskSubscriber instead.
 type Subscriber interface {
 	Subscribe(string, Handler) (Subscription, error)
 }
