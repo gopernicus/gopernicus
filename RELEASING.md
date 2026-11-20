@@ -1,5 +1,48 @@
 # Releasing gopernicus modules
 
+## Bounded task delivery and dead letters (#373 — sdk v0.29.0 + integrations/kvstores/goredis v0.5.0 — published 2026-11-20)
+
+**Status: released.** **MINOR. The sdk change is additive. goredis renames one method.**
+Reliable competing-consumer delivery is now an sdk contract instead of a goredis-only API.
+
+- **sdk:** `events.TaskSubscriber` (`SubscribeTask`) and `events.TaskAdmin` (`BacklogStats`,
+  `DeadLetters`, `Redeliver`, `DiscardDeadLetter`, `Trim`).
+- **Policy:** `events.DeliveryPolicy` sets `MaxDeliveries`, a minimum exponential backoff,
+  `HandlerTimeout`, `Start` (`StartEarliest` by default, `StartLatest` opt-in) and an `OnDeadLetter` hook.
+- **Handlers:** `events.DeliveryAttempt(ctx)` reports the attempt number.
+- **Testing:** `events.NewMemoryTaskQueue` is an in-process reference backend, and `eventstest.RunTask`
+  is the shared conformance suite.
+- **goredis:** `goredis.Bus` implements both ports, with `WithWorkPolicy` opt-in. The zero policy
+  keeps today's unbounded retries.
+- **Dead-lettering:** one Lua script checks that this consumer still owns the delivery, then moves the
+  entry to `<prefix>dlq:<topic>` exactly once across competing consumers. It `XDEL`s the source entry
+  only when this is the stream's sole consumer group.
+
+**Host note.** **Breaking:** `goredis.Bus.SubscribeWork` is renamed `SubscribeTask`, with no alias.
+Hosts that need bounded retries depend on the two sdk ports and pass a `DeliveryPolicy` through
+`goredis.WithWorkPolicy`.
+- On a stream shared by several consumer groups, a dead-lettered entry is acknowledged but not
+  deleted. Recreating the group can deliver it again.
+- `Trim` only removes entries that every group has acknowledged, and never trims a stream with no
+  group. Nothing trims automatically.
+
+No migration and no pocket change. AUDIT-081.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `sdk/v0.29.0` | `d28f0904` → `e530408e` | #374 | not run (owner waived) | OK; a fresh module resolves v0.29.0 from the proxy; `NewMemoryTaskQueue`, `TaskSubscriber` and `DeliveryAttempt` resolve and run |
+| 2 | `integrations/kvstores/goredis/v0.5.0` | `ce04489e` → `7f6b3dab` | #375, #376 (sdk pin) | not run (owner waived) | OK; MVS selects sdk v0.29.0; live dead-letter round trip below |
+
+Annotated, not signed. #375 merged before its sdk pin was bumped. #376 pins sdk v0.29.0, and goredis
+was tagged only after it, so no published goredis version requires sdk v0.18.0 while using the new
+types. **Run and look.** A fresh module at goredis v0.5.0 ran against a disposable Redis 8.4 with
+`MaxDeliveries: 3` and 200–400ms backoff, using an always-failing handler:
+- the handler saw attempts 1, 2 and 3;
+- `OnDeadLetter` fired once (deliveries 3, the handler's error, the record decoded);
+- `BacklogStats` then reported 0 pending, age 0 and 1 dead letter.
+
+The bus and task live suites also pass on Redis 6.2.
+
 ## The secrets pgx store's tests build at current pins (#371 — pockets/secrets/stores/pgx v0.2.2 — published 2026-11-17)
 
 **Status: released.** **PATCH, tests and pins only; no store code change.** v0.2.1's

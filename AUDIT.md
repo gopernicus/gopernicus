@@ -6568,3 +6568,30 @@ against the live Auth emulator.
 - **New behavior:** both call sites wrap the DSN in `sdk.Secret`; the module requires sdk v0.18.0 and
   pgxdb v0.14.0. Cold-verified from the proxy at the host's pins against PostgreSQL 18.
 - **Residuals:** none.
+
+## AUDIT-081: Bounded task delivery and dead letters (#373)
+
+- **Status:** released as sdk v0.29.0 (`d28f0904` → `e530408e`) and
+  `integrations/kvstores/goredis` v0.5.0 (`ce04489e` → `7f6b3dab`).
+  Record: `RELEASING.md`, "Bounded task delivery and dead letters (#373 — published 2026-11-20)".
+- **Modules:**
+  - `sdk`, additive: `events.TaskSubscriber`, `TaskAdmin`, `DeliveryPolicy`, `DeliveryAttempt`,
+    `NewMemoryTaskQueue` and `eventstest.RunTask`.
+  - `integrations/kvstores/goredis`: the ports, `WithWorkPolicy`, and `SubscribeWork` renamed
+    `SubscribeTask`.
+- **Old behavior:** a failing, panicking, timed-out or malformed work entry stayed pending and
+  `XAUTOCLAIM` retried it forever, logging each retry. There was no delivery count, dead-letter
+  stream, backlog read or trim helper, and the API was goredis-only.
+- **New behavior:** an opt-in `DeliveryPolicy` bounds deliveries and backs retries off.
+  - An exhausted entry moves to `<prefix>dlq:<topic>` exactly once across competing consumers.
+  - `TaskAdmin` reports backlog age (pending and unread entries), lists, redelivers and discards dead
+    letters, and trims only entries every group has acknowledged.
+  - Shutdown and handler-less claims never count as failures.
+  - The zero policy keeps the old behavior.
+- **Residuals:**
+  - On a stream with several consumer groups, a dead-lettered entry is only acknowledged, so
+    recreating a group can deliver it again.
+  - Dead-letter streams are never trimmed.
+  - The `live-stores` workflow was not run for this release (owner waived).
+  - The existing limiter live test `TestLive_LimiterAnchoredBuckets` uses `PEXPIRETIME` and fails on
+    Redis below 7.
