@@ -27,8 +27,10 @@ const (
 )
 
 var (
-	_ events.Bus         = (*Bus)(nil)
-	_ events.Broadcaster = (*Bus)(nil)
+	_ events.Bus            = (*Bus)(nil)
+	_ events.Broadcaster    = (*Bus)(nil)
+	_ events.TaskSubscriber = (*Bus)(nil)
+	_ events.TaskAdmin      = (*Bus)(nil)
 )
 
 // BusOption configures construction of a Bus. Options apply in order; the last
@@ -44,6 +46,7 @@ type busConfig struct {
 	BlockTimeout   time.Duration
 	RetryAfter     time.Duration
 	HandlerTimeout time.Duration
+	policy         events.DeliveryPolicy
 }
 
 // WithLogger selects the bus diagnostic logger. Nil uses slog.Default().
@@ -69,23 +72,37 @@ func WithWorkers(workers int) BusOption { return func(cfg *busConfig) { cfg.Work
 func WithQueueSize(size int) BusOption { return func(cfg *busConfig) { cfg.QueueSize = size } }
 
 // WithBlockTimeout bounds each XREADGROUP wait for fresh work. Zero uses 5s.
-// SubscribeWork requires a positive whole-millisecond duration.
+// SubscribeTask requires a positive whole-millisecond duration.
 func WithBlockTimeout(timeout time.Duration) BusOption {
 	return func(cfg *busConfig) { cfg.BlockTimeout = timeout }
 }
 
 // WithRetryAfter selects the minimum pending idle time before reclaim. Zero
-// uses 1m. SubscribeWork requires a positive whole-millisecond duration greater
+// uses 1m. SubscribeTask requires a positive whole-millisecond duration greater
 // than HandlerTimeout.
 func WithRetryAfter(delay time.Duration) BusOption {
 	return func(cfg *busConfig) { cfg.RetryAfter = delay }
 }
 
 // WithHandlerTimeout bounds a selected-handler attempt's context. Zero uses
-// 30s. SubscribeWork requires positive whole milliseconds. A callback ignoring
+// 30s. SubscribeTask requires positive whole milliseconds. A callback ignoring
 // its context may keep running and must tolerate redelivery.
 func WithHandlerTimeout(timeout time.Duration) BusOption {
 	return func(cfg *busConfig) { cfg.HandlerTimeout = timeout }
+}
+
+// WithWorkPolicy bounds SubscribeTask delivery: maximum deliveries before
+// dead-lettering, retry backoff, start position and the dead-letter hook. The
+// zero policy keeps unbounded retries. A nonzero HandlerTimeout replaces the
+// handler timeout under the usual last-wins rule. RetryAfter stays the floor
+// for every retry, and backoff durations must be whole milliseconds.
+func WithWorkPolicy(policy events.DeliveryPolicy) BusOption {
+	return func(cfg *busConfig) {
+		cfg.policy = policy
+		if policy.HandlerTimeout != 0 {
+			cfg.HandlerTimeout = policy.HandlerTimeout
+		}
+	}
 }
 
 type publication struct {
@@ -265,7 +282,7 @@ func (b *Bus) publish(ctx context.Context, event events.Event) error {
 }
 
 // Subscribe receives best-effort notifications for an exact topic or "*".
-// Use SubscribeWork for reliable competing-consumer processing.
+// Use SubscribeTask for reliable competing-consumer processing.
 func (b *Bus) Subscribe(topic string, handler events.Handler) (events.Subscription, error) {
 	return b.SubscribeBroadcast(topic, handler)
 }

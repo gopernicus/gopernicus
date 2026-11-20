@@ -5,9 +5,9 @@
 // client, three facilities. It depends only on sdk facility ports and go-redis;
 // it imports no pockets and no other integration.
 //
-//   - events.Bus + events.Broadcaster — Bus: notification fanout over Redis
-//     pub/sub, with explicit SubscribeWork for reliable competing consumers
-//     over Redis Streams.
+//   - events.Bus + events.Broadcaster + events.TaskSubscriber +
+//     events.TaskAdmin — Bus: notification fanout over Redis pub/sub, with
+//     SubscribeTask for reliable competing consumers over Redis Streams.
 //   - cacher.Storer — Cacher (cacher.go): a TTL-aware distributed cache over
 //     GET/MGET/SET/DEL/SCAN.
 //   - ratelimiter.Limiter — Limiter (limiter.go): a distributed sliding-window
@@ -25,18 +25,23 @@
 // Setup uses a five-second context; underlying I/O interruption depends on the
 // caller-owned client's timeout/context configuration, which the bus preserves.
 //
-// SubscribeWork accepts an exact topic and verifies the group before returning.
+// SubscribeTask accepts an exact topic and verifies the group before returning.
 // Group members must deploy identical handler responsibilities. Compose required
 // steps into one handler because the first registration starts readers. Each
 // worker reads or reclaims one entry at a time, preserving XAUTOCLAIM cursors and
 // alternating recovery with new work. Redis 6.2 or newer is required for reclaim.
 //
 // XACK follows successful completion of every selected handler. Errors, panics,
-// cancellation, malformed records and missing handlers leave entries pending.
-// HandlerTimeout covers the whole selected-handler attempt; RetryAfter must
-// exceed it. A callback ignoring cancellation can overlap reclaim, so handlers
-// must be idempotent. Permanent poison requires host-owned repair or explicit
-// terminal disposition. There is no automatic discard, DLQ policy or trimming.
+// timeouts and malformed records are failed deliveries; shutdown and missing
+// handlers leave entries pending without counting. HandlerTimeout covers the
+// whole selected-handler attempt; RetryAfter must exceed it. A callback ignoring
+// cancellation can overlap reclaim, so handlers must be idempotent.
+//
+// WithWorkPolicy opts into bounded delivery: MaxDeliveries moves an exhausted
+// entry atomically to <prefix>dlq:<topic>, backoff raises the reclaim idle time
+// per delivery count, and the TaskAdmin methods report backlog, redeliver or
+// discard dead letters, and trim acknowledged entries. Nothing trims
+// automatically.
 //
 // Unsubscribe removes inactive topics from reads. NOGROUP recreates the group
 // at 0, so retained entries can be delivered again. There is no exactly-once

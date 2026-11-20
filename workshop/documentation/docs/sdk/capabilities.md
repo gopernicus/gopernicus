@@ -133,8 +133,13 @@ callbacks; an empty selection succeeds, so register required handlers first.
 
 `Subscribe(topic, handler)` takes an exact topic or `"*"`. Redis uses pub/sub,
 so every connected instance receives notifications and slow or disconnected
-subscribers can miss them; competing work uses the Redis integration's separate
-`SubscribeWork`. `Broadcaster` is explicit fanout and `Subscriber` is the smaller
+subscribers can miss them. Reliable competing work uses `TaskSubscriber`
+(`SubscribeTask`): at-least-once delivery bounded by a `DeliveryPolicy`
+(maximum deliveries, backoff, handler timeout, start position, `OnDeadLetter`),
+with `DeliveryAttempt(ctx)` in the handler context. `TaskAdmin` covers backlog
+stats, dead letters, redelivery and trimming. `NewMemoryTaskQueue` is the
+in-process implementation for tests, `eventstest.RunTask` is the conformance
+suite, and goredis implements both ports. `Broadcaster` is explicit fanout and `Subscriber` is the smaller
 port `WakeChannel` needs. Full admission returns `events.ErrCapacity` and a
 closed bus returns `events.ErrClosed`, both matching `sdk.ErrUnavailable`.
 Empty or `"*"` event types and empty topics or nil handlers are invalid input.
