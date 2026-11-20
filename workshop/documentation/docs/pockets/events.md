@@ -85,8 +85,9 @@ if err != nil {
 For a Redis handoff, use `outbox.NewPoller(outboxRepo, redisBus.Publish)`.
 Memory.Dispatch checks completion of the selected local handlers. Redis.Publish
 checks Redis stream acceptance and attempts best-effort notification; it does not
-wait for local or remote handlers. Redis work handlers must register through
-`SubscribeWork(ctx, exactTopic, handler)`. Ordinary Subscribe uses ephemeral
+wait for local or remote handlers. Work handlers register through the
+`events.TaskSubscriber` port, `SubscribeTask(ctx, exactTopic, handler)`, which
+goredis implements with bounded retries and dead letters. Ordinary Subscribe uses ephemeral
 notification fanout, suitable for SSE.
 
 Do not pass asynchronous Emit or wrap a no-op emitter as checked delivery.

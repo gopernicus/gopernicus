@@ -51,14 +51,14 @@ func TestBusDefaultsAndExplicitOptions(t *testing.T) {
 	b := newTestBus(t)
 	want := busConfig{log: b.log, StreamPrefix: "events:v2:", ConsumerGroup: "default", Workers: 4,
 		QueueSize: 1000, BlockTimeout: 5 * time.Second, RetryAfter: time.Minute, HandlerTimeout: 30 * time.Second}
-	if b.cfg != want || b.consumerName == "" {
+	if !reflect.DeepEqual(b.cfg, want) || b.consumerName == "" {
 		t.Fatalf("defaults = %+v, consumer = %q", b.cfg, b.consumerName)
 	}
 	explicit := newTestBus(t, WithStreamPrefix("ignored:"), WithStreamPrefix("host:v2:"), WithConsumerGroup("workers"),
 		WithWorkers(2), WithQueueSize(3), WithBlockTimeout(time.Millisecond), WithRetryAfter(time.Second), WithHandlerTimeout(100*time.Millisecond))
 	want = busConfig{log: explicit.log, StreamPrefix: "host:v2:v2:", ConsumerGroup: "workers", Workers: 2,
 		QueueSize: 3, BlockTimeout: time.Millisecond, RetryAfter: time.Second, HandlerTimeout: 100 * time.Millisecond}
-	if explicit.cfg != want {
+	if !reflect.DeepEqual(explicit.cfg, want) {
 		t.Fatalf("explicit = %+v, want %+v", explicit.cfg, want)
 	}
 	nilLogger := New(nil, WithLogger(nil))
@@ -232,7 +232,7 @@ func TestBusValidationAndClosedGating(t *testing.T) {
 	for _, subscribe := range []func() (events.Subscription, error){
 		func() (events.Subscription, error) { return b.Subscribe("topic", nil) },
 		func() (events.Subscription, error) { return b.SubscribeBroadcast("topic", nil) },
-		func() (events.Subscription, error) { return b.SubscribeWork(context.Background(), "topic", nil) },
+		func() (events.Subscription, error) { return b.SubscribeTask(context.Background(), "topic", nil) },
 	} {
 		if _, err := subscribe(); !errors.Is(err, events.ErrClosed) {
 			t.Fatalf("closed subscription = %v", err)
@@ -258,7 +258,7 @@ func TestBusWorkAttemptRecoversEachCallbackWithoutAck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.processMessage(b.cfg.StreamPrefix+"topic", "1-0", map[string]any{"record": string(raw)})
+	b.processMessage(b.cfg.StreamPrefix+"topic", "consumer", "1-0", map[string]any{"record": string(raw)}, 1)
 	if calls != 3 || acks != 0 {
 		t.Fatalf("callbacks=%d, ACKs=%d", calls, acks)
 	}
@@ -284,7 +284,7 @@ func TestBusWorkTimeoutCoversWholeAttempt(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		b.processMessage(b.cfg.StreamPrefix+"topic", "1-0", map[string]any{"record": string(raw)})
+		b.processMessage(b.cfg.StreamPrefix+"topic", "consumer", "1-0", map[string]any{"record": string(raw)}, 1)
 		if len(deadlines) != 2 || deadlines[0] != deadlines[1] || acks != 0 {
 			t.Fatalf("deadlines=%v ACKs=%d; want one deadline, no third callback or ACK", deadlines, acks)
 		}
@@ -298,12 +298,12 @@ func TestBusInvalidWorkConfigNeverCreatesGroup(t *testing.T) {
 		WithBlockTimeout(-time.Second), WithBlockTimeout(time.Millisecond + 1),
 	} {
 		b := newTestBus(t, opt)
-		if _, err := b.SubscribeWork(context.Background(), "topic", func(context.Context, events.Event) error { return nil }); !errors.Is(err, sdk.ErrInvalidInput) {
+		if _, err := b.SubscribeTask(context.Background(), "topic", func(context.Context, events.Event) error { return nil }); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("invalid config %+v = %v", b.cfg, err)
 		}
 	}
 	b := newTestBus(t)
-	if _, err := b.SubscribeWork(context.Background(), "*", func(context.Context, events.Event) error { return nil }); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, err := b.SubscribeTask(context.Background(), "*", func(context.Context, events.Event) error { return nil }); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("wildcard work = %v", err)
 	}
 }
@@ -314,8 +314,12 @@ func TestBusWorkReclaimCursorAndSingleEntryReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var scans, reads, handled, acks atomic.Int64
-	b.workSubs["topic"] = []handlerEntry{{handler: func(context.Context, events.Event) error { handled.Add(1); return nil }}}
+	var scans, reads, handled, acks, attempt atomic.Int64
+	b.workSubs["topic"] = []handlerEntry{{handler: func(ctx context.Context, _ events.Event) error {
+		attempt.Store(int64(events.DeliveryAttempt(ctx)))
+		handled.Add(1)
+		return nil
+	}}}
 	b.rdb.AddHook(busCommandHook{run: func(_ context.Context, cmd redis.Cmder) error {
 		args := cmd.Args()
 		switch cmd.Name() {
@@ -331,6 +335,11 @@ func TestBusWorkReclaimCursorAndSingleEntryReads(t *testing.T) {
 				}
 				cmd.(*redis.XAutoClaimCmd).SetVal([]redis.XMessage{{ID: "124-0", Values: map[string]any{"record": string(raw)}}}, "0-0")
 			}
+		case "xpending":
+			if args[3] != "124-0" || args[4] != "124-0" {
+				t.Errorf("delivery count lookup must select the claimed entry: %#v", args)
+			}
+			cmd.(*redis.XPendingExtCmd).SetVal([]redis.XPendingExt{{ID: "124-0", RetryCount: 2}})
 		case "xreadgroup":
 			reads.Add(1)
 			if args[len(args)-2] != b.cfg.StreamPrefix+"topic" || args[len(args)-1] != ">" {
@@ -357,6 +366,9 @@ func TestBusWorkReclaimCursorAndSingleEntryReads(t *testing.T) {
 	if scans.Load() != 2 || reads.Load() != 1 || handled.Load() != 1 || acks.Load() != 1 {
 		t.Fatalf("scans=%d reads=%d handlers=%d ACKs=%d", scans.Load(), reads.Load(), handled.Load(), acks.Load())
 	}
+	if attempt.Load() != 2 {
+		t.Fatalf("reclaimed DeliveryAttempt = %d, want the pending delivery count 2", attempt.Load())
+	}
 }
 
 func TestBusWorkSubscriptionFailureIsRetryable(t *testing.T) {
@@ -374,13 +386,13 @@ func TestBusWorkSubscriptionFailureIsRetryable(t *testing.T) {
 		return redis.Nil
 	}})
 	handler := func(context.Context, events.Event) error { return nil }
-	if _, err := b.SubscribeWork(context.Background(), "topic", handler); !errors.Is(err, failure) {
+	if _, err := b.SubscribeTask(context.Background(), "topic", handler); !errors.Is(err, failure) {
 		t.Fatal(err)
 	}
 	if b.workStarted || len(b.workSubs) != 0 {
 		t.Fatal("failed setup installed a registration or permanently started workers")
 	}
-	sub, err := b.SubscribeWork(context.Background(), "topic", handler)
+	sub, err := b.SubscribeTask(context.Background(), "topic", handler)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +416,7 @@ func TestBusWorkSubscribeCloseRaceRejectsRegistration(t *testing.T) {
 		}})
 		done := make(chan error, 1)
 		go func() {
-			_, err := b.SubscribeWork(context.Background(), "topic", func(context.Context, events.Event) error { return nil })
+			_, err := b.SubscribeTask(context.Background(), "topic", func(context.Context, events.Event) error { return nil })
 			done <- err
 		}()
 		<-entered
@@ -435,7 +447,7 @@ func TestBusUnhandledAndUnsubscribedWorkNeverAcknowledges(t *testing.T) {
 	if entries[0].handler != nil || len(b.activeTopics()) != 0 {
 		t.Fatal("unsubscribe retained its handler graph or active topic")
 	}
-	b.processMessage(b.cfg.StreamPrefix+"topic", "1-0", map[string]any{"record": `{"event_id":"id","type":"topic"}`})
+	b.processMessage(b.cfg.StreamPrefix+"topic", "consumer", "1-0", map[string]any{"record": `{"event_id":"id","type":"topic"}`}, 1)
 	if calls != 0 || acks != 0 {
 		t.Fatalf("unhandled entry: callbacks=%d ACKs=%d", calls, acks)
 	}

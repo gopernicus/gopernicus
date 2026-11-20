@@ -140,7 +140,7 @@ func TestBusLiveUnsubscribeLeavesClaimedWorkForPeer(t *testing.T) {
 	first := newLiveBus(t, client, opts)
 	t.Cleanup(releaseRead)
 	var removedCalls atomic.Int64
-	sub, err := first.SubscribeWork(ctx, "topic", func(context.Context, events.Event) error { removedCalls.Add(1); return nil })
+	sub, err := first.SubscribeTask(ctx, "topic", func(context.Context, events.Event) error { removedCalls.Add(1); return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestBusLiveUnsubscribeLeavesClaimedWorkForPeer(t *testing.T) {
 	}
 	peer := newLiveBus(t, rdb, opts)
 	delivered := make(chan events.Record, 4)
-	if _, err := peer.SubscribeWork(ctx, "topic", func(_ context.Context, event events.Event) error {
+	if _, err := peer.SubscribeTask(ctx, "topic", func(_ context.Context, event events.Event) error {
 		delivered <- event.(events.RemoteEvent).Record
 		return nil
 	}); err != nil {

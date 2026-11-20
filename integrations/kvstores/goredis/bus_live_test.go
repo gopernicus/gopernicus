@@ -100,7 +100,7 @@ func TestBusLiveRecordPreservedAcrossBothPaths(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := receiver.SubscribeWork(ctx, "opaque", func(_ context.Context, e events.Event) error {
+	if _, err := receiver.SubscribeTask(ctx, "opaque", func(_ context.Context, e events.Event) error {
 		work <- e.(events.RemoteEvent).Record
 		return nil
 	}); err != nil {
@@ -144,7 +144,7 @@ func TestBusLiveWorkFailuresRetryWithoutBlockingFreshWork(t *testing.T) {
 			var attempts atomic.Int64
 			first := make(chan struct{})
 			delivered := make(chan events.Record, 4)
-			if _, err := b.SubscribeWork(ctx, "topic", func(handlerCtx context.Context, event events.Event) error {
+			if _, err := b.SubscribeTask(ctx, "topic", func(handlerCtx context.Context, event events.Event) error {
 				record := event.(events.RemoteEvent).Record
 				if record.EventID == "retry" && attempts.Add(1) == 1 {
 					close(first)
@@ -203,7 +203,7 @@ func TestBusLiveMalformedRecordsRemainPending(t *testing.T) {
 		}
 	}
 	delivered := make(chan events.Record, 1)
-	if _, err := b.SubscribeWork(ctx, "topic", func(_ context.Context, event events.Event) error {
+	if _, err := b.SubscribeTask(ctx, "topic", func(_ context.Context, event events.Event) error {
 		delivered <- event.(events.RemoteEvent).Record
 		return nil
 	}); err != nil {
@@ -251,7 +251,7 @@ func TestBusLiveReclaimsAnotherConsumerPendingEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	delivered := make(chan events.Record, 1)
-	if _, err := b.SubscribeWork(ctx, "topic", func(_ context.Context, event events.Event) error {
+	if _, err := b.SubscribeTask(ctx, "topic", func(_ context.Context, event events.Event) error {
 		delivered <- event.(events.RemoteEvent).Record
 		return nil
 	}); err != nil {
@@ -266,7 +266,7 @@ func TestBusLiveGroupLossRecreatesAndResumes(t *testing.T) {
 	rdb, ctx, opts := liveBusClient(t)
 	b := newLiveBus(t, rdb, opts)
 	delivered := make(chan events.Record, 8)
-	if _, err := b.SubscribeWork(ctx, "topic", func(_ context.Context, event events.Event) error {
+	if _, err := b.SubscribeTask(ctx, "topic", func(_ context.Context, event events.Event) error {
 		delivered <- event.(events.RemoteEvent).Record
 		return nil
 	}); err != nil {

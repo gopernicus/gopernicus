@@ -6,7 +6,7 @@ A multi-port Redis connector wrapping exactly one third-party library —
 
 | type | sdk port | rail |
 |---|---|---|
-| `goredis.Bus` | `events.Bus` + `events.Broadcaster` | Notifications via pub/sub; explicit reliable `SubscribeWork` via Streams |
+| `goredis.Bus` | `events.Bus` + `events.Broadcaster` | Notifications via pub/sub; explicit reliable `SubscribeTask` via Streams |
 | `goredis.Cacher` | `cacher.Storer` | TTL cache over GET/MGET/SET/DEL/SCAN |
 | `goredis.Limiter` | `ratelimiter.Limiter` | sliding-window rate limit via an atomic Lua script |
 
@@ -53,12 +53,13 @@ limiter := goredis.NewLimiter(rdb, goredis.WithLimiterKeyPrefix("ratelimit:"))
 
 `New(rdb, opts ...BusOption)` keeps the required client explicit. Bus settings
 use `WithLogger`, `WithStreamPrefix`, `WithConsumerGroup`, `WithWorkers`,
-`WithQueueSize`, `WithBlockTimeout`, `WithRetryAfter`, and `WithHandlerTimeout`.
+`WithQueueSize`, `WithBlockTimeout`, `WithRetryAfter`, `WithHandlerTimeout` and
+`WithWorkPolicy`.
 No options uses `slog.Default()`, prefix `"events:"`, group `"default"`, 4 workers,
 a queue of 1000, block timeout 5s, retry after 1m, and handler timeout 30s.
 A nil logger, empty prefix/group, nonpositive worker/queue count, and zero
 individual durations select those defaults. Negative/fractional work durations
-remain errors at `SubscribeWork`; retry after must exceed handler timeout.
+remain errors at `SubscribeTask`; retry after must exceed handler timeout.
 
 Options configure private construction settings in order; the last value for a
 setting wins. All settings resolve before the publisher goroutines start. The
@@ -198,7 +199,8 @@ client:
 | `Emit(ctx, event)` | Bounded asynchronous admission; encoding/publication failures are logged. Returns `events.ErrCapacity` when the queue is full. |
 | `Publish(ctx, event)` | Waits for XADD acceptance, then attempts best-effort pub/sub fanout. Returns acceptance errors; it does not wait for or force local handlers. |
 | `Subscribe(topic, handler)` / `SubscribeBroadcast(topic, handler)` | Notification fanout for an exact topic or `"*"`; waits for Redis subscription acknowledgment before success. No replay for disconnected subscribers. |
-| `SubscribeWork(ctx, topic, handler)` | Reliable competing-consumer work for one exact topic; validates configuration and creates its group before success. |
+| `SubscribeTask(ctx, topic, handler)` | `events.TaskSubscriber`: reliable competing-consumer work for one exact topic; validates configuration and creates its group before success. |
+| `BacklogStats`, `DeadLetters`, `Redeliver`, `DiscardDeadLetter`, `Trim` | `events.TaskAdmin`: backlog health, dead-letter disposition and retention for the bus's consumer group. |
 
 A nil result from `Emit` confirms only queue admission. Use `Publish` as a checked
 outbox delivery callback. Both publication paths write one canonical
@@ -232,8 +234,11 @@ Each worker claims one entry from one stream at a time. It alternates new reads
 with `XAUTOCLAIM` recovery of idle pending entries (Redis 6.2 or newer), keeping
 scan cursors so older pending work remains reachable. Unsubscribe removes the
 active topic when its final local registration leaves. Already claimed work with
-no current handler stays pending for a peer. If a group disappears, readers
-recreate it at `0`; retained entries can therefore be delivered again.
+no current handler stays pending for a peer, and never counts toward
+dead-lettering. A new group starts at `0` (`events.StartEarliest`, the default)
+or at `$` with `DeliveryPolicy.Start: events.StartLatest`. If a group disappears,
+readers always recreate it at `0`; retained entries can therefore be delivered
+again.
 
 `HandlerTimeout` covers the **entire selected-handler attempt**, and
 `RetryAfter` must exceed it. Both durations and `BlockTimeout` must be positive
@@ -242,22 +247,55 @@ stop a callback that ignores cancellation. Such a callback may overlap a reclaim
 so idempotency is required. There is no distributed exactly-once guarantee.
 
 Only successful completion of every selected handler permits XACK. Handler
-errors, panics, timeouts, cancellation, malformed envelopes, stream/type mismatch
-and missing handlers leave work pending. One callback panic does not skip other
-selected handlers. Failures are logged; reclaim retries them without preventing
-fresh work from being read.
+errors, panics, timeouts, malformed envelopes and stream/type mismatch are failed
+deliveries. Shutdown cancellation and missing handlers leave work pending without
+counting as a failure. One callback panic does not skip other selected handlers.
+Failures are logged; reclaim retries them without preventing fresh work from
+being read. Handlers read the 1-based attempt with `events.DeliveryAttempt(ctx)`:
+fresh reads are attempt 1, and reclaimed entries carry their Redis delivery count.
 
-Permanent poison remains pending and observable until the host repairs it or
-makes an explicit terminal disposition using its Redis client. There is no
-automatic discard, maximum-attempt policy or DLQ framework. There is also no
-automatic stream trimming: hosts own retention, archival and deletion after
-acknowledgments, and should inspect pending state before removing entries.
+### Bounded delivery, backoff and dead letters
+
+`WithWorkPolicy(events.DeliveryPolicy{...})` is opt-in. The zero policy keeps
+unbounded retries.
+
+- `MaxDeliveries: n` dead-letters an entry when delivery `n` fails. A Lua script
+  checks that this consumer still owns the pending delivery, so competing
+  consumers dead-letter it exactly once. In the same script it `XADD`s the
+  original envelope bytes to `<prefix>dlq:<topic>` with the error, delivery
+  count, consumer, group and time, then `XACK`s the entry. It also `XDEL`s the
+  entry when this group is the stream's only group. With several groups on one
+  stream, the entry is only acknowledged, because `XDEL` would remove it for the
+  other groups too. In that setup, recreating the group can deliver an
+  already dead-lettered entry again; `Trim` reclaims its space later. Malformed
+  envelopes are dead-lettered with their raw fields. Avoid topic names that begin
+  with `dlq:`, which would share a key with another topic's dead letters.
+- `BackoffBase`/`BackoffMax` set the minimum idle time before retry `n+1` to
+  `min(base·2^(n−1), max)`, with `RetryAfter` as the floor. With backoff on, a
+  worker scans `XPENDING` and then `XCLAIM`s each entry with its own minimum idle,
+  instead of using `XAUTOCLAIM`. Backoff durations must be whole milliseconds.
+- `OnDeadLetter` runs once per dead letter after the move commits, outside the
+  bus locks, with its panic recovered. Every dead letter is also logged at ERROR.
+
+`BacklogStats(ctx, topic)` reports pending count, the age of the oldest entry the
+group has not acknowledged (pending or still unread, so a stalled group shows a
+growing age), and the dead-letter count. `DeadLetters(ctx, topic, limit)` lists
+them oldest first. `Redeliver` atomically moves one back onto its topic as a new
+entry with a fresh delivery count and the same `EventID`. `DiscardDeadLetter`
+removes one.
+
+`Trim(ctx, topic, olderThan)` removes, with `XTRIM MINID`, entries older than
+`olderThan` that **every** group on the stream has acknowledged. The floor is each
+group's oldest pending entry, or the entry after its last-delivered id. A stream
+with no group is never trimmed. Nothing trims automatically, and dead-letter
+streams are never trimmed; hosts schedule `Trim` and dispose of dead letters
+themselves.
 
 ### Upgrade from the previous bus
 
 `EmitOption`/`WithSync`, `Options.BatchSize` and `Options.MaxLen` are removed.
 Replace checked publication with `Publish`. `Subscribe` now means notification
-fanout; migrate reliable work handlers to `SubscribeWork(ctx, exactTopic, handler)`.
+fanout; migrate reliable work handlers to `SubscribeTask(ctx, exactTopic, handler)`.
 The previous unconditional acknowledgment of failed work is gone.
 
 All stream and broadcast prefixes append `v2:`, including custom prefixes. The
@@ -312,7 +350,11 @@ the host owns the shared Redis client.
   coercion, `Config` defaulting via the env tags, `Open`'s fail-fast against an
   unreachable address, `ClientOption` wiring, and the logging/tracing hooks
   driven directly with a fake `next` — **no Redis required**.
-- **Live** (`conformance_test.go`, `bus_live_test.go`, `bus_lifecycle_live_test.go`): the shared `sdk/capabilities/events/eventstest`,
+- **Live** (`conformance_test.go`, `bus_live_test.go`, `bus_lifecycle_live_test.go`,
+  `bus_work_live_test.go`): `eventstest.RunTask` for the reliable work contract
+  across two competing buses, plus sole-group recreation not resurrecting a dead
+  letter, multi-group acknowledgment without `XDEL`, malformed dead letters and
+  unhandled claims never dead-lettering; the shared `sdk/capabilities/events/eventstest`,
   `sdk/capabilities/cacher/cachertest`, and `sdk/capabilities/ratelimiter/ratelimitertest` suites plus a
   cross-instance broadcast fan-out test and an end-to-end `Open` round trip with
   hooks installed, **env-gated on `REDIS_TEST_ADDR`** with a loud skip so

@@ -170,7 +170,7 @@ For events, `Emit(ctx, event)` queues bounded asynchronous publication;
 `Publish(ctx, event)` checks XADD acceptance and then attempts best-effort pub/sub
 notification. Publish does not invoke local handlers. `Subscribe` and
 `SubscribeBroadcast` receive ephemeral fanout for an exact topic or `"*"`.
-Use `SubscribeWork(ctx, exactTopic, handler)` for reliable competing consumers.
+Use `SubscribeTask(ctx, exactTopic, handler)` for reliable competing consumers.
 Instances in one ConsumerGroup must deploy the same handler responsibilities for
 each topic. See [SDK events](../sdk/capabilities.md#events)
 for admission errors, event ownership and checked local dispatch.
@@ -190,13 +190,16 @@ Unsubscribe stops future topic selection; a read already in progress can still
 claim an entry, which stays pending without a current handler. Lost groups are
 recreated from the start, so retained entries can be delivered again. Timeouts
 cancel callback contexts but cannot stop callbacks that ignore them; redelivery
-can overlap. Handlers must be idempotent. There is no automatic poison discard,
-maximum attempt count or dead-letter mechanism: hosts monitor pending entries and
-own repair or explicit terminal disposition through their Redis client.
+can overlap. Handlers must be idempotent. Without a policy, poison retries
+forever. `WithWorkPolicy(events.DeliveryPolicy{...})` adds a maximum delivery
+count that dead-letters exhausted entries to `<prefix>dlq:<topic>` exactly once,
+plus retry backoff and an `OnDeadLetter` hook. The bus implements
+`events.TaskAdmin` (`BacklogStats`, `DeadLetters`, `Redeliver`,
+`DiscardDeadLetter`, `Trim`) for health checks and disposition.
 
 The former event-bus MaxLen and BatchSize options are removed. Streams are never
-automatically trimmed; hosts own retention and archival, considering every
-consumer group before deleting acknowledged records. Stop producers/pollers,
+automatically trimmed; hosts schedule `Trim`, which only removes entries every
+consumer group has acknowledged. Stop producers/pollers,
 close the bus and await its callbacks/publications, then close the shared client.
 A Close deadline reports incomplete draining and can be followed by another Close.
 
