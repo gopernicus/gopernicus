@@ -7,7 +7,8 @@
 //
 // The common port provides notifications: healthy subscribe-then-emit delivery,
 // wildcard matching, unsubscribe, input validation, and shared shutdown behavior.
-// Memory.Dispatch and reliable Redis work are tested separately. Noop deliberately
+// Memory.Dispatch is tested separately. RunTask (task.go) is the reliable
+// TaskSubscriber + TaskAdmin contract. Noop deliberately
 // disables notifications and does not run this delivery suite.
 package eventstest
 
