@@ -3,6 +3,7 @@ package goredis
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -146,5 +147,30 @@ func TestBusLiveNoHandlerClaimNeverDeadLetters(t *testing.T) {
 	}
 	if pending := b.rdb.XPending(ctx, stream, b.cfg.ConsumerGroup).Val(); pending.Count != 1 {
 		t.Fatalf("unhandled entry pending = %d, want 1", pending.Count)
+	}
+}
+
+// errorCounter counts records at or above slog.LevelError.
+type errorCounter struct{ n atomic.Int32 }
+
+func (h *errorCounter) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= slog.LevelError
+}
+func (h *errorCounter) Handle(context.Context, slog.Record) error { h.n.Add(1); return nil }
+func (h *errorCounter) WithAttrs([]slog.Attr) slog.Handler        { return h }
+func (h *errorCounter) WithGroup(string) slog.Handler             { return h }
+
+// An idle task reader must see Redis's empty BLOCK reply, not a socket read
+// timeout, on a client from Open (context timeouts on).
+func TestBusLiveIdleTaskReadLogsNoErrors(t *testing.T) {
+	rdb, ctx, opts := liveBusClient(t)
+	counter := &errorCounter{}
+	b := newLiveBus(t, rdb, append(opts, WithLogger(slog.New(counter))))
+	if _, err := b.SubscribeTask(ctx, "idle", func(context.Context, events.Event) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(15 * 20 * time.Millisecond) // ~15 idle BLOCK periods
+	if n := counter.n.Load(); n != 0 {
+		t.Fatalf("idle task reader logged %d errors, want 0", n)
 	}
 }

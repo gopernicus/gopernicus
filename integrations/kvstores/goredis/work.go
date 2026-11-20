@@ -185,7 +185,10 @@ func (b *Bus) consumeLoop(worker int) {
 		if len(topics) > 1 {
 			block = min(block, idlePoll)
 		}
-		ctx, cancel := context.WithTimeout(b.ctx, block)
+		// Clients from Open enable ContextTimeoutEnabled, so the ctx deadline
+		// becomes the socket read deadline. It must outlast BLOCK, or every idle
+		// read races Redis's empty reply and fails with an i/o timeout.
+		ctx, cancel := context.WithTimeout(b.ctx, block+opTimeout)
 		results, err := b.rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
 			Group: b.cfg.ConsumerGroup, Consumer: consumer,
 			Streams: []string{stream, ">"}, Count: 1, Block: block}).Result()
