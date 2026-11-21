@@ -25,6 +25,7 @@ type refOAuth2 struct{ *reference }
 var _ oauth2.Repository = refOAuth2{}
 var _ oauth2.CodeAuthenticationRepository = refOAuth2{}
 var _ session.ManagementRepository = refOAuth2{}
+var _ session.DelegatedRevoker = refOAuth2{}
 
 func (r refOAuth2) PutClient(ctx context.Context, c oauth2.Client) error {
 	if err := ctx.Err(); err != nil {
@@ -361,4 +362,28 @@ func (r refOAuth2) RevokeAllForUser(ctx context.Context, userID string, now time
 func cloneOAuthSession(s session.Session) session.Session {
 	s.Authentication.Methods = slices.Clone(s.Authentication.Methods)
 	return s
+}
+
+func (r refOAuth2) RevokeDelegatedForUser(ctx context.Context, userID string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.users[userID]; !ok {
+		return 0, sdk.ErrNotFound
+	}
+	revoked := 0
+	for id, s := range r.sessions {
+		if s.UserID == userID && s.Profile == session.ProfileDelegated {
+			r.deleteOAuthSession(id)
+			revoked++
+		}
+	}
+	for hash, c := range r.oauthCodes {
+		if c.UserID == userID {
+			delete(r.oauthCodes, hash)
+		}
+	}
+	return revoked, nil
 }

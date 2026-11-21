@@ -17,6 +17,7 @@ type SessionManagementService interface {
 	ListUserSessions(context.Context, string, list.Request) (list.Page[session.Session], error)
 	RevokeUserSession(context.Context, string, string) error
 	RevokeAllUserSessions(context.Context, string) error
+	RevokeDelegatedUserSessions(context.Context, string) error
 }
 
 type OAuth2Config struct {

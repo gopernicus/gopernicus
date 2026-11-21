@@ -324,6 +324,68 @@ func TestOAuth2HTTPIndependentSessions(t *testing.T) {
 	h.resource("/mcp", b.AccessToken, 401)
 }
 
+// revokeDelegated posts the JSON revoke-delegated route from the signed-in
+// browser with the double-submit token from GET /auth/csrf.
+func (h *oauthHTTPProof) revokeDelegated() *http.Response {
+	h.t.Helper()
+	res, body := h.do(h.browser, "GET", "/auth/csrf", "", "", "", false)
+	var csrf struct {
+		Token string `json:"csrf_token"`
+	}
+	if res.StatusCode != 200 || json.Unmarshal(body, &csrf) != nil || csrf.Token == "" {
+		h.t.Fatalf("GET /auth/csrf = %d %s", res.StatusCode, body)
+	}
+	req, err := http.NewRequest("POST", h.server.URL+"/auth/connections/revoke-delegated", nil)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	req.Header.Set("Origin", h.server.URL)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("X-CSRF-Token", csrf.Token)
+	res, err = h.browser.Do(req)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	res.Body.Close()
+	return res
+}
+
+// TestOAuth2HTTPRevokeDelegatedKeepsBrowser drives "disconnect every app":
+// both connections end, a pending approval can no longer be redeemed, and the
+// browser stays signed in and can connect again.
+func TestOAuth2HTTPRevokeDelegatedKeepsBrowser(t *testing.T) {
+	t.Parallel()
+	h := newOAuthHTTPProof(t, true)
+	h.login()
+	a, b := h.connect(), h.connect()
+	pending := h.authorize()
+	if len(h.inventory()) != 3 {
+		t.Fatal("setup: want the web session and two connections")
+	}
+	res := h.revokeDelegated()
+	if res.StatusCode != 204 || len(res.Cookies()) != 0 {
+		t.Fatalf("revoke-delegated = %d cookies=%v, want 204 and no cookie change", res.StatusCode, res.Cookies())
+	}
+	left := h.inventory()
+	if len(left) != 1 || !left[0].FirstParty() {
+		t.Fatalf("inventory after revoke-delegated = %+v, want only the web session", left)
+	}
+	for _, pair := range []oauth2.TokenResponse{a, b} {
+		h.resource("/mcp", pair.AccessToken, 401)
+		if _, status := h.refresh(pair); status != 400 {
+			t.Fatalf("a revoked connection refreshed: %d", status)
+		}
+	}
+	if _, status := h.redeem(pending, proofVerifier); status != 400 {
+		t.Fatal("a pending approval was redeemed after revoke-delegated")
+	}
+	if res, _ := h.do(h.browser, "GET", "/auth/connections", "", "", "", false); res.StatusCode != 200 {
+		t.Fatalf("the browser was signed out: GET /auth/connections = %d", res.StatusCode)
+	}
+	c := h.connect()
+	h.resource("/mcp", c.AccessToken, 200)
+}
+
 func TestOAuth2HTTPRefreshReplayRevokesOnlyConnection(t *testing.T) {
 	t.Parallel()
 	h := newOAuthHTTPProof(t, true)

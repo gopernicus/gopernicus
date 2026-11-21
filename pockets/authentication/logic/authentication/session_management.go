@@ -23,6 +23,12 @@ const (
 // unwired capability is absent.
 var ErrGlobalRevocationUnsupported = fmt.Errorf("auth: global session revocation is not wired: %w", sdk.ErrNotFound)
 
+// ErrDelegatedRevocationUnsupported is returned by RevokeDelegatedUserSessions
+// when Repositories.SessionManagement does not implement
+// session.DelegatedRevoker. It wraps sdk.ErrNotFound: an unwired capability is
+// absent.
+var ErrDelegatedRevocationUnsupported = fmt.Errorf("auth: delegated session revocation is not wired: %w", sdk.ErrNotFound)
+
 // ListUserSessions is an owner-constrained inventory. The trusted caller must
 // authorize userID; bundled HTTP derives it from a live first-party session.
 func (s *Service) ListUserSessions(ctx context.Context, userID string, req list.Request) (list.Page[session.Session], error) {
@@ -52,6 +58,29 @@ func (s *Service) RevokeAllUserSessions(ctx context.Context, userID string) erro
 		return err
 	}
 	s.recordSecurityEvent(ctx, securityEventInput{Type: securityevent.TypeAllSessionsRevoked, Status: securityevent.StatusSuccess, UserID: userID})
+	return nil
+}
+
+// RevokeDelegatedUserSessions ends every app connection of userID — each
+// delegated session with its step-up grants — and fences their approved but
+// unredeemed authorization codes, keeping the first-party sessions: the person
+// stays signed in. It records oauth2_connections_revoked with the count. The
+// trusted caller must authorize userID; bundled HTTP derives it from a live
+// first-party session. A store without session.DelegatedRevoker →
+// ErrDelegatedRevocationUnsupported.
+func (s *Service) RevokeDelegatedUserSessions(ctx context.Context, userID string) error {
+	if s.sessionManagement == nil || userID == "" {
+		return sdk.ErrForbidden
+	}
+	revoker, ok := s.sessionManagement.(session.DelegatedRevoker)
+	if !ok {
+		return ErrDelegatedRevocationUnsupported
+	}
+	n, err := revoker.RevokeDelegatedForUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+	s.recordSecurityEvent(ctx, securityEventInput{Type: securityevent.TypeOAuth2ConnectionsRevoked, Status: securityevent.StatusSuccess, UserID: userID, Details: map[string]any{"sessions": n}})
 	return nil
 }
 

@@ -85,6 +85,7 @@ the host's own frontend" below). No DCR or scope vocabulary is exposed.
 | `GET /auth/connections` | Live first-party cookie, JSON; the owner's paginated live sessions, web and delegated |
 | `POST /auth/connections/{id}/revoke` | Same owner, Origin and `X-CSRF-Token`; revoke one session, 204 |
 | `POST /auth/connections/revoke-all` | Same owner, Origin and `X-CSRF-Token`; revoke every session (and fence outstanding codes), 204 |
+| `POST /auth/connections/revoke-delegated` | Same owner, Origin and `X-CSRF-Token`; revoke every app connection (delegated session) and fence outstanding codes, keeping the web sessions signed in, 204 (no cookie change). Needs a `SessionManagement` store that implements `session.DelegatedRevoker` (both bundled stores do); otherwise 404 |
 
 The authorize and sessions pages admit only first-party access tokens, never a
 provider token, so `WithOAuth2` beside `WithExternal` needs no explicit
@@ -5174,8 +5175,9 @@ CALL rather than per state transition — a replayed revoke of the same key writ
 a second row, because the revoke path carries only the key id and
 `APIKeyRepository` has no Get-by-id to read the prior state. Their `Actor` is the
 principal resolved from the request context, never a caller-supplied creator
-string. Session management records `session_revoked` (Details `session_id`) and
-`all_sessions_revoked`; the operator directory records `user_directory_read` once
+string. Session management records `session_revoked` (Details `session_id`),
+`all_sessions_revoked` and `oauth2_connections_revoked` (Details `sessions`, the
+count ended); the operator directory records `user_directory_read` once
 per successful `ListUsers` or `GetUserSummary` call (`Actor` from
 `sdk.PrincipalFromContext`; Details `page` and, for one user, `target_user_id` —
 signatures unchanged); the OAuth2 server records `oauth2_consent_approved`,
