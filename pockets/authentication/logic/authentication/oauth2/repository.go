@@ -13,6 +13,12 @@ import (
 var (
 	ErrInvalidGrant = errors.New("oauth2: invalid grant")
 	ErrRefreshReuse = errors.New("oauth2: refresh credential reused")
+	// ErrRefreshSpent is returned only by
+	// RefreshGraceRepository.RotateRefreshWithSuccessor for a retained spent
+	// hash with the correct binding, typically the loser of a concurrent
+	// rotation. Unlike RotateRefresh it commits nothing: the service decides
+	// between the grace answer and the revoking RotateRefresh.
+	ErrRefreshSpent = errors.New("oauth2: refresh credential already rotated")
 )
 
 // Client is a validated, bounded public-client metadata snapshot. It contains no
@@ -91,6 +97,39 @@ type Repository interface {
 	// Prune removes expired codes, metadata and refresh history only after its
 	// connection horizon. It never removes history of a usable connection.
 	Prune(ctx context.Context, now time.Time) error
+}
+
+// RefreshSuccessor is what a spent refresh row recorded under
+// RefreshGraceRepository: its session, when it was rotated, and the opaque
+// ciphertext of the refresh token that replaced it. The store never sees the
+// raw token.
+type RefreshSuccessor struct {
+	SessionID  string
+	RotatedAt  time.Time
+	Ciphertext string
+}
+
+// RefreshGraceRepository is the OPTIONAL refresh-reuse grace capability
+// (Config.RefreshReuseGrace), backed by two nullable columns on
+// oauth_refresh_history (migration 0031). The service asserts it on
+// Repositories.OAuth2 only when the grace is set, so an unwired store never
+// reads or writes a column it has not migrated.
+type RefreshGraceRepository interface {
+	// RotateRefreshWithSuccessor is RotateRefresh's contract with two
+	// differences. The spent row it retains records rotated_at = Refresh.Now
+	// and successor, an opaque ciphertext stored as given. A retained spent
+	// hash with the correct binding commits NOTHING and returns ErrRefreshSpent
+	// (never ErrRefreshReuse); the service then revokes through RotateRefresh
+	// unless the grace applies.
+	RotateRefreshWithSuccessor(ctx context.Context, refresh Refresh, successor string) (session.Session, error)
+	// GetRefreshSuccessor reads the spent row for hash with no lock and no
+	// write. sdk.ErrNotFound when there is no such row, or it recorded no
+	// rotation time or no ciphertext (written by RotateRefresh, or cleared by
+	// Prune).
+	GetRefreshSuccessor(ctx context.Context, hash string) (RefreshSuccessor, error)
+	// ProbeRefreshGraceSchema reports sdk.ErrNotFound when migration 0031 is
+	// absent.
+	ProbeRefreshGraceSchema(ctx context.Context) error
 }
 
 // CodeAuthenticationRepository is the OPTIONAL delegated-assurance capability

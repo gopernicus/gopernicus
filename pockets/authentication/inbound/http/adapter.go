@@ -82,10 +82,13 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		return nil, fmt.Errorf("authentication HTTP: Authentication is required: %w", sdk.ErrInvalidInput)
 	}
 	if cfg.OAuth2 != nil {
-		for _, dep := range []any{cfg.OAuth2.Service, cfg.OAuth2.Sessions, cfg.OAuth2.Views, cfg.OAuth2.Limiter, cfg.Views} {
+		for _, dep := range []any{cfg.OAuth2.Service, cfg.OAuth2.Sessions, cfg.OAuth2.Limiter} {
 			if nilDependency(dep) {
-				return nil, fmt.Errorf("authentication HTTP: OAuth2 requires service, sessions, limiter and views: %w", sdk.ErrInvalidInput)
+				return nil, fmt.Errorf("authentication HTTP: OAuth2 requires service, sessions and limiter: %w", sdk.ErrInvalidInput)
 			}
+		}
+		if err := validateOAuth2Consent(cfg.OAuth2, cfg.Views); err != nil {
+			return nil, err
 		}
 	}
 	if cfg.HTMLPolicy != nil && nilDependency(cfg.Views) {

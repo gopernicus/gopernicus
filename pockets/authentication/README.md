@@ -64,8 +64,10 @@ Here `oauth2` is `logic/authentication/oauth2`, and `oauthout` is
 secret from its secret manager; the authorization server keeps only its SHA-256
 hash in configuration. Multiple hashes support secret rotation. Never share the
 JWT signing key with the MCP server. Root construction requires the OAuth store,
-owner-constrained session management, trusted client resolver, browser views and
-consent views before enabling the feature. No DCR or scope vocabulary is exposed.
+owner-constrained session management, a trusted client resolver, and exactly one
+consent lane before enabling the feature: `Views` (consent views, which also need
+the browser views) or `ConsentPath` (the host's own consent page; see "Consent in
+the host's own frontend" below). No DCR or scope vocabulary is exposed.
 
 | Route | Purpose and authentication |
 | --- | --- |
@@ -75,13 +77,49 @@ consent views before enabling the feature. No DCR or scope vocabulary is exposed
 | `POST /auth/oauth2/token` | Code + S256 verifier; rotating refresh; authenticated restricted exchange |
 | `POST /auth/oauth2/revoke` | Public client ID plus its refresh/access credential; idempotent |
 | `POST /auth/oauth2/introspect` | Confidential MCP client authentication; live MCP token validation |
-| `GET /auth/sessions` | Live first-party browser; owner's paginated live sessions |
-| `POST /auth/sessions/{id}/revoke` | Same owner, origin and CSRF checks; revoke one session |
-| `POST /auth/sessions/revoke-all` | Same owner, origin and CSRF checks; revoke every session |
+| `GET /auth/sessions` | Live first-party browser; owner's paginated live sessions (`Views` lane only) |
+| `POST /auth/sessions/{id}/revoke` | Same owner, origin and CSRF checks; revoke one session (`Views` lane only) |
+| `POST /auth/sessions/revoke-all` | Same owner, origin and CSRF checks; revoke every session (`Views` lane only) |
+| `GET /auth/oauth2/consent` | `ConsentPath` lane only. Live first-party cookie, JSON; the consent model for a request token |
+| `POST /auth/oauth2/consent` | `ConsentPath` lane only. Same login, Origin and `X-CSRF-Token`; `{request, decision}` → `{redirect_uri}` |
+| `GET /auth/connections` | Live first-party cookie, JSON; the owner's paginated live sessions, web and delegated |
+| `POST /auth/connections/{id}/revoke` | Same owner, Origin and `X-CSRF-Token`; revoke one session, 204 |
+| `POST /auth/connections/revoke-all` | Same owner, Origin and `X-CSRF-Token`; revoke every session (and fence outstanding codes), 204 |
 
 The authorize and sessions pages admit only first-party access tokens, never a
 provider token, so `WithOAuth2` beside `WithExternal` needs no explicit
 `BrowserLoginPath`; a provider-cookie-only browser goes to login with `recover=1`.
+
+### Consent in the host's own frontend (`ConsentPath`)
+
+A host with its own frontend (a SPA at the issuer origin) sets
+`OAuth2Config.ConsentPath` instead of `Views`, and needs no browser `Views`, goth
+or templ. No OAuth2 HTML page is mounted: the browser login, account and
+`/auth/sessions` pages stay absent unless `WithBrowser` adds them.
+
+1. `GET /auth/oauth2/authorize` validates the request (client, redirect, PKCE,
+   resource, live first-party cookie session) exactly as the server-rendered
+   lane does, then answers `303 <ConsentPath>?request=<token>`. The raw
+   authorize parameters are never forwarded. Signed out, it redirects to the
+   browser login path with a `return_to` back to the authorize URL.
+2. The consent page calls `GET /auth/oauth2/consent?request=<token>` and renders
+   `client_name`, `client_id`, `client_host`, `redirect_host`, `resource` and
+   `capability_description`. The token is short-lived (`ConsentTTL`) and bound
+   to the approving user and web session; under any other session it is
+   refused.
+3. Allow or deny posts `{"request": "<token>", "decision": "allow"|"deny"}` to
+   `POST /auth/oauth2/consent` with `X-CSRF-Token` (from `GET /auth/csrf`). The
+   response `{"redirect_uri": "…"}` is the same URL the form lane redirects to
+   (code or `error=access_denied`, plus `state` and `iss`); set
+   `window.location` to it. The redirect comes only from the signed token,
+   never from the body.
+
+The consent page is what an attacker most wants to frame, and its URL carries
+the request token. Serve it with `inbound.OAuth2ConsentPageHeaders` (no-store,
+`no-referrer`, `X-Frame-Options: DENY`, and `frame-ancestors 'none'` when the
+host sets no policy of its own). A host with its own CSP must include
+`frame-ancestors 'none'` in it. An account page lists and ends app connections
+through `/auth/connections`.
 
 Mount this optional browser/authorization-server surface at the issuer origin's
 root. Its form actions and endpoint URLs are absolute paths; a prefix registrar
@@ -164,12 +202,58 @@ audience, so admission refuses a delegated token before any MFA check.
   it on 401s delegated routes for at most `AccessTTL`.
 - Boot logs `auth: oauth2 delegated_assurance=on|off`.
 
+### OAuth2 refresh-reuse grace (opt-in)
+
+Delegated refresh rotation is strict: presenting a spent refresh token ends the
+connection (`oauth2_refresh_reuse`). A client that refreshes the same token
+twice at about the same time, for example from two processes, therefore loses
+its connection. `oauth2.Config.RefreshReuseGrace` (default 0, at most
+`oauth2.MaxRefreshReuseGrace`, 30s) adds a short window in which that second
+refresh gets the rotation already issued instead.
+
+- **What it returns.** A fresh access token and the **same** successor refresh
+  token the first refresh got. It never mints a new refresh token, so the chain
+  never forks. The audit row is `oauth2_refresh` with reason `grace_window`.
+- **What qualifies.** Only the immediate predecessor of the session's current
+  refresh token, on its own client and resource, while the session is live,
+  inside the window. A grandparent token, any reuse after the window, and a
+  reuse after the winner has already rotated again still revoke, as today. A
+  connection ended by revoke, disconnect or sign-out everywhere is never
+  covered: its session is gone.
+- **Concurrency.** The loser of a truly concurrent rotation is covered too: the
+  grace-wired store reports the lost race (`oauth2.ErrRefreshSpent`) without
+  revoking, and the service then answers from the window or revokes.
+- **Wiring.** Set `RefreshReuseEncrypter` (any `cryptids.Encrypter`, for
+  example `cryptids.NewAESGCMRing`, or an adapter over the secrets pocket's ring
+  or a KMS). The store keeps only that ciphertext of the successor, on the spent
+  row. A rotation clears the session's older ciphertexts, and `Prune` clears
+  any older than 30s. The store must implement `oauth2.RefreshGraceRepository`
+  over migration `0031_oauth_refresh_successor.sql` (pgx and turso). `New`
+  refuses `ErrRefreshReuseGraceInvalid`, `ErrRefreshReuseGraceRequires` or
+  `ErrRefreshReuseGraceSchemaMissing`. A host that leaves the grace at 0 is
+  never probed and may apply 0031 ahead of time.
+- **Trade-off.** Inside the window, a stolen predecessor token is as good as
+  the current one. Keep the window short.
+- Boot logs `refresh_reuse_grace=<duration>|off` on the `auth: oauth2` line.
+
 Production CIMD uses an explicit exact URL allowlist, HTTPS, bounded fetch/cache,
 no redirects or environment proxy, and connection-time nonpublic-address
 rejection. `WithClientTrust` adds a policy checked even on cache hits. Custom
 resolvers must maintain the same trust contract; metadata cache expiry is not an
 authorization decision. Local fixtures require explicit development-only HTTP
 and never weaken the production CIMD transport.
+
+**Native clients (RFC 8252).** A client's `redirect_uris` must be `https`, with
+one exception allowed in every runtime mode: an `http` loopback redirect on
+`localhost`, `127.0.0.1` (any `127.0.0.0/8`) or `[::1]`. Such a redirect only
+reaches the user's own machine (RFC 8252 §8.3). A registered loopback redirect
+matches a request on **any port** (§7.3), so a client that registers
+`http://localhost/callback` can use `http://localhost:3118/callback`. The scheme,
+host, path and query must still match exactly. Hosts are compared as written,
+never resolved: `localhost` does not match `127.0.0.1`. The token request must
+repeat the authorize request's redirect byte for byte, port included. Every
+other redirect, including `https` ones, matches exactly. `AllowLocalHTTP` is
+unchanged and still governs only the issuer, resource and client-id URLs.
 
 Upgrade core, SQL adapter and optional views together. Both pgx and Turso add
 `0019_oauth2_sessions.sql`; all older migration bytes remain unchanged. Export

@@ -162,6 +162,14 @@ func (s *OAuth2Store) RedeemCode(ctx context.Context, expected oauth2.Code, prop
 }
 
 func (s *OAuth2Store) RotateRefresh(ctx context.Context, refresh oauth2.Refresh) (session.Session, error) {
+	return s.rotateRefresh(ctx, refresh, nil)
+}
+
+// rotateRefresh is RotateRefresh, or with a non-nil successor
+// RotateRefreshWithSuccessor: the spent row then records rotated_at and the
+// successor ciphertext, the session's older ciphertexts are cleared, and a
+// spent presentation commits nothing and returns oauth2.ErrRefreshSpent.
+func (s *OAuth2Store) rotateRefresh(ctx context.Context, refresh oauth2.Refresh, successor *string) (session.Session, error) {
 	if refresh.Hash == "" {
 		return session.Session{}, oauth2.ErrInvalidGrant
 	}
@@ -181,6 +189,9 @@ func (s *OAuth2Store) RotateRefresh(ctx context.Context, refresh oauth2.Refresh)
 			sess.Delegation.ClientID != refresh.ClientID || sess.Delegation.Resource != refresh.Resource {
 			return oauth2.ErrInvalidGrant
 		}
+		if sess.RefreshTokenHash != refresh.Hash && successor != nil {
+			return oauth2.ErrRefreshSpent // The service decides; nothing commits.
+		}
 		if sess.RefreshTokenHash != refresh.Hash {
 			if err := deleteOAuthGrant(ctx, tx, sess.ID, sess.UserID, refresh.ClientID); err != nil {
 				return err
@@ -194,8 +205,12 @@ func (s *OAuth2Store) RotateRefresh(ctx context.Context, refresh oauth2.Refresh)
 		if err := unusedOAuthRefresh(ctx, tx, refresh.NewHash); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO oauth_refresh_history (refresh_token_hash, session_id, expires_at) VALUES (?, ?, ?)`,
-			refresh.Hash, sess.ID, tursodb.FormatTime(sess.ExpiresAt)); err != nil {
+		if successor == nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO oauth_refresh_history (refresh_token_hash, session_id, expires_at) VALUES (?, ?, ?)`,
+				refresh.Hash, sess.ID, tursodb.FormatTime(sess.ExpiresAt)); err != nil {
+				return err
+			}
+		} else if err := recordSuccessor(ctx, tx, refresh, sess.ID, sess.ExpiresAt, *successor); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE sessions SET refresh_token_hash = ?, previous_refresh_token_hash = NULL,
@@ -255,11 +270,18 @@ func (s *OAuth2Store) RevokeGrant(ctx context.Context, id, userID, clientID stri
 }
 
 func (s *OAuth2Store) Prune(ctx context.Context, now time.Time) error {
+	successors, err := s.hasSuccessorColumns(ctx)
+	if err != nil {
+		return err
+	}
 	return s.db.InTx(ctx, func(tx *tursodb.Tx) error {
 		for _, table := range []string{"oauth_authorization_codes", "oauth_clients", "oauth_refresh_history"} {
 			if _, err := tx.Exec(ctx, "DELETE FROM "+table+" WHERE expires_at <= ?", tursodb.FormatTime(now)); err != nil {
 				return err
 			}
+		}
+		if successors {
+			return pruneSuccessors(ctx, tx, now)
 		}
 		return nil
 	})

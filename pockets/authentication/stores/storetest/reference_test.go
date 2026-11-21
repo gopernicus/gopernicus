@@ -77,6 +77,14 @@ func TestReferenceOAuth2CodeAuthentication(t *testing.T) {
 	})
 }
 
+// TestReferenceOAuth2RefreshGrace runs the refresh-reuse grace suite,
+// separate from Run, against the reference implementation.
+func TestReferenceOAuth2RefreshGrace(t *testing.T) {
+	RunOAuth2RefreshGrace(t, func(t *testing.T) auth.Repositories {
+		return newReference().repositories()
+	})
+}
+
 // TestReferenceDelegatedRotationFence runs the delegated-row rotation fence,
 // separate from Run, against the reference implementation.
 func TestReferenceDelegatedRotationFence(t *testing.T) {

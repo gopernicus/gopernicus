@@ -288,6 +288,13 @@ var (
 	// 0030_oauth_code_authentication.sql absent. A host that does not set it
 	// is never probed.
 	ErrDelegatedAssuranceSchemaMissing = oauth2.ErrDelegatedAssuranceSchemaMissing
+
+	// ErrRefreshReuseGraceInvalid, ErrRefreshReuseGraceRequires and
+	// ErrRefreshReuseGraceSchemaMissing are the oauth2.Config.RefreshReuseGrace
+	// boot refusals (#381), re-exported for the same reason.
+	ErrRefreshReuseGraceInvalid       = oauth2.ErrRefreshReuseGraceInvalid
+	ErrRefreshReuseGraceRequires      = oauth2.ErrRefreshReuseGraceRequires
+	ErrRefreshReuseGraceSchemaMissing = oauth2.ErrRefreshReuseGraceSchemaMissing
 )
 
 // The S4c part 2 native-all sentinels: MFAConfig.Required all beside

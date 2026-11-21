@@ -68,13 +68,18 @@ type oauthHTTPFixture struct {
 
 func newOAuthHTTPFixture(t *testing.T, issuer ...string) *oauthHTTPFixture {
 	t.Helper()
+	return newOAuthHTTPFixtureResolving(t, oauthHTTPResolver{}, issuer...)
+}
+
+func newOAuthHTTPFixtureResolving(t *testing.T, resolver oauth2.ClientResolver, issuer ...string) *oauthHTTPFixture {
+	t.Helper()
 	canonical := delegatedIssuer
 	if len(issuer) > 0 {
 		canonical = issuer[0]
 	}
 	harness := newCredentialHarness(t, authlogic.DelegatedTokensConfig{Issuer: canonical})
 	repos := &oauthHTTPRepository{}
-	service, err := oauth2.New(oauth2.Repositories{OAuth2: repos, Users: harness.users, Sessions: harness.sess}, harness.signer, oauthHTTPResolver{}, harness.svc.Service, environment.ModeDevelopment, oauth2.Config{Issuer: canonical, MCPResource: mcpResource, APIResource: apiResource, ConfidentialClientID: "mcp-server", ConfidentialSecretHashes: [][32]byte{sha256.Sum256([]byte(oauthHTTPSecret))}})
+	service, err := oauth2.New(oauth2.Repositories{OAuth2: repos, Users: harness.users, Sessions: harness.sess}, harness.signer, resolver, harness.svc.Service, environment.ModeDevelopment, oauth2.Config{Issuer: canonical, MCPResource: mcpResource, APIResource: apiResource, ConfidentialClientID: "mcp-server", ConfidentialSecretHashes: [][32]byte{sha256.Sum256([]byte(oauthHTTPSecret))}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,5 +402,45 @@ func TestOAuthConsentPolicyAllowsOnlyValidatedCallbackOrigin(t *testing.T) {
 	writeHTMLSecurity(w, nil, "")
 	if !strings.Contains(w.Header().Get("Content-Security-Policy"), "form-action 'self';") {
 		t.Fatal("ordinary pages changed")
+	}
+}
+
+type oauthHTTPLoopbackResolver struct{}
+
+func (oauthHTTPLoopbackResolver) Resolve(_ context.Context, id string) (oauth2.Client, error) {
+	return oauth2.Client{ID: id, Name: "Native app", RedirectURIs: []string{"http://localhost/callback"}, ExpiresAt: time.Now().Add(time.Hour)}, nil
+}
+
+// TestOAuthHTTPLoopbackConsentUsesRequestedPort pins #379 at the HTTP edge:
+// against a port-less loopback registration, the consent page's form-action
+// and the approval redirect both carry the requested ephemeral port.
+func TestOAuthHTTPLoopbackConsentUsesRequestedPort(t *testing.T) {
+	f := newOAuthHTTPFixtureResolving(t, oauthHTTPLoopbackResolver{})
+	query := oauthHTTPAuthorizationQuery()
+	query.Set("redirect_uri", "http://localhost:54321/callback")
+	w := f.serve(f.request("GET", "/auth/oauth2/authorize?"+query.Encode(), "", true))
+	if w.Code != 200 || f.capture.consent.RedirectHost != "localhost" {
+		t.Fatalf("consent page: %d %s", w.Code, w.Body)
+	}
+	if !strings.Contains(w.Header().Get("Content-Security-Policy"), "form-action 'self' http://localhost:54321;") {
+		t.Fatalf("consent form-action lacks the requested port: %s", w.Header().Get("Content-Security-Policy"))
+	}
+	var csrf *http.Cookie
+	for _, cookie := range w.Result().Cookies() {
+		if cookie.Name == csrfCookieName {
+			csrf = cookie
+		}
+	}
+	form := url.Values{"request": {f.capture.consent.RequestToken}, "decision": {"allow"}, "csrf_token": {csrf.Value}}
+	r := f.request("POST", "/auth/oauth2/authorize", form.Encode(), true)
+	r.AddCookie(csrf)
+	r.Header.Set("Origin", delegatedIssuer)
+	w = f.serve(r)
+	location, err := url.Parse(w.Header().Get("Location"))
+	if err != nil || w.Code != 303 || location.Host != "localhost:54321" || location.Path != "/callback" || location.Query().Get("code") == "" {
+		t.Fatalf("approval redirect: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	if !strings.Contains(w.Header().Get("Content-Security-Policy"), "form-action 'self' http://localhost:54321;") {
+		t.Fatal("approval redirect CSP lacks the requested port")
 	}
 }
