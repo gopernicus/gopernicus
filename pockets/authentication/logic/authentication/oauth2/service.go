@@ -43,6 +43,9 @@ type Service struct {
 	// codeAuth is Repositories.OAuth2 as a CodeAuthenticationRepository, set
 	// only under Config.DelegatedAssurance.
 	codeAuth CodeAuthenticationRepository
+	// grace is Repositories.OAuth2 as a RefreshGraceRepository, set only under
+	// Config.RefreshReuseGrace.
+	grace RefreshGraceRepository
 }
 
 func New(repos Repositories, signer cryptids.JWTSigner, resolver ClientResolver, verifier TokenVerifier, mode environment.Mode, cfg Config, opts ...Option) (*Service, error) {
@@ -110,13 +113,43 @@ func New(repos Repositories, signer cryptids.JWTSigner, resolver ClientResolver,
 	if err != nil {
 		return nil, err
 	}
+	grace, err := refreshReuseGrace(repos, cfg)
+	if err != nil {
+		return nil, err
+	}
 	events := o.recorder
 	if events == nil {
 		// The zero generator selects the record-class default (UUIDv7) inside
 		// NewRecorder; a host wanting its own ids supplies WithSecurityEventRecorder.
 		events = securityevent.NewRecorder(repos.SecurityEvents, sdk.IDGenerator{}, o.now, o.logger)
 	}
-	return &Service{repos: repos, signer: signer, resolver: resolver, verifier: verifier, config: cfg, now: o.now, logger: o.logger, events: events, codeAuth: codeAuth}, nil
+	return &Service{repos: repos, signer: signer, resolver: resolver, verifier: verifier, config: cfg, now: o.now, logger: o.logger, events: events, codeAuth: codeAuth, grace: grace}, nil
+}
+
+// refreshReuseGrace checks a set Config.RefreshReuseGrace against its bound and
+// the wiring, as delegatedAssurance does for 0030: the encrypter, the
+// RefreshGraceRepository capability and its bounded schema probe. A grace of 0
+// runs nothing, so an unmigrated store boots.
+func refreshReuseGrace(repos Repositories, cfg Config) (RefreshGraceRepository, error) {
+	if cfg.RefreshReuseGrace == 0 {
+		return nil, nil
+	}
+	if cfg.RefreshReuseGrace < time.Second || cfg.RefreshReuseGrace > MaxRefreshReuseGrace {
+		return nil, ErrRefreshReuseGraceInvalid
+	}
+	grace, ok := repos.OAuth2.(RefreshGraceRepository)
+	if !ok || nilDependency(cfg.RefreshReuseEncrypter) {
+		return nil, ErrRefreshReuseGraceRequires
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), delegatedAssuranceProbeTimeout)
+	defer cancel()
+	if err := grace.ProbeRefreshGraceSchema(ctx); err != nil {
+		if errors.Is(err, sdk.ErrNotFound) {
+			return nil, ErrRefreshReuseGraceSchemaMissing
+		}
+		return nil, fmt.Errorf("oauth2: probing the refresh-reuse grace schema (%s): %w", probeErrorKind(err), sdk.ErrUnavailable)
+	}
+	return grace, nil
 }
 
 // delegatedAssurance checks a set Config.DelegatedAssurance against the wiring:

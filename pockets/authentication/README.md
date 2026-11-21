@@ -202,6 +202,40 @@ audience, so admission refuses a delegated token before any MFA check.
   it on 401s delegated routes for at most `AccessTTL`.
 - Boot logs `auth: oauth2 delegated_assurance=on|off`.
 
+### OAuth2 refresh-reuse grace (opt-in)
+
+Delegated refresh rotation is strict: presenting a spent refresh token ends the
+connection (`oauth2_refresh_reuse`). A client that refreshes the same token
+twice at about the same time, for example from two processes, therefore loses
+its connection. `oauth2.Config.RefreshReuseGrace` (default 0, at most
+`oauth2.MaxRefreshReuseGrace`, 30s) adds a short window in which that second
+refresh gets the rotation already issued instead.
+
+- **What it returns.** A fresh access token and the **same** successor refresh
+  token the first refresh got. It never mints a new refresh token, so the chain
+  never forks. The audit row is `oauth2_refresh` with reason `grace_window`.
+- **What qualifies.** Only the immediate predecessor of the session's current
+  refresh token, on its own client and resource, while the session is live,
+  inside the window. A grandparent token, any reuse after the window, and a
+  reuse after the winner has already rotated again still revoke, as today. A
+  connection ended by revoke, disconnect or sign-out everywhere is never
+  covered: its session is gone.
+- **Concurrency.** The loser of a truly concurrent rotation is covered too: the
+  grace-wired store reports the lost race (`oauth2.ErrRefreshSpent`) without
+  revoking, and the service then answers from the window or revokes.
+- **Wiring.** Set `RefreshReuseEncrypter` (any `cryptids.Encrypter`, for
+  example `cryptids.NewAESGCMRing`, or an adapter over the secrets pocket's ring
+  or a KMS). The store keeps only that ciphertext of the successor, on the spent
+  row. A rotation clears the session's older ciphertexts, and `Prune` clears
+  any older than 30s. The store must implement `oauth2.RefreshGraceRepository`
+  over migration `0031_oauth_refresh_successor.sql` (pgx and turso). `New`
+  refuses `ErrRefreshReuseGraceInvalid`, `ErrRefreshReuseGraceRequires` or
+  `ErrRefreshReuseGraceSchemaMissing`. A host that leaves the grace at 0 is
+  never probed and may apply 0031 ahead of time.
+- **Trade-off.** Inside the window, a stolen predecessor token is as good as
+  the current one. Keep the window short.
+- Boot logs `refresh_reuse_grace=<duration>|off` on the `auth: oauth2` line.
+
 Production CIMD uses an explicit exact URL allowlist, HTTPS, bounded fetch/cache,
 no redirects or environment proxy, and connection-time nonpublic-address
 rejection. `WithClientTrust` adds a policy checked even on cache hits. Custom

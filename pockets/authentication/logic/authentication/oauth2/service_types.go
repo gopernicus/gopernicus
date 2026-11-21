@@ -11,6 +11,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 )
 
 const (
@@ -18,6 +19,9 @@ const (
 	GrantRefreshToken      = "refresh_token"
 	GrantTokenExchange     = "urn:ietf:params:oauth:grant-type:token-exchange"
 	AccessTokenType        = "urn:ietf:params:oauth:token-type:access_token"
+	// MaxRefreshReuseGrace bounds Config.RefreshReuseGrace. Stores clear a
+	// successor ciphertext once it is this old.
+	MaxRefreshReuseGrace = 30 * time.Second
 )
 
 var (
@@ -35,6 +39,19 @@ var (
 	// Config.DelegatedAssurance is set and the store reports migration
 	// 0030_oauth_code_authentication.sql absent. A host that does not set the
 	// flag is never probed.
+	// ErrRefreshReuseGraceInvalid is returned by New when
+	// Config.RefreshReuseGrace is neither 0 nor between one second and
+	// MaxRefreshReuseGrace.
+	ErrRefreshReuseGraceInvalid = fmt.Errorf("oauth2: Config.RefreshReuseGrace must be 0 or between 1s and %s: %w", MaxRefreshReuseGrace, sdk.ErrInvalidInput)
+	// ErrRefreshReuseGraceRequires is returned by New when
+	// Config.RefreshReuseGrace is set without Config.RefreshReuseEncrypter or
+	// with a Repositories.OAuth2 that does not implement RefreshGraceRepository.
+	ErrRefreshReuseGraceRequires = fmt.Errorf("oauth2: Config.RefreshReuseGrace requires Config.RefreshReuseEncrypter and Repositories.OAuth2 implementing oauth2.RefreshGraceRepository: %w", sdk.ErrInvalidInput)
+	// ErrRefreshReuseGraceSchemaMissing is returned by New when
+	// Config.RefreshReuseGrace is set and the store reports migration
+	// 0031_oauth_refresh_successor.sql absent. A host that leaves the grace at
+	// 0 is never probed.
+	ErrRefreshReuseGraceSchemaMissing  = fmt.Errorf("oauth2: Config.RefreshReuseGrace requires migration 0031_oauth_refresh_successor.sql (oauth_refresh_history successor columns): %w", sdk.ErrInvalidInput)
 	ErrDelegatedAssuranceSchemaMissing = fmt.Errorf("oauth2: Config.DelegatedAssurance requires migration 0030_oauth_code_authentication.sql (oauth_authorization_codes authentication columns): %w", sdk.ErrInvalidInput)
 )
 
@@ -83,6 +100,22 @@ type Config struct {
 	// fixed at approval: refresh never re-reads it and exchange copies it,
 	// never raises it. Grants approved without it carry no level.
 	DelegatedAssurance bool
+	// RefreshReuseGrace (opt-in, default 0, at most MaxRefreshReuseGrace) lets a
+	// client that refreshes the same token twice inside the window, for example
+	// from two processes at once, get the successor rotation already issued:
+	// a fresh access token and the same successor refresh token, never a new
+	// one, so the chain never forks. Only the immediate predecessor of the
+	// session's current refresh token qualifies, on its own client and
+	// resource, while the session is live. Any other reuse, and every reuse
+	// after the window, still revokes the connection. It needs
+	// RefreshReuseEncrypter and a Repositories.OAuth2 implementing
+	// RefreshGraceRepository over migration 0031.
+	RefreshReuseGrace time.Duration
+	// RefreshReuseEncrypter seals the successor refresh token the store keeps
+	// for the window (required when RefreshReuseGrace > 0). Any
+	// cryptids.Encrypter works: cryptids.NewAESGCMRing, or an adapter over a
+	// host key service. The store only ever receives its ciphertext.
+	RefreshReuseEncrypter cryptids.Encrypter
 }
 
 // Metadata exposes immutable public protocol coordinates, never client secrets.

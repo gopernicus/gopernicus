@@ -62,6 +62,7 @@ var canonicalMigrations = []string{
 	// SOC 2 S4d part 4: the oauth_authorization_codes authentication columns.
 	// It adds no table; the columns are asserted below.
 	"0030_oauth_code_authentication.sql",
+	"0031_oauth_refresh_successor.sql",
 }
 
 // expectedTables are every CREATE TABLE the canonical set must define.

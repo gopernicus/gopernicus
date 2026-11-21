@@ -15,6 +15,10 @@ import (
 type oauthRefreshRecord struct {
 	SessionID string
 	ExpiresAt time.Time
+	// RotatedAt and Successor are the 0031 columns: zero/empty unless written
+	// by RotateRefreshWithSuccessor.
+	RotatedAt time.Time
+	Successor string
 }
 type refOAuth2 struct{ *reference }
 
@@ -163,6 +167,34 @@ func (r refOAuth2) oauthHashUsed(hash string) bool {
 }
 
 func (r refOAuth2) RotateRefresh(ctx context.Context, in oauth2.Refresh) (session.Session, error) {
+	return r.rotateRefresh(ctx, in, nil)
+}
+
+var _ oauth2.RefreshGraceRepository = refOAuth2{}
+
+func (r refOAuth2) RotateRefreshWithSuccessor(ctx context.Context, in oauth2.Refresh, successor string) (session.Session, error) {
+	if successor == "" {
+		return session.Session{}, sdk.ErrInvalidInput
+	}
+	return r.rotateRefresh(ctx, in, &successor)
+}
+
+func (r refOAuth2) GetRefreshSuccessor(ctx context.Context, hash string) (oauth2.RefreshSuccessor, error) {
+	if err := ctx.Err(); err != nil {
+		return oauth2.RefreshSuccessor{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	record, ok := r.oauthRefresh[hash]
+	if !ok || record.RotatedAt.IsZero() || record.Successor == "" {
+		return oauth2.RefreshSuccessor{}, sdk.ErrNotFound
+	}
+	return oauth2.RefreshSuccessor{SessionID: record.SessionID, RotatedAt: record.RotatedAt, Ciphertext: record.Successor}, nil
+}
+
+func (r refOAuth2) ProbeRefreshGraceSchema(ctx context.Context) error { return ctx.Err() }
+
+func (r refOAuth2) rotateRefresh(ctx context.Context, in oauth2.Refresh, successor *string) (session.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return session.Session{}, err
 	}
@@ -172,6 +204,9 @@ func (r refOAuth2) RotateRefresh(ctx context.Context, in oauth2.Refresh) (sessio
 	u, userOK := r.users[s.UserID]
 	if !ok || !userOK || !u.Active() || s.Profile != session.ProfileDelegated || s.Expired(in.Now) || s.Delegation.ClientID != in.ClientID || s.Delegation.Resource != in.Resource {
 		return session.Session{}, oauth2.ErrInvalidGrant
+	}
+	if spent && successor != nil {
+		return session.Session{}, oauth2.ErrRefreshSpent
 	}
 	if spent {
 		r.deleteOAuthSession(s.ID)
@@ -183,7 +218,17 @@ func (r refOAuth2) RotateRefresh(ctx context.Context, in oauth2.Refresh) (sessio
 	if r.oauthHashUsed(in.NewHash) {
 		return session.Session{}, sdk.ErrAlreadyExists
 	}
-	r.oauthRefresh[in.Hash] = oauthRefreshRecord{s.ID, s.ExpiresAt}
+	record := oauthRefreshRecord{SessionID: s.ID, ExpiresAt: s.ExpiresAt}
+	if successor != nil {
+		for hash, older := range r.oauthRefresh {
+			if older.SessionID == s.ID {
+				older.Successor = ""
+				r.oauthRefresh[hash] = older
+			}
+		}
+		record.RotatedAt, record.Successor = in.Now, *successor
+	}
+	r.oauthRefresh[in.Hash] = record
 	s.RefreshTokenHash = in.NewHash
 	s.PreviousRefreshTokenHash = ""
 	s.PreviousUsed = false
@@ -246,6 +291,9 @@ func (r refOAuth2) Prune(ctx context.Context, now time.Time) error {
 	for hash, record := range r.oauthRefresh {
 		if !now.Before(record.ExpiresAt) {
 			delete(r.oauthRefresh, hash)
+		} else if record.Successor != "" && !record.RotatedAt.After(now.Add(-oauth2.MaxRefreshReuseGrace)) {
+			record.Successor = ""
+			r.oauthRefresh[hash] = record
 		}
 	}
 	return nil

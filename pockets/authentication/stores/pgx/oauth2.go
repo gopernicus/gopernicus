@@ -235,6 +235,14 @@ func (s *OAuth2Store) requireUnusedRefreshHash(ctx context.Context, tx *pgxdb.Tx
 }
 
 func (s *OAuth2Store) RotateRefresh(ctx context.Context, refresh oauth2.Refresh) (session.Session, error) {
+	return s.rotateRefresh(ctx, refresh, nil)
+}
+
+// rotateRefresh is RotateRefresh, or with a non-nil successor
+// RotateRefreshWithSuccessor: the spent row then records rotated_at and the
+// successor ciphertext, the session's older ciphertexts are cleared, and a
+// spent presentation commits nothing and returns oauth2.ErrRefreshSpent.
+func (s *OAuth2Store) rotateRefresh(ctx context.Context, refresh oauth2.Refresh, successor *string) (session.Session, error) {
 	if refresh.Hash == "" || refresh.ClientID == "" || refresh.Resource == "" {
 		return session.Session{}, oauth2.ErrInvalidGrant
 	}
@@ -259,6 +267,9 @@ func (s *OAuth2Store) RotateRefresh(ctx context.Context, refresh oauth2.Refresh)
 		if err != nil {
 			return err
 		}
+		if spent && successor != nil {
+			return oauth2.ErrRefreshSpent // The service decides; nothing commits.
+		}
 		if spent {
 			if err := s.deleteDelegatedSession(ctx, tx, id, userID, refresh.ClientID); err != nil {
 				return err
@@ -272,8 +283,12 @@ func (s *OAuth2Store) RotateRefresh(ctx context.Context, refresh oauth2.Refresh)
 		if err := s.requireUnusedRefreshHash(ctx, tx, refresh.NewHash); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO `+s.table(oauthHistoryTable)+` (refresh_token_hash,session_id,expires_at) VALUES (@hash,@id,@expires)`, pgx.NamedArgs{"hash": refresh.Hash, "id": id, "expires": sess.ExpiresAt}); err != nil {
-			return pgxdb.MapError(err)
+		if successor == nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO `+s.table(oauthHistoryTable)+` (refresh_token_hash,session_id,expires_at) VALUES (@hash,@id,@expires)`, pgx.NamedArgs{"hash": refresh.Hash, "id": id, "expires": sess.ExpiresAt}); err != nil {
+				return pgxdb.MapError(err)
+			}
+		} else if err := s.recordSuccessor(ctx, tx, refresh, id, sess.ExpiresAt, *successor); err != nil {
+			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE `+s.table(sessionsTable)+` SET refresh_token_hash = @new, rotation_count = rotation_count + 1 WHERE id = @id AND user_id = @user AND session_profile = @profile AND refresh_token_hash = @old`, pgx.NamedArgs{"new": refresh.NewHash, "id": id, "user": userID, "profile": string(session.ProfileDelegated), "old": refresh.Hash}); err != nil {
 			return pgxdb.MapError(err)
@@ -373,7 +388,7 @@ func (s *OAuth2Store) Prune(ctx context.Context, now time.Time) error {
 				return pgxdb.MapError(err)
 			}
 		}
-		return nil
+		return s.pruneSuccessors(ctx, tx, now)
 	})
 }
 

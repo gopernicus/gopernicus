@@ -2,6 +2,7 @@ package oauth2
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"time"
 
@@ -70,16 +71,7 @@ func (s *Service) Refresh(ctx context.Context, req RefreshRequest) (_ TokenRespo
 	rotation := Refresh{Hash: hash, ClientID: req.ClientID, Resource: req.Resource, Now: s.now().UTC()}
 	sess, _, err := s.repos.Sessions.GetByRefreshHash(ctx, hash)
 	if errors.Is(err, sdk.ErrNotFound) {
-		// Empty NewHash cannot rotate a current token. The repository can still
-		// recognize a spent token and commit its connection's revocation.
-		_, replayErr := s.repos.OAuth2.RotateRefresh(ctx, rotation)
-		if errors.Is(replayErr, ErrRefreshReuse) {
-			s.audit(ctx, TypeRefreshReuse, "", "", req.ClientID)
-		}
-		if replayErr == nil {
-			return TokenResponse{}, ErrInvalidGrant
-		}
-		return TokenResponse{}, invalidGrantError(replayErr)
+		return s.spentRefresh(ctx, req, rotation, "", "")
 	}
 	if err != nil {
 		return TokenResponse{}, invalidGrantError(err)
@@ -93,7 +85,22 @@ func (s *Service) Refresh(ctx context.Context, req RefreshRequest) (_ TokenRespo
 	if err != nil {
 		return TokenResponse{}, err
 	}
-	if _, err := s.repos.OAuth2.RotateRefresh(ctx, rotation); err != nil {
+	rotate := s.repos.OAuth2.RotateRefresh
+	if s.grace != nil {
+		successor, err := s.config.RefreshReuseEncrypter.Encrypt(rawRefresh)
+		if err != nil {
+			return TokenResponse{}, err
+		}
+		rotate = func(ctx context.Context, rotation Refresh) (session.Session, error) {
+			return s.grace.RotateRefreshWithSuccessor(ctx, rotation, successor)
+		}
+	}
+	if _, err := rotate(ctx, rotation); err != nil {
+		if errors.Is(err, ErrRefreshSpent) {
+			// Lost a concurrent rotation: the grace may answer; otherwise the
+			// ordinary spent-token path revokes.
+			return s.spentRefresh(ctx, req, rotation, sess.UserID, sess.ID)
+		}
 		if errors.Is(err, ErrRefreshReuse) {
 			s.audit(ctx, TypeRefreshReuse, sess.UserID, sess.ID, req.ClientID)
 		}
@@ -102,6 +109,58 @@ func (s *Service) Refresh(ctx context.Context, req RefreshRequest) (_ TokenRespo
 	s.audit(ctx, TypeRefresh, sess.UserID, sess.ID, req.ClientID)
 	response.RefreshToken = rawRefresh
 	return response, nil
+}
+
+// spentRefresh handles a presented token that is not current: inside the
+// refresh-reuse grace it may get the rotation already issued; otherwise an
+// empty-NewHash RotateRefresh, which cannot rotate a current token, lets the
+// repository recognize a spent token and commit its connection's revocation.
+func (s *Service) spentRefresh(ctx context.Context, req RefreshRequest, rotation Refresh, userID, sessionID string) (TokenResponse, error) {
+	if s.grace != nil {
+		if response, ok := s.graceRefresh(ctx, req, rotation.Hash, rotation.Now); ok {
+			return response, nil
+		}
+	}
+	rotation.NewHash = ""
+	_, replayErr := s.repos.OAuth2.RotateRefresh(ctx, rotation)
+	if errors.Is(replayErr, ErrRefreshReuse) {
+		s.audit(ctx, TypeRefreshReuse, userID, sessionID, req.ClientID)
+	}
+	if replayErr == nil {
+		return TokenResponse{}, ErrInvalidGrant
+	}
+	return TokenResponse{}, invalidGrantError(replayErr)
+}
+
+// graceRefresh answers a refresh of a spent token inside
+// Config.RefreshReuseGrace with the rotation already issued: a fresh access
+// token and the stored successor refresh token. It qualifies only the
+// immediate predecessor (the successor is still the session's current token)
+// of a live delegated session on the same client and resource, and writes
+// nothing. ok=false sends the caller down the ordinary spent-token path, which
+// revokes.
+func (s *Service) graceRefresh(ctx context.Context, req RefreshRequest, hash string, now time.Time) (TokenResponse, bool) {
+	spent, err := s.grace.GetRefreshSuccessor(ctx, hash)
+	if err != nil || spent.Ciphertext == "" || spent.RotatedAt.IsZero() || !now.Before(spent.RotatedAt.Add(s.config.RefreshReuseGrace)) {
+		return TokenResponse{}, false
+	}
+	successor, err := s.config.RefreshReuseEncrypter.Decrypt(spent.Ciphertext)
+	if err != nil || !session.IsDelegatedRefreshToken(successor) {
+		return TokenResponse{}, false
+	}
+	sess, err := s.repos.Sessions.Get(ctx, spent.SessionID)
+	if err != nil || sess.ID != spent.SessionID || sess.Profile != session.ProfileDelegated || !s.validDelegation(sess.Delegation) ||
+		sess.Delegation.ClientID != req.ClientID || sess.Delegation.Resource != req.Resource || sess.Expired(now) ||
+		subtle.ConstantTimeCompare([]byte(sess.RefreshTokenHash), []byte(hashSecret(successor))) != 1 {
+		return TokenResponse{}, false
+	}
+	response, err := s.signAccess(sess, false, time.Time{})
+	if err != nil {
+		return TokenResponse{}, false
+	}
+	s.auditReason(ctx, TypeRefresh, sess.UserID, sess.ID, req.ClientID, "grace_window")
+	response.RefreshToken = successor
+	return response, true
 }
 
 func (s *Service) Exchange(ctx context.Context, proof ClientProof, req ExchangeRequest) (_ TokenResponse, err error) {
