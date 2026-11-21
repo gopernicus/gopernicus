@@ -223,7 +223,7 @@ func (s *Service) resolveClient(ctx context.Context, id string) (Client, error) 
 		return Client{}, ErrInvalidClient
 	}
 	for _, redirect := range client.RedirectURIs {
-		if !validEndpoint(redirect, s.config.AllowLocalHTTP, true) {
+		if !validEndpoint(redirect, s.config.AllowLocalHTTP, true) && !IsLoopbackRedirect(redirect) {
 			return Client{}, ErrInvalidClient
 		}
 		u, _ := url.Parse(redirect)
@@ -257,6 +257,60 @@ func validEndpoint(raw string, localHTTP, query bool) bool {
 	}
 	ip, err := netip.ParseAddr(u.Hostname())
 	return err == nil && ip.IsLoopback()
+}
+
+// IsLoopbackRedirect reports whether raw is a native-app loopback redirect
+// (RFC 8252 §7.3): http on localhost or a loopback IP literal, port optional.
+// It is accepted in every runtime mode, because it only reaches the user's own
+// machine (RFC 8252 §8.3). Every other validEndpoint shape check still applies.
+func IsLoopbackRedirect(raw string) bool {
+	if !validEndpoint(raw, true, true) {
+		return false
+	}
+	u, _ := url.Parse(raw)
+	return u.Scheme == "http" && validPort(u.Port())
+}
+
+// matchRedirect reports whether requested is one of the registered redirect
+// URIs. The match is exact, except that a registered loopback http redirect
+// accepts any port on the request (RFC 8252 §7.3). The scheme, the host (never
+// resolved, so localhost and 127.0.0.1 differ), the path and the query must
+// still be equal.
+func matchRedirect(registered []string, requested string) bool {
+	if slices.Contains(registered, requested) {
+		return true
+	}
+	if !IsLoopbackRedirect(requested) {
+		return false
+	}
+	req, _ := url.Parse(requested)
+	for _, candidate := range registered {
+		if !IsLoopbackRedirect(candidate) {
+			continue
+		}
+		reg, _ := url.Parse(candidate)
+		if reg.Hostname() == req.Hostname() && reg.EscapedPath() == req.EscapedPath() && reg.RawQuery == req.RawQuery && reg.ForceQuery == req.ForceQuery {
+			return true
+		}
+	}
+	return false
+}
+
+func validPort(port string) bool {
+	if port == "" {
+		return true
+	}
+	if len(port) > 5 || port[0] == '0' {
+		return false
+	}
+	n := 0
+	for _, c := range []byte(port) {
+		if c < '0' || c > '9' {
+			return false
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n >= 1 && n <= 65535
 }
 
 func nilDependency(value any) bool {

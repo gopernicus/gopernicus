@@ -147,7 +147,7 @@ func (c *CIMD) Resolve(ctx context.Context, id string) (protocol.Client, error) 
 	}
 	for _, redirect := range doc.RedirectURIs {
 		u, err := url.Parse(redirect)
-		if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" || strings.TrimSpace(redirect) != redirect || len(redirect) > 2048 {
+		if err != nil || (u.Scheme != "https" && !protocol.IsLoopbackRedirect(redirect)) || u.Hostname() == "" || u.User != nil || u.Fragment != "" || strings.TrimSpace(redirect) != redirect || len(redirect) > 2048 {
 			return protocol.Client{}, protocol.ErrInvalidClient
 		}
 	}

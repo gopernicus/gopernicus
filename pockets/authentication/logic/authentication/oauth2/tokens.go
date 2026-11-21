@@ -3,7 +3,6 @@ package oauth2
 import (
 	"context"
 	"errors"
-	"slices"
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
@@ -22,7 +21,7 @@ func (s *Service) RedeemCode(ctx context.Context, req CodeRequest) (_ TokenRespo
 	if err != nil {
 		return TokenResponse{}, err
 	}
-	if !slices.Contains(client.RedirectURIs, req.RedirectURI) {
+	if !matchRedirect(client.RedirectURIs, req.RedirectURI) {
 		return TokenResponse{}, ErrInvalidGrant
 	}
 	getCode := s.repos.OAuth2.GetCode

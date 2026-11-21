@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"slices"
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
@@ -162,7 +161,7 @@ func (s *Service) validateAuthorization(ctx context.Context, req AuthorizationRe
 	if err != nil {
 		return Client{}, err
 	}
-	if !slices.Contains(client.RedirectURIs, req.RedirectURI) {
+	if !matchRedirect(client.RedirectURIs, req.RedirectURI) {
 		return Client{}, ErrInvalidRequest
 	}
 	return client, nil

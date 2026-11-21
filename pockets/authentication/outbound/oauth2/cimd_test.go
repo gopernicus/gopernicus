@@ -58,7 +58,10 @@ func TestCIMDTrustIsCheckedBeforeFetchAndOnCacheHits(t *testing.T) {
 func TestCIMDBoundedMetadataAndIdentity(t *testing.T) {
 	for name, body := range map[string]string{
 		"wrong ID":          strings.Replace(validDocument, testClientID, "https://other.test/oauth.json", 1),
-		"insecure redirect": strings.Replace(validDocument, "https://client.example.test/callback", "http://127.0.0.1/callback", 1),
+		"insecure redirect": strings.Replace(validDocument, "https://client.example.test/callback", "http://client.example.test/callback", 1),
+		"loopback userinfo": strings.Replace(validDocument, "https://client.example.test/callback", "http://user@localhost/callback", 1),
+		"loopback fragment": strings.Replace(validDocument, "https://client.example.test/callback", "http://localhost/callback#f", 1),
+		"loopback port 0":   strings.Replace(validDocument, "https://client.example.test/callback", "http://127.0.0.1:0/callback", 1),
 		"client secret":     strings.Replace(validDocument, `"client_name"`, `"client_secret":null,"client_name"`, 1),
 		"wrong method":      strings.Replace(validDocument, `"none"`, `"client_secret_basic"`, 1),
 		"oversized":         strings.Repeat(" ", maxDocumentBytes) + validDocument,
@@ -113,5 +116,21 @@ func TestCIMDConfigurationAndCacheBounds(t *testing.T) {
 		if got := metadataTTL(http.Header{"Cache-Control": []string{value}}); got != want {
 			t.Errorf("cache %q=%v want %v", value, got, want)
 		}
+	}
+}
+
+// TestCIMDAcceptsLoopbackRedirects pins RFC 8252 §7.3 (#379): a native client's
+// document declares port-less http loopback redirects, which the reader accepts
+// alongside https; it has no runtime-mode switch, so this holds in production.
+func TestCIMDAcceptsLoopbackRedirects(t *testing.T) {
+	redirects := `["http://localhost/callback","http://127.0.0.1/callback","http://[::1]/callback","https://client.example.test/callback"]`
+	body := strings.Replace(validDocument, `["https://client.example.test/callback"]`, redirects, 1)
+	c, _ := NewCIMD([]string{testClientID})
+	c.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	got, err := c.Resolve(context.Background(), testClientID)
+	if err != nil || len(got.RedirectURIs) != 4 || got.RedirectURIs[0] != "http://localhost/callback" {
+		t.Fatalf("loopback metadata refused: %+v %v", got, err)
 	}
 }

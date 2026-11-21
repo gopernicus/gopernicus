@@ -171,6 +171,18 @@ resolvers must maintain the same trust contract; metadata cache expiry is not an
 authorization decision. Local fixtures require explicit development-only HTTP
 and never weaken the production CIMD transport.
 
+**Native clients (RFC 8252).** A client's `redirect_uris` must be `https`, with
+one exception allowed in every runtime mode: an `http` loopback redirect on
+`localhost`, `127.0.0.1` (any `127.0.0.0/8`) or `[::1]`. Such a redirect only
+reaches the user's own machine (RFC 8252 §8.3). A registered loopback redirect
+matches a request on **any port** (§7.3), so a client that registers
+`http://localhost/callback` can use `http://localhost:3118/callback`. The scheme,
+host, path and query must still match exactly. Hosts are compared as written,
+never resolved: `localhost` does not match `127.0.0.1`. The token request must
+repeat the authorize request's redirect byte for byte, port included. Every
+other redirect, including `https` ones, matches exactly. `AllowLocalHTTP` is
+unchanged and still governs only the issuer, resource and client-id URLs.
+
 Upgrade core, SQL adapter and optional views together. Both pgx and Turso add
 `0019_oauth2_sessions.sql`; all older migration bytes remain unchanged. Export
 that exact migration into the host ledger and apply it before boot. It adds
