@@ -21,6 +21,7 @@ import (
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
@@ -53,6 +54,13 @@ type oauthHTTPProof struct {
 
 func newOAuthHTTPProof(t *testing.T, enabled bool) *oauthHTTPProof {
 	t.Helper()
+	return newOAuthHTTPProofWith(t, enabled, nil)
+}
+
+// newOAuthHTTPProofWith is newOAuthHTTPProof with a change to the server
+// config before it is built.
+func newOAuthHTTPProofWith(t *testing.T, enabled bool, change func(*oauth2.Config)) *oauthHTTPProof {
+	t.Helper()
 	router := web.NewWebHandler()
 	srv := httptest.NewTLSServer(router)
 	t.Cleanup(srv.Close)
@@ -68,7 +76,11 @@ func newOAuthHTTPProof(t *testing.T, enabled bool) *oauthHTTPProof {
 	repos := authmem.New().Repositories()
 	opts := cfg.options()
 	if enabled {
-		opts = append(opts, auth.WithOAuth2(auth.OAuth2Config{Server: oauth2.Config{Issuer: srv.URL, MCPResource: srv.URL + "/mcp", APIResource: srv.URL + "/api", ConfidentialClientID: "proof-mcp", ConfidentialSecretHashes: [][32]byte{sha256.Sum256([]byte(proofSecret))}}, Clients: proofClients{}, Views: cfg.Views.(inbound.OAuthViews)}))
+		server := oauth2.Config{Issuer: srv.URL, MCPResource: srv.URL + "/mcp", APIResource: srv.URL + "/api", ConfidentialClientID: "proof-mcp", ConfidentialSecretHashes: [][32]byte{sha256.Sum256([]byte(proofSecret))}}
+		if change != nil {
+			change(&server)
+		}
+		opts = append(opts, auth.WithOAuth2(auth.OAuth2Config{Server: server, Clients: proofClients{}, Views: cfg.Views.(inbound.OAuthViews)}))
 	}
 	svc, err := auth.New(repos, cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, opts...)
 	if err != nil {
@@ -384,6 +396,41 @@ func TestOAuth2HTTPRevokeDelegatedKeepsBrowser(t *testing.T) {
 	}
 	c := h.connect()
 	h.resource("/mcp", c.AccessToken, 200)
+}
+
+// TestOAuth2HTTPExchangeAuditCoalesces drives repeated token exchanges, as a
+// resource server that exchanges on every call does: with
+// ExchangeAuditWindow set, each connection writes one oauth2_token_exchanged
+// row for the window, not one per exchange.
+func TestOAuth2HTTPExchangeAuditCoalesces(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		window time.Duration
+		want   int
+	}{{"Every", 0, 8}, {"Coalesced", time.Hour, 2}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newOAuthHTTPProofWith(t, true, func(c *oauth2.Config) { c.ExchangeAuditWindow = tc.window })
+			h.login()
+			for range 2 {
+				pair := h.connect()
+				for range 4 {
+					api, status := h.token(url.Values{"grant_type": {oauth2.GrantTokenExchange}, "subject_token": {pair.AccessToken}, "subject_token_type": {oauth2.AccessTokenType}, "resource": {h.server.URL + "/api"}}, true)
+					if status != 200 {
+						t.Fatalf("exchange status %d", status)
+					}
+					h.resource("/api", api.AccessToken, 200)
+				}
+			}
+			page, err := h.svc.SecurityEvents.Repository().List(context.Background(), securityevent.ListFilter{EventType: securityevent.TypeOAuth2TokenExchanged}, list.Request{Limit: list.MaxLimit})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Items) != tc.want {
+				t.Fatalf("oauth2_token_exchanged rows = %d, want %d", len(page.Items), tc.want)
+			}
+		})
+	}
 }
 
 func TestOAuth2HTTPRefreshReplayRevokesOnlyConnection(t *testing.T) {

@@ -295,6 +295,8 @@ var (
 	ErrRefreshReuseGraceInvalid       = oauth2.ErrRefreshReuseGraceInvalid
 	ErrRefreshReuseGraceRequires      = oauth2.ErrRefreshReuseGraceRequires
 	ErrRefreshReuseGraceSchemaMissing = oauth2.ErrRefreshReuseGraceSchemaMissing
+	// ErrExchangeAuditWindowInvalid is oauth2.ErrExchangeAuditWindowInvalid.
+	ErrExchangeAuditWindowInvalid = oauth2.ErrExchangeAuditWindowInvalid
 )
 
 // The S4c part 2 native-all sentinels: MFAConfig.Required all beside

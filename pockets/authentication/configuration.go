@@ -291,7 +291,11 @@ func logOAuth2(cfg constructorConfig, log *slog.Logger) {
 	if cfg.OAuth2.Server.RefreshReuseGrace > 0 {
 		grace = cfg.OAuth2.Server.RefreshReuseGrace.String()
 	}
-	log.Info("auth: oauth2", "delegated_assurance", delegated, "consent", consent, "refresh_reuse_grace", grace)
+	exchangeAudit := "every"
+	if cfg.OAuth2.Server.ExchangeAuditWindow > 0 {
+		exchangeAudit = cfg.OAuth2.Server.ExchangeAuditWindow.String()
+	}
+	log.Info("auth: oauth2", "delegated_assurance", delegated, "consent", consent, "refresh_reuse_grace", grace, "exchange_audit_window", exchangeAudit)
 }
 
 // logKeys logs the one auth: keys boot line: per role its kind and, for a

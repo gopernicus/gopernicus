@@ -237,6 +237,30 @@ refresh gets the rotation already issued instead.
   the current one. Keep the window short.
 - Boot logs `refresh_reuse_grace=<duration>|off` on the `auth: oauth2` line.
 
+### OAuth2 exchange audit window (opt-in)
+
+Every successful token exchange writes an `oauth2_token_exchanged` row. A
+resource server that exchanges on every call, so that a revocation takes effect
+on the next one, therefore writes one row per call, kept for the security-event
+retention. `oauth2.Config.ExchangeAuditWindow` (default 0, at most
+`oauth2.MaxExchangeAuditWindow`, 24h) writes one row per connection per window
+instead.
+
+- **What is written.** A connection's first exchange writes a row. Later
+  exchanges inside the window write none. The first exchange after the window
+  writes a row with `coalesced`, the exchanges skipped since the previous row.
+  With the window set, every exchange row carries `coalesced` (0 on the first).
+- **No write per skipped call.** The count is kept in memory and only written
+  on the next row.
+- **Per process, a lower bound.** Each replica keeps its own count, so N
+  replicas write at most N rows per connection per window. A restart, or a
+  connection with no exchange for a whole window, drops the pending count.
+- **Refusals are unchanged.** A refused exchange still writes
+  `oauth2_grant_failed` every time.
+- `New` refuses `ErrExchangeAuditWindowInvalid` for a window that is neither 0
+  nor between 1s and 24h. Boot logs `exchange_audit_window=<duration>|every` on
+  the `auth: oauth2` line.
+
 Production CIMD uses an explicit exact URL allowlist, HTTPS, bounded fetch/cache,
 no redirects or environment proxy, and connection-time nonpublic-address
 rejection. `WithClientTrust` adds a policy checked even on cache hits. Custom

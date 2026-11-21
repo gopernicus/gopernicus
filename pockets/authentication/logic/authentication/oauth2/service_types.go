@@ -22,6 +22,8 @@ const (
 	// MaxRefreshReuseGrace bounds Config.RefreshReuseGrace. Stores clear a
 	// successor ciphertext once it is this old.
 	MaxRefreshReuseGrace = 30 * time.Second
+	// MaxExchangeAuditWindow bounds Config.ExchangeAuditWindow.
+	MaxExchangeAuditWindow = 24 * time.Hour
 )
 
 var (
@@ -53,6 +55,10 @@ var (
 	// 0 is never probed.
 	ErrRefreshReuseGraceSchemaMissing  = fmt.Errorf("oauth2: Config.RefreshReuseGrace requires migration 0031_oauth_refresh_successor.sql (oauth_refresh_history successor columns): %w", sdk.ErrInvalidInput)
 	ErrDelegatedAssuranceSchemaMissing = fmt.Errorf("oauth2: Config.DelegatedAssurance requires migration 0030_oauth_code_authentication.sql (oauth_authorization_codes authentication columns): %w", sdk.ErrInvalidInput)
+	// ErrExchangeAuditWindowInvalid is returned by New when
+	// Config.ExchangeAuditWindow is neither 0 nor between one second and
+	// MaxExchangeAuditWindow.
+	ErrExchangeAuditWindowInvalid = fmt.Errorf("oauth2: Config.ExchangeAuditWindow must be 0 or between 1s and %s: %w", MaxExchangeAuditWindow, sdk.ErrInvalidInput)
 )
 
 type UserReader interface {
@@ -116,6 +122,18 @@ type Config struct {
 	// cryptids.Encrypter works: cryptids.NewAESGCMRing, or an adapter over a
 	// host key service. The store only ever receives its ciphertext.
 	RefreshReuseEncrypter cryptids.Encrypter
+	// ExchangeAuditWindow (opt-in, default 0, at most MaxExchangeAuditWindow)
+	// coalesces oauth2_token_exchanged rows per connection. At 0 every
+	// successful exchange writes a row. Set, a connection's first exchange in
+	// this process writes a row, later exchanges inside the window write
+	// none, and the first exchange after the window writes one with
+	// details.coalesced, the exchanges skipped since the previous row. The
+	// count is held in memory, so skipped exchanges cost no store write; it is
+	// per process (N replicas write at most N rows per connection per window)
+	// and a lower bound: a restart, or a connection that goes quiet, drops
+	// the pending count. Refused exchanges still write oauth2_grant_failed
+	// every time.
+	ExchangeAuditWindow time.Duration
 }
 
 // Metadata exposes immutable public protocol coordinates, never client secrets.
