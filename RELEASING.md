@@ -1,5 +1,66 @@
 # Releasing gopernicus modules
 
+## Disconnect every app, and an exchange audit window (#387, #386 — pockets/authentication v0.46.0, stores/pgx v0.20.0, stores/turso v0.19.0 — published 2026-11-20)
+
+**Status: released.** **MINOR, additive and opt-in; the defaults are unchanged.**
+
+- **#387:** `POST /auth/connections/revoke-delegated` ends every app connection (delegated session)
+  of the caller and fences their approved but unredeemed codes, keeping the web sessions signed in:
+  204, no cookie change. It is backed by `Service.RevokeDelegatedUserSessions` and the optional
+  store capability `session.DelegatedRevoker`, which locks the user and deletes the delegated
+  sessions, their step-up grants and the user's unredeemed codes in one transaction.
+  `auth_revision` is not bumped. New event `oauth2_connections_revoked` (Details `sessions`). A
+  store without the capability returns `ErrDelegatedRevocationUnsupported` (404 over HTTP).
+- **#386:** `oauth2.Config.ExchangeAuditWindow` (0 = a row per exchange, as before; at most 24h)
+  writes one `oauth2_token_exchanged` row per connection per window, with `details.coalesced`. The
+  count is kept in memory per process and is a lower bound. Refusals still write
+  `oauth2_grant_failed` every time. `ErrExchangeAuditWindowInvalid`; the `auth: oauth2` boot line
+  gains `exchange_audit_window=<d>|every`.
+
+**Host note.** A host with its own `ManagementRepository` keeps compiling. It gets the 404 on the
+new route until it implements `session.DelegatedRevoker`. These are the first store tags since
+#280, so they also publish #381's store side: `oauth2.RefreshGraceRepository` over migration
+`0031_oauth_refresh_successor.sql` (nullable columns, additive, needed only with
+`RefreshReuseGrace` set). AUDIT-082.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/authentication/v0.46.0` | `2d029529` → `5be69d3d` | #388, #389 | not run (owner skipped CI on #389) | OK; MVS selects sdk v0.24.0; `DelegatedRevoker`, `RevokeDelegatedUserSessions`, `ExchangeAuditWindow` and both errors resolve |
+| 2 | `pockets/authentication/stores/pgx/v0.20.0` | `9c06bfeb` → `879a1714` | #390 (core pin) | not run | OK; implements `DelegatedRevoker` and `RefreshGraceRepository` |
+| 3 | `pockets/authentication/stores/turso/v0.19.0` | `835f3122` → `879a1714` | #390 (core pin) | not run | OK; all migrations apply on a local file; an unknown user is `ErrNotFound` |
+| — | none | — | PR-4: auth-cms, external-identity, production-baseline repin | — | each builds, vets and tests with `GOWORK=off` |
+
+Annotated, not signed. Before tagging the stores, both suites ran with `GOWORK=off` against core
+v0.46.0 from the proxy: turso on local SQLite, pgx on PostgreSQL 18 bare and with
+`POSTGRES_TEST_SCHEMA`, with the delegated-revocation and refresh-grace cases passing and none
+skipped. **Run and look.** auth-cms over HTTP:
+- Signed in with two apps connected and a third approved but unredeemed, `revoke-delegated`
+  answered 204 with no `Set-Cookie`. Both apps' tokens and refreshes then failed, the pending code
+  was `invalid_grant`, the browser stayed signed in, and a new connection worked.
+- Two connections making four exchanges each wrote 8 `oauth2_token_exchanged` rows with the window
+  off and 2 with it set to 1h.
+
+## Loopback redirects, host-owned consent, refresh-reuse grace (#379, #380, #381 — pockets/authentication v0.45.0 — published 2026-11-20)
+
+**Status: released.** **MINOR, additive; the grace and the consent path are opt-in.** Recorded
+after the fact with the v0.46.0 release.
+
+- **#379:** an `http` loopback redirect (`localhost`, `127.0.0.0/8`, `[::1]`) is admitted in every
+  mode, and its port is ignored at match time (RFC 8252 §7.3, §8.3). Every other redirect still
+  matches exactly.
+- **#380:** `OAuth2Config.ConsentPath` lets a host own the consent page (exactly one of it and
+  `OAuthViews`). Adds `GET`/`POST /auth/oauth2/consent` (JSON), `/auth/connections` on both lanes,
+  and `OAuth2ConsentPageHeaders`.
+- **#381:** `oauth2.Config.RefreshReuseGrace` (0 by default, at most 30s, with
+  `RefreshReuseEncrypter`). A second refresh of the same token inside the window gets the rotation
+  already issued. The store side shipped in the v0.46.0 store tags above.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/authentication/v0.45.0` | `dda8ae76` → `98a6b569` | #382 | not recorded | not recorded at tag time |
+
+Annotated, not signed. The stores were moved onto v0.45.0 by #383 but not tagged until v0.46.0.
+
 ## Bounded task delivery and dead letters (#373 — sdk v0.29.0 + integrations/kvstores/goredis v0.5.0 — published 2026-11-20)
 
 **Status: released.** **MINOR. The sdk change is additive. goredis renames one method.**

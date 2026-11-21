@@ -6595,3 +6595,31 @@ against the live Auth emulator.
   - The `live-stores` workflow was not run for this release (owner waived).
   - The existing limiter live test `TestLive_LimiterAnchoredBuckets` uses `PEXPIRETIME` and fails on
     Redis below 7.
+
+## AUDIT-082: Disconnect every app, and an exchange audit window (#387, #386)
+
+- **Status:** released as `pockets/authentication` v0.46.0 (`2d029529` → `5be69d3d`),
+  `pockets/authentication/stores/pgx` v0.20.0 (`9c06bfeb` → `879a1714`) and
+  `pockets/authentication/stores/turso` v0.19.0 (`835f3122` → `879a1714`).
+  Record: `RELEASING.md`, "Disconnect every app, and an exchange audit window (#387, #386 —
+  published 2026-11-20)".
+- **Modules:** `pockets/authentication`, additive: `session.DelegatedRevoker`,
+  `Service.RevokeDelegatedUserSessions`, `ErrDelegatedRevocationUnsupported`,
+  `POST /auth/connections/revoke-delegated`, the `oauth2_connections_revoked` event,
+  `oauth2.Config.ExchangeAuditWindow`, `MaxExchangeAuditWindow` and
+  `ErrExchangeAuditWindowInvalid`. The pgx and turso stores implement `DelegatedRevoker`.
+- **Old behavior:** ending a person's app connections meant either `revoke-all`, which also signed
+  the browser out, or looping single revokes, which left approved but unredeemed codes redeemable.
+  Every token exchange wrote one `oauth2_token_exchanged` row.
+- **New behavior:** `revoke-delegated` ends every delegated session and deletes the user's
+  unredeemed codes under the user lock code redemption takes, keeping first-party sessions and
+  `auth_revision`. With `ExchangeAuditWindow` set, each connection writes one exchange row per
+  window, with `coalesced`. The defaults are unchanged.
+- **Migration:** none required. A host with its own `ManagementRepository` implements
+  `RevokeDelegatedForUser` to enable the route (404 until then). Hosts upgrading the stores also
+  receive migration `0031_oauth_refresh_successor.sql` from #381 (additive).
+- **Residuals:**
+  - The coalesced count is per process and is dropped on restart or after a whole window with no
+    exchange.
+  - The `live-stores` workflow was not run for this release.
+  - The v0.45.0 release (#382) has no cold-verification record.
