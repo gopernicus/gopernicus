@@ -22,6 +22,7 @@ func mountSessionManagement(r pockets.RouteRegistrar, h *handlers) {
 	r.Handle("GET", "/auth/connections", h.listConnections, oauth2Headers, api)
 	r.Handle("POST", "/auth/connections/{id}/revoke", h.revokeConnection, oauth2Headers, api, apiMutation)
 	r.Handle("POST", "/auth/connections/revoke-all", h.revokeAllConnections, oauth2Headers, api, apiMutation)
+	r.Handle("POST", "/auth/connections/revoke-delegated", h.revokeDelegatedConnections, oauth2Headers, api, apiMutation)
 	if nilDependency(h.oauth2.Views) {
 		return
 	}
@@ -177,5 +178,21 @@ func (h *handlers) revokeAllConnections(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	h.svc.ClearSessionCookies(w)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// revokeDelegatedConnections is POST /auth/connections/revoke-delegated: every
+// app connection (delegated session) of the caller ends and their approved but
+// unredeemed codes are fenced; the first-party sessions, this one included,
+// stay, so no cookie is cleared. 204; 404 when the store lacks the capability.
+func (h *handlers) revokeDelegatedConnections(w http.ResponseWriter, r *http.Request) {
+	userID, _, ok := h.oauth2JSONPrincipal(w, r)
+	if !ok {
+		return
+	}
+	if err := h.oauth2.Sessions.RevokeDelegatedUserSessions(r.Context(), userID); err != nil {
+		web.RespondJSONDomainError(w, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

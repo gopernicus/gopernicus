@@ -29,6 +29,8 @@ func RunOAuth2(t *testing.T, newRepos func(*testing.T) auth.Repositories) {
 			"BindingsAndSingleUse":                   testOAuth2CodeBindings,
 			"GlobalRevisionFence":                    testOAuth2GlobalFence,
 			"ConcurrentGlobalFence":                  testOAuth2ConcurrentGlobalFence,
+			"DelegatedRevocationKeepsBrowser":        testOAuth2RevokeDelegated,
+			"ConcurrentDelegatedRevocation":          testOAuth2ConcurrentRevokeDelegated,
 			"RefreshHistoryAndIndependentRevocation": testOAuth2Refresh,
 			"ConcurrentRefreshReuse":                 testOAuth2ConcurrentRefresh,
 			"InventoryAndOwnerDeletion":              testOAuth2Inventory,
@@ -181,6 +183,87 @@ func testOAuth2ConcurrentGlobalFence(t *testing.T, r auth.Repositories) {
 	}
 	if _, err := r.Sessions.Get(context.Background(), s.ID); !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("session survived serialized global revoke: %v", err)
+	}
+}
+
+// delegatedRevoker returns the optional session.DelegatedRevoker, skipping
+// when the store does not implement it.
+func delegatedRevoker(t *testing.T, r auth.Repositories) session.DelegatedRevoker {
+	t.Helper()
+	revoker, ok := r.SessionManagement.(session.DelegatedRevoker)
+	if !ok {
+		t.Skip("SessionManagement is not a session.DelegatedRevoker — delegated revocation NOT verified")
+	}
+	return revoker
+}
+
+func testOAuth2RevokeDelegated(t *testing.T, r auth.Repositories) {
+	revoker := delegatedRevoker(t, r)
+	ctx := context.Background()
+	f := newOAuthFixture(t, r)
+	a, b := f.grant(t), f.grant(t)
+	pending := f.code(t)
+	other := oauthFixture{r: r, u: seedDirectoryUser(t, r, "oauth-other@example.test", f.now, f.now), now: f.now}
+	other.w, _ = session.NewSession(other.u.ID, time.Hour, f.now)
+	other.w.RefreshTokenHash = "web-hash-" + other.w.ID
+	if _, err := r.Sessions.Create(ctx, other.w); err != nil {
+		t.Fatal(err)
+	}
+	otherGrant := other.grant(t)
+	otherPending := other.code(t)
+
+	n, err := revoker.RevokeDelegatedForUser(ctx, f.u.ID)
+	if err != nil || n != 2 {
+		t.Fatalf("RevokeDelegatedForUser = %d, %v; want 2, nil", n, err)
+	}
+	if _, err := r.Sessions.Get(ctx, f.w.ID); err != nil {
+		t.Fatalf("the web session did not survive: %v", err)
+	}
+	for _, id := range []string{a.ID, b.ID} {
+		if _, err := r.Sessions.Get(ctx, id); !errors.Is(err, sdk.ErrNotFound) {
+			t.Fatalf("delegated session %s survived: %v", id, err)
+		}
+	}
+	if _, err := r.OAuth2.RedeemCode(ctx, pending, f.proposed(pending), f.now); !errors.Is(err, oauth2.ErrInvalidGrant) {
+		t.Fatalf("an unredeemed code survived the revocation: %v", err)
+	}
+	if u, err := r.Users.Get(ctx, f.u.ID); err != nil || u.AuthRevision != f.u.AuthRevision {
+		t.Fatalf("auth_revision moved: %+v %v", u, err)
+	}
+	// The browser can still approve a new connection afterwards.
+	f.grant(t)
+
+	if _, err := r.Sessions.Get(ctx, otherGrant.ID); err != nil {
+		t.Fatalf("another user's connection was revoked: %v", err)
+	}
+	if _, err := r.OAuth2.RedeemCode(ctx, otherPending, other.proposed(otherPending), f.now); err != nil {
+		t.Fatalf("another user's code was fenced: %v", err)
+	}
+	if n, err := revoker.RevokeDelegatedForUser(ctx, "no-such-user"); !errors.Is(err, sdk.ErrNotFound) || n != 0 {
+		t.Fatalf("unknown user = %d, %v; want 0, ErrNotFound", n, err)
+	}
+}
+
+func testOAuth2ConcurrentRevokeDelegated(t *testing.T, r auth.Repositories) {
+	revoker := delegatedRevoker(t, r)
+	f := newOAuthFixture(t, r)
+	c := f.code(t)
+	s := f.proposed(c)
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	go func() { <-start; _, err := r.OAuth2.RedeemCode(context.Background(), c, s, f.now); errs <- err }()
+	go func() { <-start; _, err := revoker.RevokeDelegatedForUser(context.Background(), f.u.ID); errs <- err }()
+	close(start)
+	for range 2 {
+		if err := <-errs; err != nil && !errors.Is(err, oauth2.ErrInvalidGrant) {
+			t.Fatalf("race: %v", err)
+		}
+	}
+	if _, err := r.Sessions.Get(context.Background(), s.ID); !errors.Is(err, sdk.ErrNotFound) {
+		t.Fatalf("a code redeemed across the revocation survived: %v", err)
+	}
+	if _, err := r.Sessions.Get(context.Background(), f.w.ID); err != nil {
+		t.Fatalf("the web session did not survive: %v", err)
 	}
 }
 

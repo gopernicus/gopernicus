@@ -425,6 +425,38 @@ func (s *OAuth2Store) RevokeAllForUser(ctx context.Context, userID string, now t
 	})
 }
 
+// RevokeDelegatedForUser implements session.DelegatedRevoker: under the user
+// lock RedeemCode takes, it deletes the user's delegated sessions, their
+// step-up grants and the user's unredeemed codes. auth_revision is untouched.
+func (s *OAuth2Store) RevokeDelegatedForUser(ctx context.Context, userID string) (int, error) {
+	var revoked int
+	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
+		if err := s.lockOwner(ctx, tx, userID); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `DELETE FROM `+s.table(sessionsTable)+` WHERE user_id = @user AND session_profile = @profile RETURNING id`, pgx.NamedArgs{"user": userID, "profile": string(session.ProfileDelegated)})
+		if err != nil {
+			return pgxdb.MapError(err)
+		}
+		ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return pgxdb.MapError(err)
+		}
+		revoked = len(ids)
+		if revoked > 0 {
+			if _, err := tx.Exec(ctx, `DELETE FROM `+s.table(authGrantsTable)+` WHERE user_id = @user AND session_id = ANY(@ids)`, pgx.NamedArgs{"user": userID, "ids": ids}); err != nil {
+				return pgxdb.MapError(err)
+			}
+		}
+		_, err = tx.Exec(ctx, `DELETE FROM `+s.table(oauthCodesTable)+` WHERE user_id = @user`, pgx.NamedArgs{"user": userID})
+		return pgxdb.MapError(err)
+	})
+	if err != nil {
+		return 0, err
+	}
+	return revoked, nil
+}
+
 func (s *OAuth2Store) deleteDelegatedSession(ctx context.Context, tx *pgxdb.Tx, id, userID, clientID string) error {
 	result, err := tx.Exec(ctx, `DELETE FROM `+s.table(sessionsTable)+` WHERE id = @id AND user_id = @user AND session_profile = @profile AND (delegation::jsonb ->> 'ClientID') = @client`, pgx.NamedArgs{"id": id, "user": userID, "profile": string(session.ProfileDelegated), "client": clientID})
 	if err != nil {

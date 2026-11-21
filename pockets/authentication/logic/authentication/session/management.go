@@ -30,3 +30,18 @@ type ManagementRepository interface {
 	// fleet-wide revocation is GlobalRevoker, not a loop over this.
 	RevokeAllForUser(ctx context.Context, userID string, now time.Time) error
 }
+
+// DelegatedRevoker is the OPTIONAL capability behind
+// RevokeDelegatedUserSessions, implemented by the ManagementRepository a
+// bundled store returns. It ends a user's app connections and keeps their
+// first-party sign-ins.
+type DelegatedRevoker interface {
+	// RevokeDelegatedForUser locks the user, deletes every delegated session
+	// they own with its step-up grants, and deletes their unredeemed OAuth
+	// authorization codes, in one transaction. Code redemption takes the same
+	// user lock before it reads the code, so an approval outstanding at the
+	// revocation can no longer be redeemed. First-party sessions and
+	// auth_revision are untouched. It returns the delegated sessions deleted;
+	// an unknown user returns sdk.ErrNotFound.
+	RevokeDelegatedForUser(ctx context.Context, userID string) (int, error)
+}

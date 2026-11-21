@@ -27,6 +27,7 @@ type spaSessions struct {
 	items     []session.Session
 	revoked   []string
 	revokeAll int
+	delegated []string
 }
 
 func (s *spaSessions) ListUserSessions(_ context.Context, userID string, _ list.Request) (list.Page[session.Session], error) {
@@ -51,6 +52,11 @@ func (s *spaSessions) RevokeUserSession(_ context.Context, userID, id string) er
 
 func (s *spaSessions) RevokeAllUserSessions(context.Context, string) error {
 	s.revokeAll++
+	return nil
+}
+
+func (s *spaSessions) RevokeDelegatedUserSessions(_ context.Context, userID string) error {
+	s.delegated = append(s.delegated, userID)
 	return nil
 }
 
@@ -277,6 +283,17 @@ func TestSPAConnections(t *testing.T) {
 	w = f.post("/auth/connections/revoke-all", "", delegatedIssuer, true)
 	if w.Code != http.StatusNoContent || f.sessions.revokeAll != 1 || len(w.Result().Cookies()) == 0 {
 		t.Fatalf("revoke-all = %d, want 204 with the session cookies cleared", w.Code)
+	}
+
+	if w := f.post("/auth/connections/revoke-delegated", "", "https://evil.example", true); w.Code != http.StatusForbidden || len(f.sessions.delegated) != 0 {
+		t.Fatalf("revoke-delegated from a foreign origin = %d", w.Code)
+	}
+	if w := f.post("/auth/connections/revoke-delegated", "", delegatedIssuer, false); w.Code != http.StatusForbidden || len(f.sessions.delegated) != 0 {
+		t.Fatalf("revoke-delegated without CSRF = %d", w.Code)
+	}
+	w = f.post("/auth/connections/revoke-delegated", "", delegatedIssuer, true)
+	if w.Code != http.StatusNoContent || len(f.sessions.delegated) != 1 || f.sessions.delegated[0] != f.userID || len(w.Result().Cookies()) != 0 {
+		t.Fatalf("revoke-delegated = %d delegated=%v cookies=%v, want 204 for the caller with no cookie change", w.Code, f.sessions.delegated, w.Result().Cookies())
 	}
 }
 

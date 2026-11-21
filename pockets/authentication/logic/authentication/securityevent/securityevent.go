@@ -400,6 +400,11 @@ const (
 	TypeOAuth2TokenExchanged = "oauth2_token_exchanged"
 	// TypeOAuth2RevocationRequested is a client-requested revocation.
 	TypeOAuth2RevocationRequested = "oauth2_revocation_requested"
+	// TypeOAuth2ConnectionsRevoked is every delegated session of a user (every
+	// app connection) revoked by its owner, with their unredeemed codes; the
+	// first-party sessions stay. UserID is the owner; Details carries sessions
+	// (the count deleted).
+	TypeOAuth2ConnectionsRevoked = "oauth2_connections_revoked"
 	// TypeOAuth2GrantFailed is a token-endpoint request (code redemption,
 	// refresh, exchange, revocation or introspection) refused for its grant,
 	// client or a parameter value: StatusFailure with reason invalid_grant,
@@ -627,7 +632,7 @@ var types = []string{
 	TypeRecoveryCodesGenerated, TypeRecoveryCodeUsed,
 	TypeSessionRevoked, TypeAllSessionsRevoked, TypeAllSessionsRevokedGlobal, TypeSessionIdleExpired, TypeUserDirectoryRead, TypeAuditRead,
 	TypeOAuth2ConsentApproved, TypeOAuth2ConsentDenied, TypeOAuth2ConnectionCreated, TypeOAuth2Refresh,
-	TypeOAuth2RefreshReuse, TypeOAuth2TokenExchanged, TypeOAuth2RevocationRequested, TypeOAuth2GrantFailed,
+	TypeOAuth2RefreshReuse, TypeOAuth2TokenExchanged, TypeOAuth2RevocationRequested, TypeOAuth2ConnectionsRevoked, TypeOAuth2GrantFailed,
 	TypeUserErased, TypeServiceAccountDeleted, TypeSecurityEventsPurged, TypeSecurityEventsArchived,
 }
 

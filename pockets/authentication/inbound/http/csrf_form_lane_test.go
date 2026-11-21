@@ -220,6 +220,10 @@ func (s *recordingSessions) RevokeAllUserSessions(context.Context, string) error
 	s.revokes++
 	return nil
 }
+func (s *recordingSessions) RevokeDelegatedUserSessions(context.Context, string) error {
+	s.revokes++
+	return nil
+}
 
 // TestSessionAndConsentFormLane covers the form-lane routes mounted with the
 // OAuth2 surface: session revocation and the consent POST.

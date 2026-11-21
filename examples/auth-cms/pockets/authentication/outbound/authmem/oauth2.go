@@ -20,6 +20,7 @@ type oauth2Repo struct{ *data }
 
 var _ oauth2.Repository = oauth2Repo{}
 var _ session.ManagementRepository = oauth2Repo{}
+var _ session.DelegatedRevoker = oauth2Repo{}
 var _ oauth2.CodeAuthenticationRepository = oauth2Repo{}
 
 func (r oauth2Repo) PutClient(ctx context.Context, c oauth2.Client) error {
@@ -290,6 +291,30 @@ func (r oauth2Repo) DeleteForUser(ctx context.Context, id, userID string) error 
 	}
 	r.deleteOAuthSession(id)
 	return nil
+}
+
+func (r oauth2Repo) RevokeDelegatedForUser(ctx context.Context, userID string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.users[userID]; !ok {
+		return 0, sdk.ErrNotFound
+	}
+	revoked := 0
+	for id, s := range r.sessions {
+		if s.UserID == userID && s.Profile == session.ProfileDelegated {
+			r.deleteOAuthSession(id)
+			revoked++
+		}
+	}
+	for hash, c := range r.oauthCodes {
+		if c.UserID == userID {
+			delete(r.oauthCodes, hash)
+		}
+	}
+	return revoked, nil
 }
 
 func (r oauth2Repo) RevokeAllForUser(ctx context.Context, userID string, now time.Time) error {

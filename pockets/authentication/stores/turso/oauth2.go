@@ -328,6 +328,35 @@ func (s *OAuth2Store) RevokeAllForUser(ctx context.Context, userID string, now t
 	})
 }
 
+// RevokeDelegatedForUser implements session.DelegatedRevoker: inside the
+// BEGIN IMMEDIATE transaction RedeemCode also takes, it deletes the user's
+// delegated sessions, their step-up grants and the user's unredeemed codes.
+// auth_revision is untouched.
+func (s *OAuth2Store) RevokeDelegatedForUser(ctx context.Context, userID string) (int, error) {
+	var revoked int
+	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
+		var id string
+		if err := tx.QueryRow(ctx, `SELECT id FROM users WHERE id = ?`, userID).Scan(&id); err != nil {
+			return tursodb.MapError(err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM authentication_grants WHERE user_id = ? AND session_id IN
+			(SELECT id FROM sessions WHERE user_id = ? AND session_profile = 'delegated')`, userID, userID); err != nil {
+			return err
+		}
+		n, err := tursodb.ExecAffecting(ctx, tx, `DELETE FROM sessions WHERE user_id = ? AND session_profile = 'delegated'`, userID)
+		if err != nil {
+			return err
+		}
+		revoked = int(n)
+		_, err = tx.Exec(ctx, `DELETE FROM oauth_authorization_codes WHERE user_id = ?`, userID)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	return revoked, nil
+}
+
 func oauthSession(ctx context.Context, db tursodb.Querier, id string) (session.Session, error) {
 	row, err := tursodb.QueryOne[sessionRow](ctx, db, `SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, id)
 	if err != nil {
