@@ -59,6 +59,26 @@ func (s *Service) auditGrantFailure(ctx context.Context, clientID string, err er
 // auditReason records kind. An empty clientID omits the client_id key: the row
 // has no client to attribute. A presented id the bound refuses records blank.
 func (s *Service) auditReason(ctx context.Context, kind, userID, sessionID, clientID, reason string) {
+	s.auditDetails(ctx, kind, userID, sessionID, clientID, reason, nil)
+}
+
+// auditExchange records a successful exchange, every time or, under
+// Config.ExchangeAuditWindow, once per connection per window with
+// details.coalesced.
+func (s *Service) auditExchange(ctx context.Context, userID, sessionID, clientID string) {
+	if s.exchanges == nil {
+		s.audit(ctx, TypeTokenExchanged, userID, sessionID, clientID)
+		return
+	}
+	record, coalesced := s.exchanges.admit(sessionID, s.now())
+	if record {
+		s.auditDetails(ctx, TypeTokenExchanged, userID, sessionID, clientID, "", map[string]any{"coalesced": coalesced})
+	}
+}
+
+// auditDetails is auditReason with extra Details keys, which the caller keeps
+// to bounded non-secret values.
+func (s *Service) auditDetails(ctx context.Context, kind, userID, sessionID, clientID, reason string, extra map[string]any) {
 	bounded := func(value string) string { return securityevent.BoundValue(securityevent.FieldDetail, value) }
 	presented := clientID != ""
 	userID, sessionID, clientID = bounded(userID), bounded(sessionID), bounded(clientID)
@@ -79,6 +99,9 @@ func (s *Service) auditReason(ctx context.Context, kind, userID, sessionID, clie
 	}
 	if reason != "" {
 		in.Details["reason"] = reason
+	}
+	for key, value := range extra {
+		in.Details[key] = value
 	}
 	if p, ok := sdk.PrincipalFromContext(ctx); ok {
 		in.Actor = securityevent.Principal{Type: p.Type, ID: p.ID}

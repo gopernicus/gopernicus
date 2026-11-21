@@ -46,6 +46,9 @@ type Service struct {
 	// grace is Repositories.OAuth2 as a RefreshGraceRepository, set only under
 	// Config.RefreshReuseGrace.
 	grace RefreshGraceRepository
+	// exchanges coalesces exchange rows; nil when Config.ExchangeAuditWindow
+	// is 0.
+	exchanges *exchangeAudit
 }
 
 func New(repos Repositories, signer cryptids.JWTSigner, resolver ClientResolver, verifier TokenVerifier, mode environment.Mode, cfg Config, opts ...Option) (*Service, error) {
@@ -105,6 +108,9 @@ func New(repos Repositories, signer cryptids.JWTSigner, resolver ClientResolver,
 			return nil, fmt.Errorf("oauth2: lifetime outside supported bounds: %w", sdk.ErrInvalidInput)
 		}
 	}
+	if cfg.ExchangeAuditWindow != 0 && (cfg.ExchangeAuditWindow < time.Second || cfg.ExchangeAuditWindow > MaxExchangeAuditWindow) {
+		return nil, ErrExchangeAuditWindowInvalid
+	}
 	if cfg.AccessTTL > cfg.SessionTTL {
 		return nil, fmt.Errorf("oauth2: access lifetime exceeds session lifetime: %w", sdk.ErrInvalidInput)
 	}
@@ -123,7 +129,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, resolver ClientResolver,
 		// NewRecorder; a host wanting its own ids supplies WithSecurityEventRecorder.
 		events = securityevent.NewRecorder(repos.SecurityEvents, sdk.IDGenerator{}, o.now, o.logger)
 	}
-	return &Service{repos: repos, signer: signer, resolver: resolver, verifier: verifier, config: cfg, now: o.now, logger: o.logger, events: events, codeAuth: codeAuth, grace: grace}, nil
+	return &Service{repos: repos, signer: signer, resolver: resolver, verifier: verifier, config: cfg, now: o.now, logger: o.logger, events: events, codeAuth: codeAuth, grace: grace, exchanges: newExchangeAudit(cfg.ExchangeAuditWindow)}, nil
 }
 
 // refreshReuseGrace checks a set Config.RefreshReuseGrace against its bound and

@@ -186,7 +186,7 @@ func (s *Service) Exchange(ctx context.Context, proof ClientProof, req ExchangeR
 	}
 	response, err := s.signAccess(sess, true, token.ExpiresAt)
 	if err == nil {
-		s.audit(ctx, TypeTokenExchanged, sess.UserID, sess.ID, proof.clientID)
+		s.auditExchange(ctx, sess.UserID, sess.ID, proof.clientID)
 	}
 	return response, err
 }
