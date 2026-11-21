@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -26,13 +27,22 @@ func mountOAuth2(r pockets.RouteRegistrar, h *handlers) {
 	issuer, _ := url.Parse(metadata.Issuer)
 	discovery := "/.well-known/oauth-authorization-server" + strings.TrimRight(issuer.Path, "/")
 	r.Handle("GET", discovery, h.oauth2Metadata, oauth2Headers)
-	opts := []PrincipalOption{Accept(CredentialAccessToken), FirstParty(), Transports(TransportCookie), Live(), Browser()}
+	opts := []PrincipalOption{Accept(CredentialAccessToken), FirstParty(), Transports(TransportCookie), Live()}
 	if h.oauth2MFA {
 		opts = append(opts, RequireMFA())
 	}
-	browser := htmlSecured(h.htmlPolicy, h.svc.RequirePrincipal(opts...))
-	r.Handle("GET", "/auth/oauth2/authorize", h.oauth2AuthorizePage, oauth2Headers, browser)
-	r.Handle("POST", "/auth/oauth2/authorize", h.oauth2Authorize, oauth2Headers, browser, requireBrowserSafeFormMutation(h.mutation.csrf()))
+	browser := htmlSecured(h.htmlPolicy, h.svc.RequirePrincipal(append(slices.Clone(opts), Browser())...))
+	if h.oauth2.ConsentPath != "" {
+		// SPA lane: the host renders consent from the JSON contract. A JSON
+		// caller gets 401, never a login redirect, so Browser() is left off.
+		consent := h.svc.RequirePrincipal(opts...)
+		r.Handle("GET", "/auth/oauth2/authorize", h.oauth2AuthorizeRedirect, oauth2Headers, browser)
+		r.Handle("GET", "/auth/oauth2/consent", h.oauth2ConsentRead, oauth2Headers, consent)
+		r.Handle("POST", "/auth/oauth2/consent", h.oauth2ConsentDecide, oauth2Headers, consent, requireBrowserSafeMutation(h.mutation.csrf()))
+	} else {
+		r.Handle("GET", "/auth/oauth2/authorize", h.oauth2AuthorizePage, oauth2Headers, browser)
+		r.Handle("POST", "/auth/oauth2/authorize", h.oauth2Authorize, oauth2Headers, browser, requireBrowserSafeFormMutation(h.mutation.csrf()))
+	}
 	r.Handle("POST", "/auth/oauth2/token", h.oauth2Token, oauth2Headers)
 	r.Handle("POST", "/auth/oauth2/revoke", h.oauth2Revoke, oauth2Headers)
 	r.Handle("POST", "/auth/oauth2/introspect", h.oauth2Introspect, oauth2Headers)
@@ -71,35 +81,8 @@ func (h *handlers) oauth2Metadata(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) oauth2AuthorizePage(w http.ResponseWriter, r *http.Request) {
-	if len(r.URL.RawQuery) > 16<<10 {
-		writeOAuth2Error(w, r, oauth2.ErrInvalidRequest)
-		return
-	}
-	form, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil || !singleOAuth2Values(form) {
-		writeOAuth2Error(w, r, oauth2.ErrInvalidRequest)
-		return
-	}
-	if (form.Get("response_mode") != "" && form.Get("response_mode") != "query") || form.Get("request") != "" || form.Get("request_uri") != "" || form.Get("authorization_details") != "" {
-		writeOAuth2Error(w, r, oauth2.ErrInvalidRequest)
-		return
-	}
-	if form.Get("audience") != "" {
-		writeOAuth2Error(w, r, oauth2.ErrInvalidTarget)
-		return
-	}
-	if !h.oauth2Limit(w, r, "authorize", form.Get("client_id"), 60) {
-		return
-	}
-	userID, sessionID, ok := h.formPrincipal(w, r)
+	approved, ok := h.prepareOAuth2Authorization(w, r)
 	if !ok {
-		return
-	}
-	approved, err := h.oauth2.Service.PrepareAuthorization(r.Context(), oauth2.AuthorizationRequest{
-		ResponseType: form.Get("response_type"), ClientID: form.Get("client_id"), RedirectURI: form.Get("redirect_uri"), Resource: form.Get("resource"), CodeChallenge: form.Get("code_challenge"), CodeChallengeMethod: form.Get("code_challenge_method"), State: form.Get("state"), Scope: form.Get("scope"),
-	}, userID, sessionID)
-	if err != nil {
-		writeOAuth2Error(w, r, err)
 		return
 	}
 	pc := h.newPageContext(w)
@@ -116,6 +99,54 @@ func (h *handlers) oauth2AuthorizePage(w http.ResponseWriter, r *http.Request) {
 	web.Render(r.Context(), w, http.StatusOK, h.oauth2.Views.OAuthConsent(OAuthConsentPage{
 		PageContext: pc, ClientName: approved.Client.Name, ClientID: approved.Client.ID, ClientHost: clientHost, RedirectHost: redirectHost, Resource: approved.Resource, RequestToken: approved.ConsentToken, CapabilityDescription: h.oauth2.CapabilityDescription,
 	}))
+}
+
+// oauth2AuthorizeRedirect is the SPA lane's authorize: the same validation
+// as the consent page, then a 303 to the host's ConsentPath carrying only the
+// signed consent request token, never the raw authorize parameters.
+func (h *handlers) oauth2AuthorizeRedirect(w http.ResponseWriter, r *http.Request) {
+	approved, ok := h.prepareOAuth2Authorization(w, r)
+	if !ok {
+		return
+	}
+	http.Redirect(w, r, h.oauth2.ConsentPath+"?"+url.Values{"request": {approved.ConsentToken}}.Encode(), http.StatusSeeOther)
+}
+
+// prepareOAuth2Authorization validates an authorize request for the signed-in
+// browser and prepares its consent. On failure it has written the response.
+func (h *handlers) prepareOAuth2Authorization(w http.ResponseWriter, r *http.Request) (oauth2.Authorization, bool) {
+	if len(r.URL.RawQuery) > 16<<10 {
+		writeOAuth2Error(w, r, oauth2.ErrInvalidRequest)
+		return oauth2.Authorization{}, false
+	}
+	form, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil || !singleOAuth2Values(form) {
+		writeOAuth2Error(w, r, oauth2.ErrInvalidRequest)
+		return oauth2.Authorization{}, false
+	}
+	if (form.Get("response_mode") != "" && form.Get("response_mode") != "query") || form.Get("request") != "" || form.Get("request_uri") != "" || form.Get("authorization_details") != "" {
+		writeOAuth2Error(w, r, oauth2.ErrInvalidRequest)
+		return oauth2.Authorization{}, false
+	}
+	if form.Get("audience") != "" {
+		writeOAuth2Error(w, r, oauth2.ErrInvalidTarget)
+		return oauth2.Authorization{}, false
+	}
+	if !h.oauth2Limit(w, r, "authorize", form.Get("client_id"), 60) {
+		return oauth2.Authorization{}, false
+	}
+	userID, sessionID, ok := h.formPrincipal(w, r)
+	if !ok {
+		return oauth2.Authorization{}, false
+	}
+	approved, err := h.oauth2.Service.PrepareAuthorization(r.Context(), oauth2.AuthorizationRequest{
+		ResponseType: form.Get("response_type"), ClientID: form.Get("client_id"), RedirectURI: form.Get("redirect_uri"), Resource: form.Get("resource"), CodeChallenge: form.Get("code_challenge"), CodeChallengeMethod: form.Get("code_challenge_method"), State: form.Get("state"), Scope: form.Get("scope"),
+	}, userID, sessionID)
+	if err != nil {
+		writeOAuth2Error(w, r, err)
+		return oauth2.Authorization{}, false
+	}
+	return approved, true
 }
 
 func (h *handlers) oauth2Authorize(w http.ResponseWriter, r *http.Request) {
@@ -148,10 +179,21 @@ func (h *handlers) oauth2Authorize(w http.ResponseWriter, r *http.Request) {
 		writeOAuth2Error(w, r, err)
 		return
 	}
-	dest, err := url.Parse(result.RedirectURI)
-	if err != nil || dest.Host == "" {
+	dest, ok := h.oauth2ResultRedirect(result)
+	if !ok || !writeOAuth2ConsentSecurity(w, h.htmlPolicy, "", result.RedirectURI) {
 		writeOAuth2Error(w, r, oauth2.ErrInvalidRequest)
 		return
+	}
+	http.Redirect(w, r, dest, http.StatusSeeOther)
+}
+
+// oauth2ResultRedirect is the client redirect for a consent decision: the
+// validated redirect from the consent token, with code or error, state and iss.
+// The form and JSON consent lanes share it, so both produce the same URL.
+func (h *handlers) oauth2ResultRedirect(result oauth2.AuthorizationResult) (string, bool) {
+	dest, err := url.Parse(result.RedirectURI)
+	if err != nil || dest.Host == "" {
+		return "", false
 	}
 	query := dest.Query()
 	if result.Code != "" {
@@ -164,11 +206,115 @@ func (h *handlers) oauth2Authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	query.Set("iss", h.oauth2.Service.Metadata().Issuer)
 	dest.RawQuery = query.Encode()
-	if !writeOAuth2ConsentSecurity(w, h.htmlPolicy, "", result.RedirectURI) {
+	return dest.String(), true
+}
+
+type oauth2ConsentResponse struct {
+	ClientName            string `json:"client_name"`
+	ClientID              string `json:"client_id"`
+	ClientHost            string `json:"client_host"`
+	RedirectHost          string `json:"redirect_host"`
+	Resource              string `json:"resource"`
+	CapabilityDescription string `json:"capability_description"`
+	Request               string `json:"request"`
+}
+
+type oauth2DecisionRequest struct {
+	Request  string `json:"request"`
+	Decision string `json:"decision"`
+}
+
+type oauth2DecisionResponse struct {
+	RedirectURI string `json:"redirect_uri"`
+}
+
+// oauth2ConsentRead is GET /auth/oauth2/consent?request=… (SPA lane): the
+// consent model for the approving user's own web session, with no write.
+func (h *handlers) oauth2ConsentRead(w http.ResponseWriter, r *http.Request) {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil || len(r.URL.RawQuery) > 16<<10 || !singleOAuth2Values(query) {
 		writeOAuth2Error(w, r, oauth2.ErrInvalidRequest)
 		return
 	}
-	http.Redirect(w, r, dest.String(), http.StatusSeeOther)
+	userID, sessionID, ok := h.oauth2JSONPrincipal(w, r)
+	if !ok || !h.oauth2Limit(w, r, "consent", "user:"+userID, 60) {
+		return
+	}
+	approved, err := h.oauth2.Service.DescribeConsent(r.Context(), query.Get("request"), userID, sessionID)
+	if err != nil {
+		writeOAuth2Error(w, r, err)
+		return
+	}
+	web.RespondJSONOK(w, oauth2ConsentResponse{
+		ClientName: approved.Client.Name, ClientID: approved.Client.ID, ClientHost: oauth2Hostname(approved.Client.ID), RedirectHost: oauth2Hostname(approved.RedirectURI),
+		Resource: approved.Resource, CapabilityDescription: h.oauth2.CapabilityDescription, Request: approved.ConsentToken,
+	})
+}
+
+// oauth2ConsentDecide is POST /auth/oauth2/consent (SPA lane), behind the
+// Origin and X-CSRF-Token gate. It returns the client redirect the form lane
+// would 303 to; the redirect comes only from the signed consent token.
+func (h *handlers) oauth2ConsentDecide(w http.ResponseWriter, r *http.Request) {
+	if !requireJSON(w, r) {
+		return
+	}
+	var req oauth2DecisionRequest
+	if !strictJSONBody(w, r, &req, maxOAuth2BodyBytes) {
+		return
+	}
+	userID, sessionID, ok := h.oauth2JSONPrincipal(w, r)
+	if !ok || !h.oauth2Limit(w, r, "consent", "user:"+userID, 60) {
+		return
+	}
+	var result oauth2.AuthorizationResult
+	var err error
+	switch req.Decision {
+	case "allow":
+		result, err = h.oauth2.Service.Approve(r.Context(), req.Request, userID, sessionID)
+	case "deny":
+		result, err = h.oauth2.Service.Deny(r.Context(), req.Request, userID, sessionID)
+	default:
+		err = oauth2.ErrInvalidRequest
+	}
+	if err != nil {
+		writeOAuth2Error(w, r, err)
+		return
+	}
+	dest, ok := h.oauth2ResultRedirect(result)
+	if !ok {
+		writeOAuth2Error(w, r, oauth2.ErrInvalidRequest)
+		return
+	}
+	web.RespondJSONOK(w, oauth2DecisionResponse{RedirectURI: dest})
+}
+
+func (h *handlers) oauth2JSONPrincipal(w http.ResponseWriter, r *http.Request) (userID, sessionID string, ok bool) {
+	userID, uok := h.svc.CurrentUser(r.Context())
+	sessionID, sok := h.svc.CurrentSessionID(r.Context())
+	if !uok || !sok {
+		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
+		return "", "", false
+	}
+	return userID, sessionID, true
+}
+
+// OAuth2ConsentPageHeaders is the header set a host's own consent page
+// (OAuth2Config.ConsentPath) must send. The consent page is the route an
+// attacker most wants to frame, and its URL carries the consent request
+// token, so it is never framed, cached or sent as a Referer. A host with its
+// own Content-Security-Policy must include frame-ancestors 'none' in it; this
+// middleware sets that policy only when none is set yet.
+func OAuth2ConsentPageHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if w.Header().Get("Content-Security-Policy") == "" {
+			w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (h *handlers) oauth2Token(w http.ResponseWriter, r *http.Request) {

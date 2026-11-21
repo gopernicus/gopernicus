@@ -13,7 +13,16 @@ import (
 type OAuth2Config struct {
 	Server  oauth2.Config
 	Clients oauth2.ClientResolver
-	Views   inbound.OAuthViews
+	// Views renders consent and the sessions page on the pocket, and needs the
+	// browser Views. Set exactly one of Views and ConsentPath.
+	Views inbound.OAuthViews
+	// ConsentPath is the host's own consent page (a SPA): a safe relative path
+	// with no query or fragment. GET /auth/oauth2/authorize then redirects there
+	// with ?request=<consent request token>; the page reads GET
+	// /auth/oauth2/consent and posts POST /auth/oauth2/consent (JSON, Origin and
+	// X-CSRF-Token). The browser Views become optional and no OAuth2 HTML page
+	// is mounted. Serve the page with inbound.OAuth2ConsentPageHeaders.
+	ConsentPath string
 	// CapabilityDescription is trusted host copy describing the exposed tools.
 	CapabilityDescription string
 	// DelegatedAssurance (opt-in, SOC 2 S4d part 4) signs the approving

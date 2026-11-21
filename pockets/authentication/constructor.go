@@ -696,7 +696,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		if err != nil {
 			return nil, err
 		}
-		oauthHTTP = &inbound.OAuth2Config{Service: oauthService, Sessions: authService, Views: cfg.OAuth2.Views, CapabilityDescription: cfg.OAuth2.CapabilityDescription, Limiter: limiter}
+		oauthHTTP = &inbound.OAuth2Config{Service: oauthService, Sessions: authService, Views: cfg.OAuth2.Views, ConsentPath: cfg.OAuth2.ConsentPath, CapabilityDescription: cfg.OAuth2.CapabilityDescription, Limiter: limiter}
 	}
 
 	// The outbound delivery executor is built AFTER authService so its Initializer —

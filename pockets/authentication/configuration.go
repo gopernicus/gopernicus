@@ -41,10 +41,16 @@ func validateRepositories(repos Repositories, cfg constructorConfig) error {
 		}
 	}
 	if cfg.OAuth2 != nil {
-		for _, dependency := range []any{repos.OAuth2, repos.SessionManagement, cfg.OAuth2.Clients, cfg.OAuth2.Views, cfg.Views} {
+		for _, dependency := range []any{repos.OAuth2, repos.SessionManagement, cfg.OAuth2.Clients} {
 			if nilDependency(dependency) {
-				return fmt.Errorf("authentication: OAuth2 requires storage, client trust, browser and consent views: %w", sdk.ErrInvalidInput)
+				return fmt.Errorf("authentication: OAuth2 requires storage and client trust: %w", sdk.ErrInvalidInput)
 			}
+		}
+		if nilDependency(cfg.OAuth2.Views) == (cfg.OAuth2.ConsentPath == "") {
+			return fmt.Errorf("authentication: OAuth2 requires exactly one of Views and ConsentPath: %w", sdk.ErrInvalidInput)
+		}
+		if !nilDependency(cfg.OAuth2.Views) && nilDependency(cfg.Views) {
+			return fmt.Errorf("authentication: OAuth2 Views require the browser Views: %w", sdk.ErrInvalidInput)
 		}
 	}
 	if !cfg.PasswordFlowsDisabled && nilDependency(repos.Passwords) {
@@ -277,7 +283,11 @@ func logOAuth2(cfg constructorConfig, log *slog.Logger) {
 	if cfg.OAuth2.Server.DelegatedAssurance {
 		delegated = "on"
 	}
-	log.Info("auth: oauth2", "delegated_assurance", delegated)
+	consent := "views"
+	if cfg.OAuth2.ConsentPath != "" {
+		consent = "path"
+	}
+	log.Info("auth: oauth2", "delegated_assurance", delegated, "consent", consent)
 }
 
 // logKeys logs the one auth: keys boot line: per role its kind and, for a

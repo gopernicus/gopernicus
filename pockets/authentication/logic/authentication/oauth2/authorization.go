@@ -52,8 +52,20 @@ func (s *Service) PrepareAuthorization(ctx context.Context, req AuthorizationReq
 	return Authorization{Client: client, UserID: owner.ID, DisplayName: owner.DisplayName, Resource: req.Resource, ConsentToken: token, RedirectURI: req.RedirectURI, ExpiresAt: expires}, nil
 }
 
+// DescribeConsent reads back a consent request token for the approving user's
+// own consent page: the same checks as Approve (signature, purpose, expiry,
+// user, web session, auth revision, and a fresh client and redirect
+// validation), with no write. The returned ConsentToken is the one presented.
+func (s *Service) DescribeConsent(ctx context.Context, consentToken, userID, webSessionID string) (Authorization, error) {
+	approved, client, owner, err := s.readConsent(ctx, consentToken, userID, webSessionID)
+	if err != nil {
+		return Authorization{}, err
+	}
+	return Authorization{Client: client, UserID: owner.ID, DisplayName: owner.DisplayName, Resource: approved.Request.Resource, ConsentToken: consentToken, RedirectURI: approved.Request.RedirectURI, ExpiresAt: approved.ExpiresAt}, nil
+}
+
 func (s *Service) Approve(ctx context.Context, consentToken, userID, webSessionID string) (AuthorizationResult, error) {
-	approved, err := s.readConsent(ctx, consentToken, userID, webSessionID)
+	approved, _, _, err := s.readConsent(ctx, consentToken, userID, webSessionID)
 	if err != nil {
 		return AuthorizationResult{}, err
 	}
@@ -80,7 +92,7 @@ func (s *Service) Approve(ctx context.Context, consentToken, userID, webSessionI
 }
 
 func (s *Service) Deny(ctx context.Context, consentToken, userID, webSessionID string) (AuthorizationResult, error) {
-	approved, err := s.readConsent(ctx, consentToken, userID, webSessionID)
+	approved, _, _, err := s.readConsent(ctx, consentToken, userID, webSessionID)
 	if err != nil {
 		return AuthorizationResult{}, err
 	}
@@ -88,36 +100,37 @@ func (s *Service) Deny(ctx context.Context, consentToken, userID, webSessionID s
 	return AuthorizationResult{RedirectURI: approved.Request.RedirectURI, State: approved.Request.State, Error: "access_denied"}, nil
 }
 
-func (s *Service) readConsent(ctx context.Context, raw, userID, webSessionID string) (consent, error) {
+func (s *Service) readConsent(ctx context.Context, raw, userID, webSessionID string) (consent, Client, user.User, error) {
 	if raw == "" || len(raw) > 16<<10 {
-		return consent{}, ErrInvalidRequest
+		return consent{}, Client{}, user.User{}, ErrInvalidRequest
 	}
 	claims, err := s.signer.Verify(raw)
 	if err != nil {
-		return consent{}, ErrInvalidRequest
+		return consent{}, Client{}, user.User{}, ErrInvalidRequest
 	}
 	payload, ok := claims["consent"].(string)
 	if claims["purpose"] != "oauth2_consent" || !ok {
-		return consent{}, ErrInvalidRequest
+		return consent{}, Client{}, user.User{}, ErrInvalidRequest
 	}
 	var out consent
 	if err := json.Unmarshal([]byte(payload), &out); err != nil {
-		return consent{}, ErrInvalidRequest
+		return consent{}, Client{}, user.User{}, ErrInvalidRequest
 	}
 	if out.UserID != userID || out.SessionID != webSessionID || !s.now().Before(out.ExpiresAt) {
-		return consent{}, ErrAccessDenied
+		return consent{}, Client{}, user.User{}, ErrAccessDenied
 	}
 	owner, err := s.approvingUser(ctx, userID, webSessionID)
 	if err != nil {
-		return consent{}, err
+		return consent{}, Client{}, user.User{}, err
 	}
 	if owner.AuthRevision != out.AuthRevision {
-		return consent{}, ErrAccessDenied
+		return consent{}, Client{}, user.User{}, ErrAccessDenied
 	}
-	if _, err := s.validateAuthorization(ctx, out.Request); err != nil {
-		return consent{}, err
+	client, err := s.validateAuthorization(ctx, out.Request)
+	if err != nil {
+		return consent{}, Client{}, user.User{}, err
 	}
-	return out, nil
+	return out, client, owner, nil
 }
 
 func (s *Service) approvingUser(ctx context.Context, userID, webSessionID string) (user.User, error) {
