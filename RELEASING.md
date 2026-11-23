@@ -1,5 +1,50 @@
 # Releasing gopernicus modules
 
+## A host hook on every primary sign-in (#394 — pockets/authentication v0.47.0 — published 2026-11-23)
+
+**Status: released.** **MINOR, additive and opt-in; the zero value runs no hook.**
+
+- `SessionsConfig.BeforeSession` (`authlogic.SignInHook`, `func(ctx, authlogic.SignIn) error`)
+  runs on every primary sign-in, after the pocket's own checks and before the session is minted:
+  - password login and token issue;
+  - OAuth login, registration and pending-link verify;
+  - passkey sign-in;
+  - the passwordless code and link.
+
+  `SignIn` carries the user id, the method, `Created` and the verified login identifiers. The hook
+  is bounded by `SignInHookTimeout` (10s). It never runs on a refresh, a step-up, a delegated token
+  issue, or a password change, set or removal.
+- A non-nil error refuses the sign-in and no token is returned.
+  - `sdk.ErrForbidden` answers 403 and `sdk.ErrConflict` answers 409. Either one records the
+    flow's sign-in row `blocked` with the new reason `host_refused`.
+  - A browser OAuth callback lands on `?auth=sign_in_refused`, and HTML forms re-render with
+    refusal copy.
+  - An unkinded error is a 500.
+  - New: `ErrSignInRefusedByHook`, `IsSignInRefusal`, `SignInRefusal`, `SignInRefusedCode`,
+    `WithSignInHook`.
+- The hook and the session are two stores, never atomic, so the hook must be idempotent. A
+  passwordless link that provisions the account commits the account and the session together.
+  There the hook runs after that commit, and a refusal deletes the session before any token is
+  handed out.
+
+**Host note.** No store change and no migration: `host_refused` is a value in the audit row's
+details. The store modules are not retagged, and hosts bump only the core pin.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/authentication/v0.47.0` | `a5f386a9` → `8403b172` | #394 | not run (no store or migration change; owner said release) | OK; proxy serves v0.47.0 at `8403b172`; MVS selects sdk v0.24.0; `SessionsConfig.BeforeSession`, `WithSignInHook`, `SignInRefusal`, `IsSignInRefusal` and `ReasonHostRefused` resolve |
+| — | none | — | PR-2: auth-cms, external-identity, production-baseline repin | — | each builds, vets and tests with `GOWORK=off` |
+
+Annotated, not signed. **Run and look.** auth-cms with a temporary refusing hook, driven in
+Chromium:
+- HTML login refused: 403 with the refusal copy, no session cookie, `/auth/me` 401.
+- Browser OAuth registration refused: 302 to `/?auth=sign_in_refused` with `Created=true` and no
+  session.
+- Both admitted: signed in.
+
+The repin adds an auth-cms test of a refused provisioning link: 403, no cookie, `/auth/me` 401.
+The next link is admitted and signs in the same account with `Created=false`.
+
 ## Disconnect every app, and an exchange audit window (#387, #386 — pockets/authentication v0.46.0, stores/pgx v0.20.0, stores/turso v0.19.0 — published 2026-11-20)
 
 **Status: released.** **MINOR, additive and opt-in; the defaults are unchanged.**
