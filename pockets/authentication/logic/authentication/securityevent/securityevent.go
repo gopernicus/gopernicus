@@ -574,6 +574,9 @@ const (
 	ReasonNotEnrolled = "not_enrolled"
 	// ReasonEnvelope is a sealed TOTP secret that did not open for its user.
 	ReasonEnvelope = "envelope"
+	// ReasonHostRefused is a primary sign-in the host's BeforeSession hook
+	// refused with a forbidden or conflict error.
+	ReasonHostRefused = "host_refused"
 )
 
 // Attribution bounds BoundValue applies, in bytes.

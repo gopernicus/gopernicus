@@ -35,6 +35,7 @@ const (
 	passwordlessCodeErrMsg  = "That code didn't work. Request a new one."
 	magicErrMsg             = "That sign-in link is no longer valid. Request a new one."
 	tooManyErrMsg           = "Too many attempts. Please wait a moment and try again."
+	signInRefusedErrMsg     = "This sign-in was refused."
 )
 
 // registerInvitationErrMsg is the actionable copy for an address with no
@@ -139,6 +140,11 @@ func (h *handlers) prgTo(w http.ResponseWriter, r *http.Request, dest string) {
 func formFailure(err error, generic string) (int, string) {
 	if errors.Is(err, authlogic.ErrRateLimited) || errors.Is(err, authlogic.ErrPasswordlessRateLimited) {
 		return http.StatusTooManyRequests, tooManyErrMsg
+	}
+	// A sign-in the host's BeforeSession hook refused says so; its text never
+	// reaches the page.
+	if authlogic.IsSignInRefusal(err) {
+		return web.ErrFromDomain(err).Status, signInRefusedErrMsg
 	}
 	// A challenge-rail sentinel maps through the SAME §5.8 mapper the JSON arm uses, so
 	// both transports agree on the status for one service error (transport parity). The

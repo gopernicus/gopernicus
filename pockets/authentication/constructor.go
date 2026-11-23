@@ -653,6 +653,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		authlogic.WithIDs(cfg.IDs),
 		authlogic.WithSecurityEventRecorder(securityEvents),
 		authlogic.WithErasure(authlogic.ErasureConfig{BeforeErase: cfg.BeforeErase}),
+		authlogic.WithSignInHook(cfg.BeforeSession),
 	}
 	if cfg.OAuth2 != nil {
 		logicOptions = append(logicOptions, authlogic.WithDelegatedTokens(authlogic.DelegatedTokensConfig{Issuer: cfg.OAuth2.Server.Issuer}))

@@ -104,6 +104,7 @@ type authenticationFixture struct {
 	MFAMethods              []authlogic.MFAMethod
 	MFAEnrollment           authlogic.MFAEnrollmentConfig
 	Registration            authlogic.RegistrationMode
+	BeforeSession           authlogic.SignInHook
 	GlobalSessions          session.GlobalRevoker
 	ServiceAccountStatuses  serviceaccount.StatusRepository
 	Machine                 authlogic.MachineConfig

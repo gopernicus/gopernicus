@@ -298,6 +298,7 @@ func mustAuthenticationService(d authenticationFixture) *authlogic.Components {
 		authlogic.WithClock(d.Clock),
 		authlogic.WithLogger(d.Logger),
 		authlogic.WithIDs(d.IDs),
+		authlogic.WithSignInHook(d.BeforeSession),
 	}
 	if d.External != nil {
 		opts = append(opts, authlogic.WithExternal(*d.External))
