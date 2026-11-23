@@ -360,6 +360,15 @@ func (s *Service) FinishPasskeySignIn(ctx context.Context, in PasskeySignInInput
 		return TokenPair{}, user.User{}, err
 	}
 	method := passkeyMethod(pk, assertion)
+	if err := s.runBeforeSession(ctx, u.ID, method, false); err != nil {
+		status, reason := hookOutcome(err)
+		details := map[string]any{"ceremony": passkeyCeremonySignIn}
+		if reason != "" {
+			details["reason"] = reason
+		}
+		s.recordSecurityEvent(ctx, securityEventInput{UserID: u.ID, Type: securityevent.TypePasskeyFailed, Status: status, Details: details})
+		return TokenPair{}, user.User{}, err
+	}
 	pair, err := s.mintSession(ctx, u.ID, u.AuthRevision, s.primaryAuthentication(method))
 	if err != nil {
 		if reason, ok := mintFailureReason(err); ok {

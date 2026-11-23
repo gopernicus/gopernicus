@@ -3098,6 +3098,52 @@ link issued under `invitation_only` provisions even if the invitation is
 revoked before the redeem (the binding decides), and registrations pending when
 the mode flips are not re-checked at verify.
 
+### Sign-in hook (`BeforeSession`)
+
+`SessionsConfig.BeforeSession` (`authlogic.SignInHook`, `func(ctx,
+authlogic.SignIn) error`, OPTIONAL) is the host's step on every primary
+sign-in. It runs after the pocket's own checks (the credential proof, the
+active user, the provider link) and before the session is minted, under the
+request context bounded by `authlogic.SignInHookTimeout` (10s). `SignIn`
+carries `UserID`, `Method` (a `session.MethodKind`), `Created` (this flow
+created the user) and `Identifiers` (the active, verified, login-enabled
+identifiers, primary first). Typical: link or create the host's own record for
+the account, or refuse an address the host does not admit.
+
+| Runs on | Does not run on |
+|---|---|
+| `POST /auth/login`, the token issue, the HTML login form | refresh |
+| OAuth existing link, OAuth registration (`Created`), pending-link verify | passkey and TOTP step-up |
+| passkey sign-in | delegated and OAuth 2 token issue |
+| passwordless code verify and link redeem (`Created` when the link provisions) | password change, set or removal |
+
+A non-nil error refuses the sign-in and no token is returned. The error is
+`authlogic.ErrSignInRefusedByHook` wrapped with the hook's own; it maps by the
+hook error's sdk kind (`sdk.ErrForbidden` 403, `sdk.ErrConflict` 409, an
+unkinded error 500), and the hook's text never reaches the response.
+
+- **Browser OAuth callback.** A forbidden or conflict refusal clears the flow
+  cookie and 302s to the flow's validated destination with
+  `?auth=sign_in_refused`, the way a registration refusal lands. No session
+  cookie is set.
+- **HTML forms.** The form re-renders with "This sign-in was refused."
+- **JSON and native.** The usual error body at the hook's status.
+- **Audit.** A forbidden or conflict refusal records the flow's own sign-in row
+  (`login`, `token_issued`, `oauth_login`, `oauth_link_verified`,
+  `passkey_failed`, `passwordless_login`) as `blocked` with
+  `reason=host_refused`; any other hook error records it as `failure` with no
+  reason. `authlogic.IsSignInRefusal(err)` tells a refusal apart.
+
+The hook and the session are two stores, never atomic. A hook that succeeds
+before a mint that fails (a revision race, a deactivated user) leaves its write
+in place, so **the hook must be idempotent**: the next sign-in finds its record
+and changes nothing. A refused OAuth registration or pending-link verify keeps
+the user and the link, and the next sign-in arrives through the existing link
+with `Created` false. A passwordless link with provision-on-redeem commits the
+account and the session in one transaction, so there the hook runs after that
+commit; a refusal deletes the new session before any token is handed out, and
+the account stays.
+
 ### API-key lifetime, listing and pause
 
 **Lifetime.** `AdministrationConfig.APIKeyMaxTTL` (`AUTH_API_KEY_MAX_TTL`)

@@ -229,6 +229,7 @@ type constructorConfig struct {
 	UserAdmin               user.AdminRepository
 	UserErasure             user.EraseRepository
 	BeforeErase             EraseHook
+	BeforeSession           SignInHook
 	PasswordlessRedeem      passwordless.Repository
 	ProvisionOnRedeem       bool
 	ActiveSessions          session.ActiveUserRepository
@@ -431,6 +432,9 @@ type Service struct {
 	// beforeErase is the host's optional pre-erase hook (WithErasure). Nil →
 	// EraseUser runs none.
 	beforeErase EraseHook
+	// beforeSession is the host's optional pre-session hook (WithSignInHook).
+	// Nil → primary sign-ins run none.
+	beforeSession SignInHook
 	// activeSessions is the optional fenced session-minting capability:
 	// it inserts a session only while the owning user is atomically proven active.
 	// Nil → mintSession falls back to the ordinary sessions.Create, which cannot
@@ -603,6 +607,7 @@ func newService(d constructorConfig) *Service {
 		userAdmin:          d.UserAdmin,
 		userErasure:        d.UserErasure,
 		beforeErase:        d.BeforeErase,
+		beforeSession:      d.BeforeSession,
 		activeSessions:     d.ActiveSessions,
 		passwordlessRedeem: d.PasswordlessRedeem,
 		provisionOnRedeem:  d.ProvisionOnRedeem,
@@ -908,6 +913,10 @@ func (s *Service) Login(ctx context.Context, emailAddr, password string) (TokenP
 		s.recordLogin(ctx, u.ID, normalized, err)
 		return TokenPair{}, user.User{}, err
 	}
+	if err := s.runBeforeSession(ctx, u.ID, session.MethodPassword, false); err != nil {
+		s.recordLogin(ctx, u.ID, normalized, err)
+		return TokenPair{}, user.User{}, err
+	}
 
 	pair, err := s.mintSession(ctx, u.ID, u.AuthRevision, s.primaryAuthentication(session.MethodPassword))
 	if err != nil {
@@ -938,13 +947,15 @@ func (s *Service) recordLogin(ctx context.Context, userID, email string, err err
 // Login's login row or IssueToken's token_issued row — classifying err: nil is
 // success; a rate limit (rate_limited) or a deactivated account (inactive) is
 // blocked; a credential mismatch (invalid_credentials) or an unverified email
-// (email_unverified) is a failure. Any other error is a failure without a
-// reason. details is extended in place with the reason.
+// (email_unverified) is a failure; a BeforeSession refusal is classified by
+// hookOutcome. Any other error is a failure without a reason. details is extended in place with the reason.
 func (s *Service) recordCredentialOutcome(ctx context.Context, eventType, userID string, err error, details map[string]any) {
 	status, reason := securityevent.StatusFailure, ""
 	switch {
 	case err == nil:
 		status = securityevent.StatusSuccess
+	case errors.Is(err, ErrSignInRefusedByHook):
+		status, reason = hookOutcome(err)
 	case errors.Is(err, ErrRateLimited):
 		status, reason = securityevent.StatusBlocked, securityevent.ReasonRateLimited
 	case errors.Is(err, session.ErrUserNotActive):

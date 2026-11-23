@@ -302,7 +302,9 @@ func ValidOAuthFlowValue(value string) bool {
 // oauth_login failure or blocked row with the provider and a reason, except a
 // link-start conflict, which records an oauth_linked failure, and an unknown
 // provider, which records reason unknown_provider with no provider as a
-// Budgeted row.
+// Budgeted row. A login or registration the host's BeforeSession hook refuses
+// with sdk.ErrForbidden or sdk.ErrConflict is a *SignInRefusal carrying the
+// flow's validated destination.
 func (s *Service) OAuthCallback(ctx context.Context, providerName string, req OAuthCallbackRequest) (OAuthResult, error) {
 	p, err := s.provider(providerName)
 	if err != nil {
@@ -376,7 +378,7 @@ func (s *Service) OAuthCallback(ctx context.Context, providerName string, req OA
 	case err == nil:
 		pair, u, err := s.oauthSession(ctx, existing)
 		if err != nil {
-			return OAuthResult{}, err
+			return OAuthResult{}, signInRefusal(err, fs.RedirectTo)
 		}
 		s.recordOAuth(ctx, existing.UserID, providerName, securityevent.TypeOAuthLogin, securityevent.StatusSuccess, "")
 		return OAuthResult{Action: ActionLogin, Token: pair.AccessToken, RefreshToken: pair.RefreshToken, User: u, RedirectTo: fs.RedirectTo}, nil
@@ -436,7 +438,11 @@ func (s *Service) OAuthCallback(ctx context.Context, providerName string, req OA
 		refusal := registrationError(reason)
 		return OAuthResult{}, &RegistrationRefusal{Code: registrationCode(refusal), RedirectTo: fs.RedirectTo, err: refusal}
 	}
-	return s.registerAndLink(ctx, providerName, normEmail, ident, tok, fs.RedirectTo)
+	res, err := s.registerAndLink(ctx, providerName, normEmail, ident, tok, fs.RedirectTo)
+	if err != nil {
+		return OAuthResult{}, signInRefusal(err, fs.RedirectTo)
+	}
+	return res, nil
 }
 
 // VerifyLink completes a pending link: it consumes the pending-link secret
@@ -488,6 +494,13 @@ func (s *Service) VerifyLink(ctx context.Context, token string) (OAuthResult, er
 		return OAuthResult{}, err
 	}
 	u.AuthRevision = revision
+	// The link stays when the host refuses: it is the account's own proven
+	// provider, and the next sign-in arrives through the existing-link branch.
+	if err := s.runBeforeSession(ctx, u.ID, session.MethodOAuth, false); err != nil {
+		status, reason := hookOutcome(err)
+		s.recordOAuth(ctx, u.ID, st.Provider, securityevent.TypeOAuthLinkVerified, status, reason)
+		return OAuthResult{}, err
+	}
 	pair, err := s.mintSession(ctx, u.ID, revision, s.primaryAuthentication(session.MethodOAuth))
 	if err != nil {
 		if errors.Is(err, session.ErrUserNotActive) {
@@ -647,6 +660,13 @@ func (s *Service) registerAndLink(ctx context.Context, providerName, normEmail s
 		primaryEmail = normEmail // a store that does not echo the identifier back
 	}
 	s.resolvePendingInvitations(ctx, sdk.AddressKindEmail, primaryEmail, created.ID)
+	// The user and its link stay when the host refuses: the next sign-in
+	// arrives through the existing-link branch with Created false.
+	if err := s.runBeforeSession(ctx, created.ID, session.MethodOAuth, true); err != nil {
+		status, reason := hookOutcome(err)
+		s.recordOAuth(ctx, created.ID, providerName, securityevent.TypeOAuthLogin, status, reason)
+		return OAuthResult{}, err
+	}
 	pair, err := s.mintSession(ctx, created.ID, created.AuthRevision, s.primaryAuthentication(session.MethodOAuth))
 	if err != nil {
 		return OAuthResult{}, err
@@ -684,6 +704,11 @@ func (s *Service) oauthSession(ctx context.Context, account oauthaccount.OAuthAc
 			s.recordOAuth(ctx, u.ID, account.Provider, securityevent.TypeOAuthLogin, securityevent.StatusFailure, securityevent.ReasonLinkConflict)
 		}
 		return TokenPair{}, user.User{}, invalidCredentials()
+	}
+	if err := s.runBeforeSession(ctx, u.ID, session.MethodOAuth, false); err != nil {
+		status, reason := hookOutcome(err)
+		s.recordOAuth(ctx, u.ID, account.Provider, securityevent.TypeOAuthLogin, status, reason)
+		return TokenPair{}, user.User{}, err
 	}
 	pair, err := s.mintSession(ctx, u.ID, u.AuthRevision, s.primaryAuthentication(session.MethodOAuth))
 	if err != nil {

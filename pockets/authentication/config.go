@@ -193,6 +193,7 @@ type constructorConfig struct {
 	MaintenanceRunnerAcknowledged bool
 	UserErasureRoute              bool
 	BeforeErase                   authlogic.EraseHook
+	BeforeSession                 authlogic.SignInHook
 	SecurityEventsRoute           bool
 	MFARequired                   MFARequirement
 	MFAMethods                    []MFAMethod
@@ -331,6 +332,29 @@ type SessionsConfig struct {
 	// surrounding whitespace is ErrTokenIssuerInvalid.
 	Issuer   string `env:"AUTH_TOKEN_ISSUER"`
 	Audience string `env:"AUTH_TOKEN_AUDIENCE"`
+	// BeforeSession is the host's pre-session hook: every primary sign-in
+	// (password login and token issue, an OAuth login, registration or
+	// verified link, a passkey sign-in, a passwordless code or link) calls it
+	// after the pocket's own checks and before the session is minted, with the
+	// user id, the method, whether this flow created the user, and the user's
+	// verified login identifiers, under the request context bounded by
+	// SignInHookTimeout. A non-nil error refuses the sign-in and no token is
+	// returned: sdk.ErrForbidden and sdk.ErrConflict answer with their status
+	// (a browser OAuth callback lands on ?auth=sign_in_refused) and record the
+	// flow's sign-in row blocked with reason host_refused; an unkinded error is
+	// a 500. It never runs on a refresh, a step-up, a delegated or OAuth 2
+	// token issue, or a password change, set or removal. Typical: link or
+	// create the host's own record for the account, or refuse an address the
+	// host does not admit.
+	//
+	// The hook and the session are two stores, never atomic. A hook that
+	// succeeds before a mint that fails leaves its write in place, so it must
+	// be idempotent: the next sign-in finds its record and changes nothing. A
+	// refused OAuth registration keeps the created user and its link; a
+	// passwordless link that provisions the account commits the account and
+	// the session together, so the hook runs after that commit and a refusal
+	// deletes the session before any token is handed out. Nil runs no hook.
+	BeforeSession authlogic.SignInHook
 }
 
 // WithSessions replaces the complete SessionsConfig group, including zero values.
@@ -342,6 +366,7 @@ func WithSessions(value SessionsConfig) Option {
 		c.RefreshGraceWindow = value.RefreshGraceWindow
 		c.TokenIssuer = value.Issuer
 		c.TokenAudience = value.Audience
+		c.BeforeSession = value.BeforeSession
 	}
 }
 

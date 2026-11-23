@@ -106,6 +106,14 @@ func (h *handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, outcomeRedirect(refusal.RedirectTo, refusal.Code), http.StatusFound)
 		return
 	}
+	var signInRefusal *authlogic.SignInRefusal
+	if errors.As(err, &signInRefusal) {
+		// A sign-in the host's BeforeSession hook refused lands the same way,
+		// with no session cookie.
+		h.clearOAuthFlowCookie(w, state)
+		http.Redirect(w, r, outcomeRedirect(signInRefusal.RedirectTo, authlogic.SignInRefusedCode), http.StatusFound)
+		return
+	}
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return

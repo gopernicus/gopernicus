@@ -164,7 +164,7 @@ supplied as a named group:
 | Option | Group |
 |---|---|
 | `WithPassword` | `PasswordConfig`: hasher, password validation and login policy |
-| `WithSessions` | `SessionsConfig`: access-token and refresh horizons |
+| `WithSessions` | `SessionsConfig`: access-token and refresh horizons, and the `BeforeSession` sign-in hook |
 | `WithIdentity` | `IdentityConfig`: proof protection, normalization, identifier keys and credential policy |
 | `WithAbuseProtection` | `AbuseProtectionConfig`: limiter and abuse budgets |
 | `WithDelivery` | `DeliveryConfig`: sender, encrypted dispatch and runtime settings |
@@ -1223,6 +1223,18 @@ authSvc, err := authentication.New(repos, signer, mode, delivery.ModeJobs,
   `user_erase`, returns the pocket error unwrapped and never runs inside a `Transact` on the
   authorization store. Without `Repositories.UserErasure` it is `ErrBeforeEraseWithoutErasure`.
   The pocket README's "Erasure" section has every partial state.
+- **`BeforeSession`, the same seam on the way in.** `SessionsConfig.BeforeSession`
+  (`func(ctx, authlogic.SignIn) error`) runs on every primary sign-in (password, OAuth login,
+  registration and pending-link verify, passkey, passwordless code and link) after the pocket's
+  own checks and before the session is minted, bounded by `SignInHookTimeout` (10s). `SignIn`
+  carries the user id, the method, `Created`, and the verified login identifiers. A
+  `sdk.ErrForbidden` or `sdk.ErrConflict` refuses with that status, records the flow's sign-in row
+  `blocked` with `reason=host_refused`, and lands a browser OAuth callback on
+  `?auth=sign_in_refused`; an unkinded error is a 500. It never runs on a refresh, a step-up, a
+  delegated token issue or a password change. The hook and the session are two stores, so the
+  hook is idempotent. A provisioning passwordless link commits the account and session together,
+  so there the hook runs after the commit and a refusal deletes the session before any token is
+  handed out. The pocket README's "Sign-in hook" section has the full table.
 - **Service accounts.** `Service.DeleteServiceAccount(ctx, actor, id)` deletes the account and its
   API keys in one transaction through the store's optional `serviceaccount.CascadeDeleter` (every
   bundled SQL store), recording `service_account_deleted`; no route ships it.

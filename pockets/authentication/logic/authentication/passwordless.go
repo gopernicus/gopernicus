@@ -219,6 +219,22 @@ func (s *Service) recordPasswordlessLogin(ctx context.Context, userID, kind, pur
 	})
 }
 
+// recordPasswordlessRefusal appends the passwordless_login row of a sign-in
+// the host's BeforeSession hook refused, classified by hookOutcome.
+func (s *Service) recordPasswordlessRefusal(ctx context.Context, userID, kind, purpose string, err error) {
+	status, reason := hookOutcome(err)
+	details := map[string]any{"kind": kind, "purpose": purpose}
+	if reason != "" {
+		details["reason"] = reason
+	}
+	s.recordSecurityEvent(ctx, securityEventInput{
+		UserID:  userID,
+		Type:    securityevent.TypePasswordlessLogin,
+		Status:  status,
+		Details: details,
+	})
+}
+
 // VerifyPasswordless completes the OTP passwordless-login rail (design §4.3): it
 // re-resolves the CURRENT active verified login identifier, atomically consumes the
 // login_otp challenge the start issued for it, and — only on success — mints a
@@ -287,6 +303,10 @@ func (s *Service) VerifyPasswordless(ctx context.Context, kind, identifierValue,
 	// Success mints through the SINGLE session path (design §4.1), stamping the
 	// passwordless code method (email_code / sms_code) so the session records how the
 	// primary authentication happened.
+	if err := s.runBeforeSession(ctx, ident.UserID, passwordlessCodeMethod(kind), false); err != nil {
+		s.recordPasswordlessRefusal(ctx, ident.UserID, kind, purpose, err)
+		return TokenPair{}, err
+	}
 	pair, err := s.mintSession(ctx, ident.UserID, u.AuthRevision, s.primaryAuthentication(passwordlessCodeMethod(kind)))
 	if err != nil {
 		// A deactivated account joins every other rejection under the one generic
@@ -377,6 +397,16 @@ func (s *Service) RedeemPasswordless(ctx context.Context, token string) (TokenPa
 		if (res.Provisioned || res.Outcome == passwordless.OutcomeVerifyAndAdoptExistingUnverified) && holdsClaim(res.Identifier) {
 			s.resolvePendingInvitations(ctx, string(res.Identifier.Kind), res.Identifier.NormalizedValue, res.User.ID)
 		}
+		// The account and the session committed together, so the host's hook
+		// runs after that transaction: a refusal deletes the new session before
+		// the pair is handed out, and the account stays.
+		if err := s.runBeforeSession(ctx, res.User.ID, session.MethodEmailLink, res.Outcome == passwordless.OutcomeProvisionNew); err != nil {
+			s.recordPasswordlessRefusal(ctx, res.User.ID, string(res.Identifier.Kind), purpose, err)
+			if delErr := s.sessions.Delete(context.WithoutCancel(ctx), res.Session.ID); delErr != nil && !errors.Is(delErr, sdk.ErrNotFound) {
+				return TokenPair{}, errors.Join(err, delErr)
+			}
+			return TokenPair{}, err
+		}
 		return pair, nil
 	}
 
@@ -429,6 +459,10 @@ func (s *Service) RedeemPasswordless(ctx context.Context, token string) (TokenPa
 	}
 	// Success mints through the SINGLE session path (design §4.1), stamping the
 	// email-link method so the session records how the primary authentication happened.
+	if err := s.runBeforeSession(ctx, ident.UserID, method, false); err != nil {
+		s.recordPasswordlessRefusal(ctx, ident.UserID, binding.Kind, purpose, err)
+		return TokenPair{}, err
+	}
 	pair, err := s.mintSession(ctx, ident.UserID, *binding.AuthRevision, s.primaryAuthentication(method))
 	if err != nil {
 		// A deactivated account joins every other rejection under the one generic

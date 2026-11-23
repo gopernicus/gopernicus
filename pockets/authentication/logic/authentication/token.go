@@ -91,6 +91,10 @@ func (s *Service) IssueToken(ctx context.Context, emailAddr, password string) (T
 		s.recordCredentialOutcome(ctx, securityevent.TypeTokenIssued, u.ID, err, nil)
 		return TokenPair{}, err
 	}
+	if err := s.runBeforeSession(ctx, u.ID, session.MethodPassword, false); err != nil {
+		s.recordCredentialOutcome(ctx, securityevent.TypeTokenIssued, u.ID, err, nil)
+		return TokenPair{}, err
+	}
 
 	pair, err := s.mintSession(ctx, u.ID, u.AuthRevision, s.primaryAuthentication(session.MethodPassword))
 	if err != nil {
