@@ -148,7 +148,9 @@ pool's normal interval. Batches still run one at a time and oldest first, so
 order and the head-of-line rule above hold whichever instance drains. Nothing
 outlives a batch, so there is nothing to release at shutdown.
 `outbox.NewMemoryLock()` serializes pollers inside one process (tests,
-single-binary hosts); a multi-instance host needs a lock from its store module.
+single-binary hosts). Across instances use `pgx.NewLock` from
+`pockets/events/stores/pgx` (a transaction-scoped advisory lock; see its README).
+The turso store has no lock: SQLite has no advisory locks, so run one poller.
 A host dispatcher that does not use `outbox.Poller` can call `Lock.TryRun`
 around its own batch. Delivery stays at least once either way: a holder can lose
 its lock mid-batch, so consumers still de-dupe on `EventID()`. Without a lock,

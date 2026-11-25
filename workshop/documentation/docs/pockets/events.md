@@ -108,8 +108,9 @@ The poller does not claim entries, so without a lock run one poller per outbox.
 With `outbox.WithLock(lock)` on every poller you can arm it on many instances:
 each `Poll` holds the shared lock for one batch, and a poller that finds it held
 returns `workers.ErrNoWork` and idles. Batches stay oldest-first and one at a
-time. `outbox.NewMemoryLock()` covers one process; a multi-instance host needs a
-lock from its store module. Delivery stays at least once, so de-duplicate by
+time. `outbox.NewMemoryLock()` covers one process; across instances use the pgx
+store's `pgx.NewLock(db, opts...)`, a transaction-scoped advisory lock that also
+works through a transaction-mode pooler. The Turso store has no lock. Delivery stays at least once, so de-duplicate by
 EventID either way. Stop HTTP streams and the poller, close the gateway with
 `eventsSvc.Close()`, then close the bus and host-owned clients. Gateway Close is
 idempotent, only releases its subscription, and rejects later registration; it

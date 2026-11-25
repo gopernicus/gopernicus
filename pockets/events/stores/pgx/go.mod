@@ -4,7 +4,7 @@ go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.14.0
-	github.com/gopernicus/gopernicus/pockets/events v0.3.0
+	github.com/gopernicus/gopernicus/pockets/events v0.4.0
 	github.com/gopernicus/gopernicus/sdk v0.18.0
 	github.com/jackc/pgx/v5 v5.9.2
 )

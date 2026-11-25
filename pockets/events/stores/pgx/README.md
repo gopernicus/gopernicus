@@ -53,8 +53,8 @@ the framework never acknowledges them automatically.
 ## Surface
 
 Mirrors the turso store's exported surface plus the Postgres-only `WithSchema`
-option — SQLite has no schemas (a host switches dialect by one import + one `Open`
-call):
+option — SQLite has no schemas — and the Postgres-only `NewLock` (a host switches
+dialect by one import + one `Open` call):
 
 | member | shape |
 |---|---|
@@ -64,6 +64,8 @@ call):
 | `(*Store).Append(ctx, recs...) error` | non-transactional convenience append (its own tx) |
 | `(*Store).AppendTx(ctx, tx *pgxdb.Tx, recs...) error` | dialect-typed transactional appender — shares the caller's commit |
 | `(*Store).ListUnpublished` / `MarkPublished` / `PurgePublished` | the poller's drain, idempotent mark, and retention purge |
+| `NewLock(db *pgxdb.DB, opts ...Option) (*Lock, error)` | the `outbox.Lock` for this outbox, so pollers on several instances drain one batch at a time; takes the same `WithSchema` |
+| `(*Lock).TryRun(ctx, fn) (bool, error)` | runs one batch under a transaction-scoped advisory lock; `(false, nil)` when another instance holds it |
 | `ExportMigrations(dst string) error` | copies the canonical `migrations/*.sql` into the host's dir |
 | `MigrationsFS` / `MigrationsDir` | the embedded canonical migration files |
 
@@ -78,6 +80,39 @@ vocabulary being `*pgxdb.Tx` from the integration both already require (design
 §5). In events v1 nothing wires it; it ships tested but unconsumed. This seam is
 **unguarded** — no `make guard` target covers the per-store appender glue (design
 §5 cost 1); the abstraction revisit trigger is the third emitting pocket.
+
+### `NewLock` — one drain at a time across instances
+
+Give every poller its own `Lock` over the same database and schema, and arm the
+poller on as many instances as you like:
+
+```go
+lock, err := pgx.NewLock(db, pgx.WithSchema(schema)) // the same options as the store
+poller, err := outbox.NewPoller(store, redisBus.Publish, outbox.WithLock(lock))
+```
+
+Each `Poll` begins a transaction, tries
+`pg_try_advisory_xact_lock(hashtextextended('gopernicus.events.outbox_lock:' || <schema-qualified event_outbox>, 0))`,
+runs its batch, and rolls back, which releases the lock. An instance that finds
+it held reads nothing and returns `workers.ErrNoWork`, so it idles on its pool's
+normal interval. A host dispatcher that doesn't use `outbox.Poller` can call
+`TryRun` around its own batch. It needs no migration and no grant beyond
+`CONNECT`, and `NewLock` does not probe the table.
+
+- **Poolers.** Nothing is held between batches, so it works through PgBouncer in
+  `pool_mode=transaction`; no session affinity is needed.
+- **Pool sizing.** A running batch holds one extra connection for the lock's
+  transaction. The pool needs `DB_MAX_CONNS` of at least 2, or the batch waits
+  forever for a second connection; pgxdb's default pool is larger.
+- **Timeouts.** The lock's transaction sits idle while the batch delivers. An
+  `idle_in_transaction_session_timeout` shorter than a batch ends it, and the
+  lock with it, mid-batch.
+- **Handover.** A clean exit or a crash ends the transaction at once, and the
+  next instance to poll takes over. A dead host or a network partition holds the
+  lock until the server notices; set `tcp_keepalives_*` if fast handover under
+  partition matters.
+- **At least once.** A batch that loses its lock mid-way can overlap the next
+  instance's batch once. Consumers still deduplicate on `EventID()`.
 
 ## Schema
 
