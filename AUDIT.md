@@ -6623,3 +6623,25 @@ against the live Auth emulator.
     exchange.
   - The `live-stores` workflow was not run for this release.
   - The v0.45.0 release (#382) has no cold-verification record.
+
+## AUDIT-083: One outbox drain at a time across instances (#396)
+
+- **Status:** released as `pockets/events` v0.4.0 (`f16e14fb` → `fd964c48`) and
+  `pockets/events/stores/pgx` v0.5.0 (`e69e713e` → `d540b8a8`). Record: `RELEASING.md`, "One outbox
+  drain at a time across instances (#396 — published 2026-11-25)".
+- **Modules:** `pockets/events`, additive: `outbox.Lock`, `outbox.WithLock`,
+  `outbox.MemoryLock`/`NewMemoryLock`, `storetest.RunLock`. `pockets/events/stores/pgx`, additive:
+  `NewLock`, `Lock`. The pgx store now requires `pockets/events` v0.4.0.
+- **Old behavior:** the README required one poller per outbox, enforced by host configuration
+  alone. N armed pollers emitted every batch N times.
+- **New behavior:** pollers given a shared lock drain one batch at a time, in order; the others
+  return `workers.ErrNoWork` and idle. The pgx lock is a transaction-scoped advisory lock held for
+  one batch. Without `WithLock`, behaviour is unchanged.
+- **Migration:** none required. To arm the poller on several instances, add
+  `outbox.WithLock(pgx.NewLock(db, <the store's WithSchema>))` to every poller and keep
+  `DB_MAX_CONNS` at 2 or more. Keep deduplicating on `EventID()`: delivery is still at least once.
+- **Residuals:**
+  - `NewLock` does not check the pool size; a one-connection pool deadlocks the batch.
+  - A dead host or network partition holds the lock until the server notices the connection.
+  - The `live-stores` workflow was not run; the pgx live legs ran locally on merged `main`.
+  - Turso has no lock.
