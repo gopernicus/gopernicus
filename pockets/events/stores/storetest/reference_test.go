@@ -24,6 +24,17 @@ func TestReference(t *testing.T) {
 	})
 }
 
+// TestMemoryLock runs the lock conformance suite against outbox.MemoryLock. Both
+// holders are the same value: an in-process lock is shared, not paired.
+func TestMemoryLock(t *testing.T) {
+	RunLock(t, func(t *testing.T) (a, b outbox.Lock) {
+		l := outbox.NewMemoryLock()
+		return l, l
+	}, func(t *testing.T) outbox.EntryRepository {
+		return newReference()
+	})
+}
+
 // reference is a stdlib-only, test-scoped in-memory outbox.EntryRepository. It
 // exists to give the pocket module something to run the suite against, and it
 // deliberately HAND-ENFORCES the EventID uniqueness a SQL store gets from a
