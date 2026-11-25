@@ -57,8 +57,8 @@ github.com/gopernicus/gopernicus/pockets/cms v0.7.0 h1:G2XYhNBy0RJp1pX/rdl0nYyfI
 github.com/gopernicus/gopernicus/pockets/cms v0.7.0/go.mod h1:llzeJYCGZOE4nMVe0WIiNTeGL7ACmOwlLcY8/vxo4SQ=
 github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.3.0 h1:le3rBE5WAQhEoNBo+FiE0J5U8O0G33DUV8kE48T7gjg=
 github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.3.0/go.mod h1:Og8blfxYBKp45x2X4e4tp5fPEHsN5CNJmuQyXOpctfs=
-github.com/gopernicus/gopernicus/pockets/events v0.3.0 h1:P2E2NhEzzMyVxuDxSS/0st1KwxpftI3LHWR37+yK0L0=
-github.com/gopernicus/gopernicus/pockets/events v0.3.0/go.mod h1:3jXfwugCkrkX0DU+dUdcI/WHd3c2laNRLJmMWoop0cw=
+github.com/gopernicus/gopernicus/pockets/events v0.4.0 h1:UtZ4m8jQqqGhH4X/XK4dCjBlAa/uRXycEN6iyinKEgY=
+github.com/gopernicus/gopernicus/pockets/events v0.4.0/go.mod h1:wdEX8rY0R0sBRYTpxFMqCPNPpwMGlg/b8NQUjKGUiHY=
 github.com/gopernicus/gopernicus/pockets/jobs v0.12.0 h1:1/SrbQFiHxM/5/YN5kZqGTYHwltPBbhiGtB/HufJPuI=
 github.com/gopernicus/gopernicus/pockets/jobs v0.12.0/go.mod h1:UW+T7xuHbB5eAQlevHZZByGePIKX7dtCVAC/rOTFJV0=
 github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx v0.9.0 h1:5aLk7XaUx66d5RSHq1j+ZziXoSuTCmU0J7R37Rw8dAM=

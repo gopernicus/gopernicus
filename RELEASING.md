@@ -1,5 +1,44 @@
 # Releasing gopernicus modules
 
+## One outbox drain at a time across instances (#396 — pockets/events v0.4.0, stores/pgx v0.5.0 — published 2026-11-25)
+
+**Status: released.** **MINOR, additive and opt-in; without a lock the poller is unchanged.**
+
+- `outbox.Lock` (`TryRun(ctx, fn) (ran bool, err error)`) and `outbox.WithLock(l)`: `Poll` drains
+  inside `TryRun`. A poller that finds the lock held elsewhere reads nothing and returns
+  `workers.ErrNoWork`, so it idles on its pool's normal interval. Batches stay oldest-first and one
+  at a time, so ordering and the head-of-line rule hold whichever instance drains.
+- `outbox.NewMemoryLock()` serializes pollers inside one process. `storetest.RunLock` is the lock
+  conformance suite.
+- `pgx.NewLock(db, opts...)`: each `TryRun` begins a transaction, tries
+  `pg_try_advisory_xact_lock` on a key derived from the schema-qualified outbox table, runs one
+  batch and rolls back. Nothing is held between batches, so it works through a transaction-mode
+  pooler, and there is nothing to release at shutdown. No migration, no grant beyond `CONNECT`.
+- Delivery stays at least once: a batch that loses its lock mid-way can overlap the next once.
+- Turso has no lock (SQLite has no advisory locks): run one poller.
+
+**Host note.** Bump `pockets/events` to v0.4.0 and `pockets/events/stores/pgx` to v0.5.0, then give
+every poller `outbox.WithLock(lock)` with `lock` from `pgx.NewLock(db, <the store's WithSchema>)`.
+A running batch holds one extra connection, so `DB_MAX_CONNS` must be at least 2 (documented, not
+checked: the check needs pgxdb v0.20's `Stats()` and the store keeps its pgxdb v0.14.0 floor, by
+owner ruling). An `idle_in_transaction_session_timeout` shorter than a batch releases the lock
+mid-batch. The turso store is not retagged.
+
+| Step | Tag | Tag object → commit | PR | `live-stores` on `main` | Cold verification |
+|---|---|---|---|---|---|
+| 1 | `pockets/events/v0.4.0` | `f16e14fb` → `fd964c48` | #397 | not needed (no store change) | OK; proxy serves v0.4.0 at `fd964c48`; a fresh module compiles against `Lock`, `NewMemoryLock`, `WithLock` |
+| 2 | `pockets/events/stores/pgx/v0.5.0` | `e69e713e` → `d540b8a8` | #398 | run locally on PostgreSQL 18 at `d540b8a8`, default and `POSTGRES_TEST_SCHEMA` legs, `GOWORK=off -race`: green | OK; proxy serves v0.5.0 at `d540b8a8`; the two-process check below rebuilt from proxy tags only |
+| — | none | — | PR-3: auth-cms repin | — | builds, vets and tests with `GOWORK=off` |
+
+Annotated, not signed. **Run and look.**
+- Two OS processes, one PostgreSQL outbox of 1,000 events, batch 50:
+  - no lock: 1,999 deliveries, 999 duplicates, 20 out of order;
+  - lock: 1,000 deliveries, 0 duplicates, in order;
+  - lock with the active process `kill -9`'d mid-stream: 1,000 deliveries, 0 duplicates, in order,
+    both processes delivered (handover).
+- auth-cms on v0.4.0 with `EVENTS_OUTBOX=memory`: `POST /outbox-demo` → 202, and the `demo.outbox`
+  frame arrives on `/events` with `id:` equal to the returned outbox EventID.
+
 ## A host hook on every primary sign-in (#394 — pockets/authentication v0.47.0 — published 2026-11-23)
 
 **Status: released.** **MINOR, additive and opt-in; the zero value runs no hook.**
