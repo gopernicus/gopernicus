@@ -121,7 +121,7 @@ deduplicate using `EventID()`. The poller then retains intent until that handoff
 succeeds. The host chooses and owns this composition; the bus does not make an
 ordinary callback durable by itself.
 
-## The poller — single instance, host-driven
+## The poller — host-driven, one drain at a time
 
 `outbox.NewPoller(repo, deliver, ...opts)` returns `(*Poller, error)` and rejects
 missing dependencies or nil options during wiring. Poll reads an oldest-first batch and marks each
@@ -139,10 +139,20 @@ quarantine historical malformed records under host policy before restarting the
 poller. Later rows remain blocked until the head can be delivered. Register all required handlers before starting the poller. `Poll`
 matches `workers.WorkFunc` and returns `workers.ErrNoWork` when idle.
 
-**Single-poller assumption (v1):** run ONE poller per outbox. `Poll` takes
-no lease/claim on entries, so N concurrent pollers would emit every batch N
-times. (Consumers on the durable rail de-dupe, so this degrades to noise,
-not corruption — but don't do it.) Relatedly, the hub warns at construction
+**One drain at a time.** `Poll` takes no claim on entries, so N pollers without
+a lock emit every batch N times. Give every poller one shared `outbox.Lock` with
+`outbox.WithLock` and arm it on as many instances as you like: each `Poll` holds
+the lock for its one batch, and a `Poll` that finds it held elsewhere reads
+nothing and returns `workers.ErrNoWork`, so the other instances idle on their
+pool's normal interval. Batches still run one at a time and oldest first, so
+order and the head-of-line rule above hold whichever instance drains. Nothing
+outlives a batch, so there is nothing to release at shutdown.
+`outbox.NewMemoryLock()` serializes pollers inside one process (tests,
+single-binary hosts); a multi-instance host needs a lock from its store module.
+A host dispatcher that does not use `outbox.Poller` can call `Lock.TryRun`
+around its own batch. Delivery stays at least once either way: a holder can lose
+its lock mid-batch, so consumers still de-dupe on `EventID()`. Without a lock,
+run ONE poller per outbox. Relatedly, the hub warns at construction
 when the bus is not a `Broadcaster` (`Subscribe("*")` on the Memory bus is
 single-instance fan-out): multi-instance SSE needs a broadcasting bus
 (`integrations/kvstores/goredis`).

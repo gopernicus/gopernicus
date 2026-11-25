@@ -104,8 +104,13 @@ preserve empty/binary payloads and validate identity/type before writing the bat
 Existing malformed records can block the oldest-first poller; monitor failures and
 repair or quarantine those records explicitly, preserving stable IDs for replay.
 
-The current poller assumes one poller per outbox. It does not claim or lease
-batches. Stop HTTP streams and the poller, close the gateway with
+The poller does not claim entries, so without a lock run one poller per outbox.
+With `outbox.WithLock(lock)` on every poller you can arm it on many instances:
+each `Poll` holds the shared lock for one batch, and a poller that finds it held
+returns `workers.ErrNoWork` and idles. Batches stay oldest-first and one at a
+time. `outbox.NewMemoryLock()` covers one process; a multi-instance host needs a
+lock from its store module. Delivery stays at least once, so de-duplicate by
+EventID either way. Stop HTTP streams and the poller, close the gateway with
 `eventsSvc.Close()`, then close the bus and host-owned clients. Gateway Close is
 idempotent, only releases its subscription, and rejects later registration; it
 does not shut down HTTP or the bus. Closed checked-delivery methods return `events.ErrClosed`,
